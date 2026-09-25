@@ -7,6 +7,8 @@ type JoinOptions = { name?: string; playerId?: string; spectator?: boolean };
 type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
 /** One line of the event log; clients render it in their language from [type] and its params. */
 type GameEvent = { seq: number; time: number; type: string; [param: string]: unknown };
+/** Why a player died — each one has its own line over the card reveal in the app. */
+type DeathCause = "wolves" | "witch" | "vote" | "quit" | "timeout";
 type ChatLine = { from: string; name: string; text: string; wolvesOnly: boolean };
 /** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
 type Composition = { werewolf: number; villager: number; seer: boolean; witch: boolean; protector: boolean };
@@ -222,7 +224,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** A player gone for good mid-game dies on the spot, outside any night/vote resolution. */
   private removeFromGame(id: string, reason: "quit" | "timeout") {
     if (!this.isAlive(id)) return;
-    this.kill(id);
+    this.kill(id, reason);
     const role = this.roles.get(id);
     this.broadcast("player_gone", { id, reason, role });
     this.logEvent("player_gone", { name: this.nameOf(id), role, reason });
@@ -509,17 +511,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private resolveNight() {
-    const deaths = new Set<string>();
-    if (this.wolfVictim && !this.witchReviving) deaths.add(this.wolfVictim);
-    if (this.witchPoisonTarget) deaths.add(this.witchPoisonTarget);
-    for (const id of deaths) this.kill(id);
+    const deaths = new Map<string, DeathCause>();
+    if (this.wolfVictim && !this.witchReviving) deaths.set(this.wolfVictim, "wolves");
+    if (this.witchPoisonTarget && !deaths.has(this.witchPoisonTarget)) deaths.set(this.witchPoisonTarget, "witch");
+    for (const [id, cause] of deaths) this.kill(id, cause);
 
     this.state.nightStep = "";
     this.state.nightRoles = "";
-    this.broadcast("night_result", { deaths: [...deaths], saved: this.witchReviving });
+    this.broadcast("night_result", { deaths: [...deaths.keys()], saved: this.witchReviving });
     if (this.witchReviving) this.logEvent("witch_saved");
     this.logEvent("night_result", {
-      deaths: [...deaths].map((id) => ({ name: this.nameOf(id), role: this.roles.get(id) })),
+      deaths: [...deaths.keys()].map((id) => ({ name: this.nameOf(id), role: this.roles.get(id) })),
     });
     if (this.endGameIfOver()) return;
     // The village elects its mayor once, after the first night.
@@ -622,7 +624,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const bestCount = excluded ? votes.filter((v) => v === excluded).length : 0;
 
     const voters = this.aliveCount() + (this.isAlive(this.state.mayorId) ? 1 : 0);
-    if (excluded) this.kill(excluded);
+    if (excluded) this.kill(excluded, "vote");
 
     const ballots: Record<string, string> = {};
     for (const [id, p] of this.state.players) if (p.votedFor && (p.alive || id === excluded)) ballots[id] = p.votedFor;
@@ -671,11 +673,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return this.idsWithRole(role).find((id) => this.isAlive(id));
   }
 
-  private kill(sessionId: string) {
+  /** Every death goes through here: the app plays a card reveal for each death_reveal. */
+  private kill(sessionId: string, cause: DeathCause) {
     const player = this.state.players.get(sessionId);
     if (!player) return;
     player.alive = false;
     player.revealedRole = this.roles.get(sessionId) ?? "";
+    this.broadcast("death_reveal", { id: sessionId, name: player.name, role: player.revealedRole, cause });
     if (this.state.mayorId === sessionId) {
       this.state.mayorId = "";
       this.pendingSuccession = sessionId;

@@ -127,7 +127,9 @@ describe("WerewolfRoom", () => {
     const [quitter, dropper] = [clients[1], clients[2]];
 
     const gone = clients[0].waitForMessage("player_gone");
+    const reveal = clients[0].waitForMessage("death_reveal");
     await quitter.leave(true); // on purpose
+    assert.strictEqual((await reveal).cause, "quit");
     const g: any = await gone;
     assert.strictEqual(g.id, quitter.sessionId);
     assert.strictEqual(g.reason, "quit");
@@ -168,6 +170,31 @@ describe("WerewolfRoom", () => {
     witch.send("witch_pass");
     assert.deepStrictEqual(await night, { deaths: [], saved: true });
     assert.strictEqual(room.state.phase, "mayor"); // first night over → the village elects a mayor
+  });
+
+  it("reveals each night death with its cause: the wolves' victim first, then the witch's poison", async function () {
+    this.timeout(30_000);
+    const { room, byRole } = await startGame();
+    const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
+    const villager = byRole("villager"), protector = byRole("protector");
+
+    protector.send("protect", { targetId: protector.sessionId });
+    await waitFor(() => room.state.nightStep === "wolves");
+    const witchTurn = witch.waitForMessage("witch_turn", STEP);
+    wolf.send("wolf_target", { targetId: villager.sessionId });
+    await witchTurn;
+
+    const reveals: any[] = [];
+    seer.onMessage("death_reveal", (d) => reveals.push(d));
+    seer.send("seer_peek", { targetId: wolf.sessionId });
+    witch.send("witch_poison", { targetId: seer.sessionId });
+    witch.send("witch_pass");
+    await waitFor(() => reveals.length === 2);
+    const nameOf = (c: typeof seer) => room.state.players.get(c.sessionId)!.name;
+    assert.deepStrictEqual(reveals, [
+      { id: villager.sessionId, name: nameOf(villager), role: "villager", cause: "wolves" },
+      { id: seer.sessionId, name: nameOf(seer), role: "seer", cause: "witch" },
+    ]);
   });
 
   it("hides the revive when the wolves attack the protected player", async function () {
