@@ -23,10 +23,10 @@ describe("WerewolfRoom", () => {
   after(async () => colyseus.shutdown());
   beforeEach(async () => await colyseus.cleanup());
 
-  async function startGame(options: object = ONE_OF_EACH) {
+  async function startGame(options: object = ONE_OF_EACH, players = 5) {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", options);
     const clients: any[] = [];
-    for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room)); // join order: clients[0] is host
+    for (let i = 0; i < players; i++) clients.push(await colyseus.connectTo(room)); // join order: clients[0] is host
     const rolesPromise = Promise.all(clients.map((c) => c.waitForMessage("role_assigned", STEP)));
     clients[0].send("start_game"); // roles are dealt after the 10s countdown
     const roles = (await rolesPromise).map((m: any) => m.role as string);
@@ -192,8 +192,8 @@ describe("WerewolfRoom", () => {
     await waitFor(() => reveals.length === 2);
     const nameOf = (c: typeof seer) => room.state.players.get(c.sessionId)!.name;
     assert.deepStrictEqual(reveals, [
-      { id: villager.sessionId, name: nameOf(villager), role: "villager", cause: "wolves" },
-      { id: seer.sessionId, name: nameOf(seer), role: "seer", cause: "witch" },
+      { id: villager.sessionId, name: nameOf(villager), role: "villager", cause: "wolves", shooter: false },
+      { id: seer.sessionId, name: nameOf(seer), role: "seer", cause: "witch", shooter: false },
     ]);
   });
 
@@ -330,7 +330,8 @@ describe("WerewolfRoom", () => {
 
     await waitFor(() => room.state.phase === "vote", STEP);
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId }); // the village votes its mayor out
-    await waitFor(() => room.state.phase === "succession");
+    await waitFor(() => room.state.phase === "reveal"); // his card reveal plays first…
+    await waitFor(() => room.state.phase === "succession", 6_000); // …then his 10s to name a successor
     assert.strictEqual(room.state.successionFrom, mayor.sessionId);
 
     const handover = heir.waitForMessage("mayor_result");
@@ -338,5 +339,75 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(await handover, { mayorId: heir.sessionId, successor: true });
     assert.strictEqual(room.state.mayorId, heir.sessionId);
     assert.strictEqual(room.state.phase, "night");
+  });
+
+  const NO_SPECIALS = { seer: false, witch: false, protector: false, roundSeconds: 10 };
+
+  it("springs the wild hunter's trap on the wolf who attacks the trapped player; the detective compares teams", async function () {
+    this.timeout(45_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, wildhunter: true, hunter: true, detective: true };
+    const { room, byRole } = await startGame(mix);
+    const [wolf, villager, detective] = [byRole("werewolf"), byRole("villager"), byRole("detective")];
+
+    assert.strictEqual(room.state.nightStep, "wild_hunter"); // night 1: he wakes first
+    byRole("wildhunter").send("trap", { targetId: villager.sessionId });
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: villager.sessionId });
+
+    await waitFor(() => room.state.nightStep === "witch_seer", STEP);
+    const checked = detective.waitForMessage("detective_result");
+    detective.send("detective_check", { a: villager.sessionId, b: wolf.sessionId });
+    assert.deepStrictEqual(await checked, { a: villager.sessionId, b: wolf.sessionId, same: false });
+
+    await waitFor(() => room.state.phase === "gameover"); // the only wolf is dead
+    assert.strictEqual(room.state.players.get(wolf.sessionId)!.alive, false);
+    assert.strictEqual(room.state.players.get(villager.sessionId)!.alive, true);
+    assert.strictEqual(room.state.winner, "villagers");
+  });
+
+  it("lets a dead hunter take someone with him once the reveals are over", async function () {
+    this.timeout(45_000);
+    const { room, byRole } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 2, hunter: true, bear: true });
+    const [wolf, hunter] = [byRole("werewolf"), byRole("hunter")];
+
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: hunter.sessionId });
+    const aimed = hunter.waitForMessage("hunter_turn", STEP + 8_000);
+    await waitFor(() => room.state.phase === "reveal", STEP);
+    assert.ok(room.state.phaseEndsAt - Date.now() > 3_000); // time for his card reveal
+    await waitFor(() => room.state.phase === "hunter", 6_000);
+    assert.strictEqual(room.state.shooterId, hunter.sessionId);
+    assert.ok(room.state.players.get((await aimed).target)?.alive); // already aimed at someone alive
+
+    const shot = wolf.waitForMessage("death_reveal");
+    hunter.send("hunter_shoot", { targetId: wolf.sessionId });
+    assert.strictEqual((await shot).cause, "hunter");
+    assert.strictEqual(room.state.winner, "villagers");
+  });
+
+  it("spares Red Hood from the wolves while the hunter lives; the triple face peeks on night 1; the bear sniffs", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, hunter: true, redhood: true, bear: true, tripleface: true };
+    const { room, clients, roles, byRole } = await startGame(mix, 6);
+    const [wolf, tripleFace] = [byRole("werewolf"), byRole("tripleface")];
+
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: byRole("redhood").sessionId });
+    await waitFor(() => room.state.nightStep === "witch_seer", STEP);
+    assert.strictEqual(room.state.nightRoles, "tripleface"); // a second seer tonight
+    const peek = tripleFace.waitForMessage("seer_result");
+    tripleFace.send("seer_peek", { targetId: wolf.sessionId });
+    assert.strictEqual((await peek).role, "werewolf");
+
+    await waitFor(() => room.state.phase === "mayor");
+    assert.ok([...room.state.players.values()].every((p) => p.alive)); // Red Hood survived
+    for (const c of clients) c.send("day_vote", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.phase === "day");
+
+    const bear = roles.indexOf("bear");
+    const n = roles.length;
+    const wolfNextToBear = [roles[(bear + 1) % n], roles[(bear - 1 + n) % n]].includes("werewolf");
+    const types = ((room as any).publicLog as any[]).map((e) => e.type);
+    assert.strictEqual(types.includes("bear_roar"), wolfNextToBear);
   });
 });
