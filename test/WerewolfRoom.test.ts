@@ -358,6 +358,12 @@ describe("WerewolfRoom", () => {
     const checked = detective.waitForMessage("detective_result");
     detective.send("detective_check", { a: villager.sessionId, b: wolf.sessionId });
     assert.deepStrictEqual(await checked, { a: villager.sessionId, b: wolf.sessionId, same: false });
+    // Checked players are never checked again; he only wakes while two unchecked players (not him) live.
+    const r = room as any;
+    assert.ok(r.detectiveChecked.has(villager.sessionId) && r.detectiveChecked.has(wolf.sessionId));
+    assert.strictEqual(r.canInvestigate(detective.sessionId), detective.sessionId); // wild hunter + hunter left
+    r.detectiveChecked.add(byRole("hunter").sessionId);
+    assert.strictEqual(r.canInvestigate(detective.sessionId), undefined);
 
     await waitFor(() => room.state.phase === "gameover"); // the only wolf is dead
     assert.strictEqual(room.state.players.get(wolf.sessionId)!.alive, false);
@@ -372,12 +378,13 @@ describe("WerewolfRoom", () => {
 
     await waitFor(() => room.state.nightStep === "wolves");
     wolf.send("wolf_target", { targetId: hunter.sessionId });
-    const aimed = hunter.waitForMessage("hunter_turn", STEP + 8_000);
     await waitFor(() => room.state.phase === "reveal", STEP);
     assert.ok(room.state.phaseEndsAt - Date.now() > 3_000); // time for his card reveal
     await waitFor(() => room.state.phase === "hunter", 6_000);
     assert.strictEqual(room.state.shooterId, hunter.sessionId);
-    assert.ok(room.state.players.get((await aimed).target)?.alive); // already aimed at someone alive
+    assert.ok(room.state.players.get(room.state.shooterAim)?.alive); // already aimed at someone alive, for all to see
+    hunter.send("hunter_aim", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.shooterAim === wolf.sessionId);
 
     const shot = wolf.waitForMessage("death_reveal");
     hunter.send("hunter_shoot", { targetId: wolf.sessionId });

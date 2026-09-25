@@ -36,6 +36,7 @@ export const WerewolfState = schema({
   mayorId: t.string().default(""), // mayor's day vote counts twice
   successionFrom: t.string().default(""), // dead mayor choosing a successor during "succession"
   shooterId: t.string().default(""), // dead hunter taking someone with him during "hunter"
+  shooterAim: t.string().default(""), // who he's aiming at — public, like the day votes
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
   winner: t.string().default(""), // "werewolves" | "villagers" | "none" (room expired) | ""

@@ -54,6 +54,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private voteHistory: VoteRecord[] = [];
   private known = new Map<string, Record<string, string>>(); // seer / triple face → roles they've seen (for reconnects)
   private detectiveKnown: { a: string; b: string; same: boolean }[] = [];
+  private detectiveChecked = new Set<string>(); // a checked player can never be checked again
   // The event log and chat live on the server, so a reconnecting or relaunched app gets them back.
   private publicLog: GameEvent[] = [];
   private privateLogs = new Map<string, GameEvent[]>(); // sessionId → events only that player saw
@@ -81,7 +82,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private lastProtected: string | null = null; // can't be protected two nights in a row
   private revealsPending = 0; // deaths whose card reveal the clients are about to play
   private pendingShooters: string[] = []; // dead hunters waiting for their shot
-  private hunterTarget: string | null = null; // picked at random when he dies; he may change it
   private mayorElected = false; // the village elects once; a dead mayor can only hand the title on
   private pendingSuccession: string | null = null; // mayor who just died and picks a successor
 
@@ -112,6 +112,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("witch_poison", (client, msg: { targetId: string }) => this.handleWitchPoison(client, msg));
     this.onMessage("witch_pass", (client) => this.handleWitchPass(client));
     this.onMessage("detective_check", (client, msg: { a: string; b: string }) => this.handleDetective(client, msg));
+    this.onMessage("hunter_aim", (client, msg: { targetId: string }) => this.handleHunterAim(client, msg));
     this.onMessage("hunter_shoot", (client, msg: { targetId: string }) => this.handleHunterShoot(client, msg));
     this.onMessage("day_vote", (client, msg: { targetId: string }) => this.handleDayVote(client, msg));
     this.onMessage("mayor_successor", (client, msg: { targetId: string }) => this.handleSuccessor(client, msg));
@@ -196,7 +197,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (role === "werewolf" && this.state.nightStep === "wolves") client.send("wolf_votes", Object.fromEntries(this.wolfVotes));
     if (this.state.nightStep === "witch_seer" && this.witchActors.has(id) && this.awake.has(id)) this.sendWitchTurn(id);
     if (role === "protector" && this.state.nightStep === "protector") this.sendProtectorTurn(id);
-    if (this.state.phase === "hunter" && this.state.shooterId === id) this.sendHunterTurn(id);
     this.sendHistory(client);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
   }
@@ -493,7 +493,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (tripleFace && day === 2) this.potions.set(tripleFace, { revive: true, poison: true });
     const witches = [this.aliveWithRole("witch"), day === 2 ? tripleFace : undefined];
     this.witchActors = new Set(witches.filter((id): id is string => !!id && this.hasPotion(id)));
-    const others = [this.aliveWithRole("seer"), day === 1 ? tripleFace : undefined, this.aliveWithRole("detective")];
+    const detective = this.aliveWithRole("detective");
+    const others = [this.aliveWithRole("seer"), day === 1 ? tripleFace : undefined, this.canInvestigate(detective)];
     this.awake = new Set([...this.witchActors, ...others.filter((id): id is string => !!id)]);
     if (this.awake.size === 0) return this.resolveNight();
 
@@ -540,16 +541,26 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.maybeEndWitchSeer();
   }
 
-  /** Two players (not himself, not a pair he already checked): same team or not. */
+  /** The detective wakes only while two living players (not him) are still unchecked. */
+  private canInvestigate(detective: string | undefined): string | undefined {
+    if (!detective) return undefined;
+    const fresh = [...this.state.players.keys()].filter(
+      (id) => id !== detective && this.isAlive(id) && !this.detectiveChecked.has(id),
+    );
+    return fresh.length >= 2 ? detective : undefined;
+  }
+
+  /** Two players (not himself, never checked before): same team or not. */
   private handleDetective(client: Client, msg: { a: string; b: string }) {
     const id = this.awakeActor(client);
     if (!id || this.roles.get(id) !== "detective") return;
     const { a, b } = msg ?? {};
     if (!this.isAlive(a) || !this.isAlive(b) || a === b || a === id || b === id) return;
-    if (this.detectiveKnown.some((k) => (k.a === a && k.b === b) || (k.a === b && k.b === a))) {
-      client.send("error", { code: "same_pair" });
+    if (this.detectiveChecked.has(a) || this.detectiveChecked.has(b)) {
+      client.send("error", { code: "already_checked" });
       return;
     }
+    this.detectiveChecked.add(a).add(b);
     const same = (this.roles.get(a) === "werewolf") === (this.roles.get(b) === "werewolf");
     const check = { a, b, same };
     this.detectiveKnown.push(check);
@@ -657,33 +668,36 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private afterSuccession: () => void = () => {};
   private afterShot: () => void = () => {};
 
-  /** A dead hunter takes someone with him: aimed at random already, he has 10s to pick someone else. */
+  /**
+   * A dead hunter takes someone with him: aimed at random already, he has 10s to aim elsewhere and
+   * shoot. Everyone sees where he's aiming (state.shooterAim); at the end of the 10s that one is shot.
+   */
   private startHunterShot(hunterId: string, next: () => void): void {
     const prey = [...this.state.players.keys()].filter((id) => this.isAlive(id) && id !== hunterId);
     if (!prey.length) return this.afterDeaths(next);
-    this.hunterTarget = pickRandom(prey);
     this.afterShot = next;
     this.state.phase = "hunter";
     this.state.shooterId = hunterId;
+    this.state.shooterAim = pickRandom(prey);
     this.logEvent("hunter_turn", { name: this.nameOf(hunterId) });
-    this.sendHunterTurn(hunterId);
     this.setPhaseTimer(STEP_MS, () => this.endHunterShot());
   }
 
-  private sendHunterTurn(hunterId: string) {
-    this.clients.getById(hunterId)?.send("hunter_turn", { target: this.hunterTarget });
+  private handleHunterAim(client: Client, msg: { targetId: string }) {
+    if (this.state.phase !== "hunter" || client.sessionId !== this.state.shooterId) return;
+    if (this.isAlive(msg?.targetId)) this.state.shooterAim = msg.targetId;
   }
 
   private handleHunterShoot(client: Client, msg: { targetId: string }) {
     if (this.state.phase !== "hunter" || client.sessionId !== this.state.shooterId) return;
     if (!this.isAlive(msg?.targetId)) return;
-    this.hunterTarget = msg.targetId;
+    this.state.shooterAim = msg.targetId;
     this.endHunterShot();
   }
 
   private endHunterShot() {
-    const target = this.hunterTarget;
-    this.hunterTarget = null;
+    const target = this.state.shooterAim;
+    this.state.shooterAim = "";
     this.state.shooterId = "";
     if (target && this.isAlive(target)) {
       this.kill(target, "hunter");
@@ -900,6 +914,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightRoles = "";
     this.state.winner = winner ?? "none";
     this.state.shooterId = "";
+    this.state.shooterAim = "";
     this.phaseTimer?.clear();
     for (const [id, player] of this.state.players) player.revealedRole = this.roles.get(id) ?? "";
     this.broadcast("game_over", { winner, reason: winner ? "win" : "expired" });
