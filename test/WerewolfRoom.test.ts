@@ -44,7 +44,7 @@ describe("WerewolfRoom", () => {
 
   it("drops villagers first when fewer players join than the mix plans", async () => {
     const { room, roles } = await startGame({ maxPlayers: 8, wolves: 2, villagers: 3 });
-    assert.strictEqual(room.maxClients, 8);
+    assert.strictEqual(room.state.maxPlayers, 8);
     assert.deepStrictEqual([...roles].sort(), ["protector", "seer", "werewolf", "werewolf", "witch"]);
   });
 
@@ -53,15 +53,58 @@ describe("WerewolfRoom", () => {
     const host = await colyseus.connectTo(room);
     const guest = await colyseus.connectTo(room);
     guest.send("settings", { maxPlayers: 12 });
-    host.send("settings", { title: "Nuit", roundSeconds: 90, maxPlayers: 99, roomType: "friends", witch: false });
-    await waitFor(() => room.state.title === "Nuit");
-    assert.strictEqual(room.state.roundSeconds, 90);
+    host.send("settings", { roundSeconds: 90, maxPlayers: 99, roomType: "friends", witch: false });
+    await waitFor(() => room.state.roundSeconds === 90);
+    assert.notStrictEqual(room.state.maxPlayers, 12); // the guest's change was ignored
     assert.strictEqual(room.state.maxPlayers, 16); // clamped
     assert.strictEqual(room.state.roomType, "friends");
     assert.strictEqual(room.state.witch, false);
     host.send("settings", { roundSeconds: 45 }); // not a 10s/30s-step value
     await new Promise((r) => setTimeout(r, 100));
     assert.strictEqual(room.state.roundSeconds, 90);
+  });
+
+  it("kicks and bans a player until the host changes", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room, { playerId: "host-device" });
+    const other = await colyseus.connectTo(room, { playerId: "other-device" });
+    const guest = await colyseus.connectTo(room, { playerId: "guest-device" });
+
+    const kicked = guest.waitForMessage("kicked");
+    host.send("kick", { targetId: guest.sessionId });
+    await kicked;
+    await waitFor(() => !room.state.players.has(guest.sessionId));
+    await assert.rejects(colyseus.connectTo(room, { playerId: "guest-device" }), /banned/);
+
+    await host.leave(); // "other" becomes host → bans are lifted
+    await waitFor(() => room.state.hostId === other.sessionId);
+    const back = await colyseus.connectTo(room, { playerId: "guest-device" });
+    assert.ok(room.state.players.has(back.sessionId));
+  });
+
+  it("lets spectators watch a running game without taking a seat", async () => {
+    const { room } = await startGame();
+    await assert.rejects(colyseus.connectTo(room, { playerId: "late" }), /started/);
+    const watcher = await colyseus.connectTo(room, { spectator: true, playerId: "watcher" });
+    await waitFor(() => room.state.spectators === 1);
+    assert.strictEqual(room.state.players.size, 5);
+    assert.ok(!room.state.players.has(watcher.sessionId));
+  });
+
+  it("kills a player who quits mid-game, but holds a dropped player's seat", async () => {
+    const { room, clients } = await startGame();
+    const [quitter, dropper] = [clients[1], clients[2]];
+
+    const gone = clients[0].waitForMessage("player_gone");
+    await quitter.leave(true); // on purpose
+    const g: any = await gone;
+    assert.strictEqual(g.id, quitter.sessionId);
+    assert.strictEqual(g.reason, "quit");
+    assert.strictEqual(room.state.players.get(quitter.sessionId)?.alive, false);
+
+    await dropper.leave(false); // network drop / app killed
+    await waitFor(() => room.state.players.get(dropper.sessionId)?.connected === false);
+    assert.strictEqual(room.state.players.get(dropper.sessionId)?.alive, true); // seat held for 10 minutes
   });
 
   it("gives the host their test role", async () => {
@@ -157,6 +200,9 @@ describe("WerewolfRoom", () => {
     const r: any = await result;
     assert.strictEqual(r.excluded, wolf.sessionId);
     assert.strictEqual(r.votes, 3); // mayor ×2 + the wolf himself
+    assert.strictEqual(r.day, 1);
+    assert.strictEqual(r.mayorId, villager.sessionId);
+    assert.strictEqual(r.ballots[seer.sessionId], witch.sessionId); // every ballot is kept for the history
     assert.strictEqual(room.state.winner, "villagers");
   });
 

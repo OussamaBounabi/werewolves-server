@@ -13,8 +13,7 @@ export type PlayerState = SchemaType<typeof PlayerState>;
 // Phase: "lobby" | "night" | "mayor" | "succession" | "day" | "vote" | "gameover"
 // Night steps, in order: "protector" | "wolves" | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
-  // Room settings, editable by the host in the lobby.
-  title: t.string().default(""),
+  // Room settings, editable by the host in the lobby. The room is named after its host.
   roomType: t.string().default("public"), // "public" | "friends" | "private" — not enforced yet
   maxPlayers: t.number().default(8),
   roundSeconds: t.number().default(30), // day discussion; night steps and votes are fixed
@@ -31,7 +30,8 @@ export const WerewolfState = schema({
   successionFrom: t.string().default(""), // dead mayor choosing a successor during "succession"
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
-  winner: t.string().default(""), // "werewolves" | "villagers" | ""
+  winner: t.string().default(""), // "werewolves" | "villagers" | "none" (room expired) | ""
+  spectators: t.number().default(0),
   hostId: t.string().default(""),
   players: t.map(PlayerState),
 });

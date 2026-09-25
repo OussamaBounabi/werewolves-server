@@ -36,10 +36,10 @@ const server = defineServer({
         .filter((r) => !r.private && !r.unlisted)
         .map((r) => ({
           roomId: r.roomId,
-          clients: r.clients,
-          maxClients: r.maxClients,
-          title: r.metadata?.title ?? "",
           host: r.metadata?.host ?? "",
+          players: r.metadata?.players ?? 0,
+          maxPlayers: r.metadata?.maxPlayers ?? 0,
+          spectators: r.metadata?.spectators ?? 0,
           started: r.metadata?.started === true,
         }));
     }),

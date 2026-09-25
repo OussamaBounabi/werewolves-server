@@ -1,13 +1,14 @@
-import { Room, Client } from "colyseus";
+import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 
 type Role = "werewolf" | "villager" | "seer" | "witch" | "protector";
-type Meta = { title: string; host: string; started: boolean };
+type Meta = { host: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type JoinOptions = { name?: string; playerId?: string; spectator?: boolean };
+type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
 /** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
 type Composition = { werewolf: number; villager: number; seer: boolean; witch: boolean; protector: boolean };
 /** What the host can change in the lobby (also accepted as create options). */
 type Settings = {
-  title?: string;
   roomType?: string;
   maxPlayers?: number;
   roundSeconds?: number;
@@ -26,15 +27,24 @@ const ROUND_OPTIONS = [10, ...Array.from({ length: 30 }, (_, i) => (i + 1) * 30)
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
 const STEP_MS = 10_000; // night steps and votes — TEMPORARY fixed value, the user wants it configurable later
-const RECONNECT_SECONDS = 60;
+const RECONNECT_SECONDS = 600; // a dropped player's seat is held 10 minutes, then he dies
+const ROOM_LIFESPAN_MS = 60 * 60_000; // a room lives at most 1 hour from creation
+const MAX_CONNECTIONS = 100; // players + spectators; the player limit is maxPlayers, checked in onAuth
 const CHAT_MAX = 200;
 
 export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }> {
-  maxClients = MAX_PLAYERS;
+  maxClients = MAX_CONNECTIONS;
   state = new WerewolfState();
 
   // Server-only — never synced to clients, so role/night info can't leak.
   private roles = new Map<string, Role>();
+  private playerIds = new Map<string, string>(); // sessionId → the device's stable player id
+  private banned = new Set<string>(); // player ids kicked by the current host
+  private spectators = new Set<string>(); // sessionIds watching, not playing
+  private dropped = new Set<string>(); // players whose connection dropped (seat held)
+  private heldSeats = new Map<string, { reject: Function }>(); // pending reconnections (Colyseus Deferred)
+  private voteHistory: VoteRecord[] = [];
+  private seerKnown: Record<string, string> = {}; // what the seer has seen, re-sent after a reconnect
   private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
@@ -66,10 +76,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onCreate(options: Settings = {}) {
     this.applySettings(options);
+    this.clock.setTimeout(() => this.expire(), ROOM_LIFESPAN_MS);
 
     this.onMessage("settings", (client, msg: Settings) => {
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
     });
+    this.onMessage("kick", (client, msg: { targetId: string }) => this.handleKick(client, msg));
     this.onMessage("start_game", (client) => this.handleStartGame(client));
     this.onMessage("protect", (client, msg: { targetId: string }) => this.handleProtect(client, msg));
     this.onMessage("wolf_target", (client, msg: { targetId: string }) => this.handleWolfTarget(client, msg));
@@ -83,52 +95,137 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
   }
 
-  onJoin(client: Client, options: { name?: string } = {}) {
-    const name = String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`;
-    this.state.players.set(client.sessionId, new PlayerState({ sessionId: client.sessionId, name }));
-    if (!this.state.hostId) this.setHost(client.sessionId);
+  /** Runs when the client's socket connects (not on reconnects): bans, spectators, and the player limit. */
+  onAuth(_client: Client, options: JoinOptions = {}) {
+    if (options.playerId && this.banned.has(String(options.playerId))) throw new ServerError(4403, "banned");
+    if (options.spectator) return true;
+    if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
+    if (this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
+    return true;
   }
 
-  // Network drop: keep the seat so the app can reconnect.
+  onJoin(client: Client, options: JoinOptions = {}) {
+    client.send("vote_history", this.voteHistory);
+    if (options.spectator) {
+      this.spectators.add(client.sessionId);
+      this.state.spectators = this.spectators.size;
+      return this.updateListing();
+    }
+    const name = String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`;
+    this.playerIds.set(client.sessionId, String(options.playerId ?? client.sessionId));
+    this.state.players.set(client.sessionId, new PlayerState({ sessionId: client.sessionId, name }));
+    if (!this.state.hostId) this.setHost(client.sessionId);
+    this.updateListing();
+  }
+
+  // Network drop or app closed: hold the seat 10 minutes so the app can come back.
   onDrop(client: Client) {
+    if (this.spectators.has(client.sessionId)) return; // nothing to hold — onLeave runs next
     const player = this.state.players.get(client.sessionId);
     if (player) player.connected = false;
-    // Rejects if the seat expires (onLeave then runs) or the client never finished joining.
-    Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
+    this.dropped.add(client.sessionId);
+    const seat = this.allowReconnection(client, RECONNECT_SECONDS);
+    this.heldSeats.set(client.sessionId, seat);
+    // Rejects when the seat expires (onLeave then runs), on a kick, or if the client never finished joining.
+    Promise.resolve(seat).catch(() => {});
   }
 
   onReconnect(client: Client) {
-    const player = this.state.players.get(client.sessionId);
+    const id = client.sessionId;
+    const player = this.state.players.get(id);
     if (player) player.connected = true;
-    // Private messages sent while disconnected are lost; send what the player needs again.
-    this.sendRole(client.sessionId);
-    if (this.state.nightStep === "witch_seer" && this.roles.get(client.sessionId) === "witch" && !this.witchDone) {
-      this.sendWitchTurn(client.sessionId);
-    }
+    this.dropped.delete(id);
+    this.heldSeats.delete(id);
+    // Private messages sent while away are lost, and a relaunched app knows nothing: send it all again.
+    this.sendRole(id);
+    const role = this.roles.get(id);
+    if (role === "seer") client.send("seer_known", this.seerKnown);
+    if (role === "werewolf" && this.state.nightStep === "wolves") client.send("wolf_votes", Object.fromEntries(this.wolfVotes));
+    if (role === "witch" && this.state.nightStep === "witch_seer" && !this.witchDone) this.sendWitchTurn(id);
+    client.send("vote_history", this.voteHistory);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
   }
 
   onLeave(client: Client) {
-    const player = this.state.players.get(client.sessionId);
+    const id = client.sessionId;
+    if (this.spectators.delete(id)) {
+      this.state.spectators = this.spectators.size;
+      return this.updateListing();
+    }
+    const player = this.state.players.get(id);
+    const timedOut = this.dropped.delete(id);
+    this.heldSeats.delete(id);
     if (!player) return;
     if (this.state.phase === "lobby") {
-      this.state.players.delete(client.sessionId);
-      if (this.state.hostId === client.sessionId) {
-        const next = this.state.players.keys().next().value;
-        this.setHost(next ?? "");
-      }
+      this.removeFromLobby(id);
+    } else if (this.state.phase !== "gameover") {
+      // Quitting on purpose is final; a dropped player who never came back dies too.
+      player.connected = false;
+      this.removeFromGame(id, timedOut ? "timeout" : "quit");
     } else {
-      // Seat stays so votes and role counts don't shift mid-game.
       player.connected = false;
     }
+    this.updateListing();
+  }
+
+  private removeFromLobby(id: string) {
+    this.state.players.delete(id);
+    this.playerIds.delete(id);
+    if (this.state.hostId === id) this.setHost(this.state.players.keys().next().value ?? "");
+  }
+
+  /** A player gone for good mid-game dies on the spot, outside any night/vote resolution. */
+  private removeFromGame(id: string, reason: "quit" | "timeout") {
+    if (!this.isAlive(id)) return;
+    this.kill(id);
+    this.broadcast("player_gone", { id, reason, role: this.roles.get(id) });
+    if (this.pendingSuccession === id) {
+      // He isn't here to name a successor: the village has no mayor from now on.
+      this.pendingSuccession = null;
+      this.broadcast("mayor_result", { mayorId: null, successor: true });
+    }
+    this.endGameIfOver();
+  }
+
+  /** Host only, waiting room only: removes a player and bans him until the host changes. */
+  private handleKick(client: Client, msg: { targetId: string }) {
+    const target = msg?.targetId;
+    if (this.state.phase !== "lobby" || client.sessionId !== this.state.hostId) return;
+    if (!target || target === client.sessionId || !this.state.players.has(target)) return;
+    this.banned.add(this.playerIds.get(target) ?? target);
+    this.heldSeats.get(target)?.reject("kicked"); // a disconnected player's held seat
+    const kicked = this.clients.getById(target);
+    kicked?.send("kicked");
+    this.removeFromLobby(target);
+    this.updateListing();
+    kicked?.leave(4000);
+  }
+
+  /** The 1-hour limit: an unfinished game ends with no winner, then everyone is sent home. */
+  private expire() {
+    if (this.state.phase !== "gameover") this.endGame(null);
+    this.clock.setTimeout(() => this.disconnect(), 15_000);
+  }
+
+  /** What the lobby screen lists for this room. */
+  private updateListing() {
+    const host = this.state.players.get(this.state.hostId)?.name ?? "";
+    this.setMatchmaking({
+      maxClients: MAX_CONNECTIONS,
+      metadata: {
+        host,
+        started: this.state.phase !== "lobby",
+        players: this.state.players.size,
+        maxPlayers: this.state.maxPlayers,
+        spectators: this.spectators.size,
+      },
+    });
   }
 
   /** Validates and applies host settings; anything missing or invalid keeps its current value. */
   private applySettings(s: Settings) {
     const st = this.state;
     const int = (v: unknown, min: number, max: number) => Math.min(max, Math.max(min, Math.floor(Number(v)) || min));
-    if (typeof s.title === "string" && s.title.trim()) st.title = s.title.trim().slice(0, 32);
-    if (!st.title) st.title = "Village";
     if (ROOM_TYPES.includes(s.roomType as string)) st.roomType = s.roomType as string;
     if (s.maxPlayers !== undefined) st.maxPlayers = int(s.maxPlayers, Math.max(MIN_PLAYERS, st.players.size), MAX_PLAYERS);
     if (ROUND_OPTIONS.includes(Number(s.roundSeconds))) st.roundSeconds = Number(s.roundSeconds);
@@ -136,17 +233,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
     if (s.testRole !== undefined) this.testHostRole = ROLES.includes(s.testRole as Role) ? (s.testRole as Role) : null;
-
-    this.setMatchmaking({
-      maxClients: st.maxPlayers,
-      metadata: { title: st.title, host: this.metadata?.host ?? "", started: this.metadata?.started ?? false },
-    });
+    this.updateListing();
   }
 
   private setHost(sessionId: string) {
+    if (this.state.hostId !== sessionId) this.banned.clear(); // a new host lifts the old host's bans
     this.state.hostId = sessionId;
-    const host = this.state.players.get(sessionId)?.name ?? "";
-    this.setMatchmaking({ metadata: { ...this.metadata, host } });
+    this.updateListing();
   }
 
   // ---- lobby ----
@@ -161,9 +254,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       client.send("error", { code: "not_enough_players", min: MIN_PLAYERS });
       return;
     }
-    this.setMatchmaking({ locked: true, metadata: { ...this.metadata, started: true } });
+    // The room stays unlocked so spectators can still join; onAuth turns new players away.
     this.assignRoles();
     this.startNight();
+    this.updateListing();
   }
 
   private assignRoles() {
@@ -280,6 +374,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!this.isAlive(msg?.targetId) || msg.targetId === client.sessionId) return;
     this.seerDone = true;
     const role = this.roles.get(msg.targetId);
+    if (role) this.seerKnown[msg.targetId] = role;
     client.send("seer_result", { targetId: msg.targetId, role, isWerewolf: role === "werewolf" });
     this.maybeEndWitchSeer();
   }
@@ -422,7 +517,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const voters = this.aliveCount() + (this.isAlive(this.state.mayorId) ? 1 : 0);
     if (excluded) this.kill(excluded);
 
-    this.broadcast("vote_result", { excluded, votes: bestCount, voters, day: this.state.dayNumber });
+    const ballots: Record<string, string> = {};
+    for (const [id, p] of this.state.players) if (p.votedFor && (p.alive || id === excluded)) ballots[id] = p.votedFor;
+    const record: VoteRecord = { day: this.state.dayNumber, excluded, ballots, mayorId: this.state.mayorId };
+    this.voteHistory.push(record);
+
+    this.broadcast("vote_result", { ...record, votes: bestCount, voters });
     if (!this.endGameIfOver()) this.afterDeaths(() => this.startNight());
   }
 
@@ -503,15 +603,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return false;
   }
 
-  private endGame(winner: "werewolves" | "villagers") {
+  /** A null winner means the room ran out of time: nobody wins. */
+  private endGame(winner: "werewolves" | "villagers" | null) {
     this.state.phase = "gameover";
     this.state.nightStep = "";
     this.state.nightRoles = "";
-    this.state.winner = winner;
+    this.state.winner = winner ?? "none";
     this.state.phaseEndsAt = 0;
     this.phaseTimer?.clear();
     for (const [id, player] of this.state.players) player.revealedRole = this.roles.get(id) ?? "";
-    this.broadcast("game_over", { winner });
+    this.broadcast("game_over", { winner, reason: winner ? "win" : "expired" });
+    this.updateListing();
   }
 
   private setPhaseTimer(ms: number, onExpire: () => void) {
