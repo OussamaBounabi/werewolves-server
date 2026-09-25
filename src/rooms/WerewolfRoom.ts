@@ -38,6 +38,7 @@ const ROOM_LIFESPAN_MS = 60 * 60_000; // a room lives at most 1 hour from creati
 const CLOSE_AFTER_GAME_MS = 60_000; // after the game ends, the room closes a minute later
 const MAX_CONNECTIONS = 100; // players + spectators; the player limit is maxPlayers, checked in onAuth
 const CHAT_MAX = 200;
+const DEAL_MS = 3_500; // the app's role-card deal animation, on top of night 1's first step
 const REVEAL_MS = 4_500; // the app's card reveal for one death; the game waits for them before moving on
 
 export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }> {
@@ -80,6 +81,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // Per game
   private potions = new Map<string, Potions>();
   private lastProtected: string | null = null; // can't be protected two nights in a row
+  private dealTime = 0; // DEAL_MS for the first night step of the game, then 0
   private revealsPending = 0; // deaths whose card reveal the clients are about to play
   private pendingShooters: string[] = []; // dead hunters waiting for their shot
   private mayorElected = false; // the village elects once; a dead mayor can only hand the title on
@@ -343,6 +345,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.chatLog = [];
     this.broadcast("events", []);
     this.assignRoles();
+    this.dealTime = DEAL_MS;
     this.startNight();
     this.updateListing();
   }
@@ -415,7 +418,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightStep = "wild_hunter";
     this.state.nightRoles = "wildhunter";
     this.logEvent("step", { role: "wildhunter" });
-    this.setPhaseTimer(STEP_MS, () => this.startProtectorStep());
+    this.setStepTimer( () => this.startProtectorStep());
   }
 
   private handleTrap(client: Client, msg: { targetId: string }) {
@@ -433,7 +436,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightRoles = "protector";
     this.logEvent("step", { role: "protector" });
     this.sendProtectorTurn(protector);
-    this.setPhaseTimer(STEP_MS, () => this.startWolvesStep());
+    this.setStepTimer( () => this.startWolvesStep());
   }
 
   private handleProtect(client: Client, msg: { targetId: string }) {
@@ -452,7 +455,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightStep = "wolves";
     this.state.nightRoles = "werewolf";
     this.logEvent("step", { role: "werewolf" });
-    this.setPhaseTimer(STEP_MS, () => this.endWolvesStep());
+    this.setStepTimer( () => this.endWolvesStep());
   }
 
   /** Wolves vote for any living player — packmates too — and may change their vote until the step ends. */
@@ -922,6 +925,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.phaseEndsAt = Date.now() + CLOSE_AFTER_GAME_MS; // clients count down to the room closing
     this.closeTimer ??= this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
     this.updateListing();
+  }
+
+  /** A night step's timer; the game's first one also covers the card deal animation. */
+  private setStepTimer(onExpire: () => void) {
+    this.setPhaseTimer(STEP_MS + this.dealTime, onExpire);
+    this.dealTime = 0;
   }
 
   private setPhaseTimer(ms: number, onExpire: () => void) {

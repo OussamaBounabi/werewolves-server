@@ -14,7 +14,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
 
 // One of each role with 5 players; the day debate is as short as allowed.
 const ONE_OF_EACH = { wolves: 1, villagers: 1, seer: true, witch: true, protector: true, roundSeconds: 10 };
-const STEP = 12_000; // a night step lasts 10s now that the wolves' step never ends early
+const STEP = 15_000; // a night step lasts 10s (night 1's first one 13.5s: it covers the card deal)
 
 describe("WerewolfRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
