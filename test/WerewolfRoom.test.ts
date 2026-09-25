@@ -246,6 +246,43 @@ describe("WerewolfRoom", () => {
     assert.ok(!types.includes("your_role")); // private lines stay private
   });
 
+  it("never lets the protector protect the same player two nights in a row", async function () {
+    this.timeout(180_000);
+    const { room, clients, roles, byRole } = await startGame({ ...ONE_OF_EACH, witch: false, villagers: 2 });
+    const [protector, seer, wolf] = [byRole("protector"), byRole("seer"), byRole("werewolf")];
+    const [villagerA, villagerB] = clients.filter((_, i) => roles[i] === "villager");
+
+    // A night where the wolf attacks exactly the protected player: nobody dies.
+    const quietNight = async (target: any) => {
+      await waitFor(() => room.state.nightStep === "protector", 60_000);
+      protector.send("protect", { targetId: target.sessionId });
+      await waitFor(() => room.state.nightStep === "wolves");
+      wolf.send("wolf_target", { targetId: target.sessionId });
+      await waitFor(() => room.state.nightStep === "witch_seer", STEP);
+      seer.send("seer_peek", { targetId: wolf.sessionId });
+    };
+    // A day whose vote is a 2–2 tie (nobody votes in the mayor election, so there's no mayor): nobody goes out.
+    const quietDay = async () => {
+      await waitFor(() => room.state.phase === "vote", 60_000);
+      protector.send("day_vote", { targetId: villagerA.sessionId });
+      seer.send("day_vote", { targetId: villagerA.sessionId });
+      villagerA.send("day_vote", { targetId: villagerB.sessionId });
+      villagerB.send("day_vote", { targetId: villagerB.sessionId });
+      await waitFor(() => room.state.phase === "night", STEP);
+    };
+
+    await quietNight(protector); // night 1: himself
+    await quietDay();
+    await quietNight(villagerA); // night 2: someone else
+    await quietDay();
+
+    await waitFor(() => room.state.nightStep === "protector", 60_000); // night 3: villager A again → refused
+    const refused = protector.waitForMessage("error");
+    protector.send("protect", { targetId: villagerA.sessionId });
+    assert.deepStrictEqual(await refused, { code: "same_protect" });
+    assert.strictEqual(room.state.nightStep, "protector");
+  });
+
   it("lets a dead mayor name his successor", async function () {
     this.timeout(45_000);
     const { room, clients, roles, byRole } = await startGame({ ...ONE_OF_EACH, villagers: 2, protector: false });

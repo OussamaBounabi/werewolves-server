@@ -31,6 +31,7 @@ export const WerewolfState = schema({
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
   winner: t.string().default(""), // "werewolves" | "villagers" | "none" (room expired) | ""
+  dealt: t.string().default(""), // JSON {role: count} of the roles actually dealt, for "remaining roles"
   spectators: t.number().default(0),
   hostId: t.string().default(""),
   players: t.map(PlayerState),

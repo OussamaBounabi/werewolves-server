@@ -182,6 +182,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (role === "seer") client.send("seer_known", this.seerKnown);
     if (role === "werewolf" && this.state.nightStep === "wolves") client.send("wolf_votes", Object.fromEntries(this.wolfVotes));
     if (role === "witch" && this.state.nightStep === "witch_seer" && !this.witchDone) this.sendWitchTurn(id);
+    if (role === "protector" && this.state.nightStep === "protector") this.sendProtectorTurn(id);
     this.sendHistory(client);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
   }
@@ -348,18 +349,28 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
     shuffle(deck);
     ids.forEach((id, i) => this.roles.set(id, deck[i]));
+    const dealt: Record<string, number> = {};
+    for (const role of this.roles.values()) dealt[role] = (dealt[role] ?? 0) + 1;
+    this.state.dealt = JSON.stringify(dealt);
+
     const pack = this.idsWithRole("werewolf").map((id) => this.nameOf(id));
     for (const [id, role] of this.roles) {
-      this.sendRole(id);
+      this.sendRole(id, true);
       this.logEvent("your_role", role === "werewolf" ? { role, pack } : { role }, id);
     }
   }
 
-  private sendRole(sessionId: string) {
+  /** [fresh]: the deal itself (the app plays the card-reveal animation), not a re-send after a reconnect. */
+  private sendRole(sessionId: string, fresh = false) {
     const role = this.roles.get(sessionId);
     if (!role) return;
     const pack = role === "werewolf" ? this.idsWithRole("werewolf") : undefined;
-    this.clients.getById(sessionId)?.send("role_assigned", pack ? { role, pack } : { role });
+    this.clients.getById(sessionId)?.send("role_assigned", { role, fresh, ...(pack ? { pack } : {}) });
+  }
+
+  /** The protector learns from the server who he can't protect tonight (survives app relaunches). */
+  private sendProtectorTurn(protectorId: string) {
+    this.clients.getById(protectorId)?.send("protector_turn", { blocked: this.lastProtected });
   }
 
   // ---- night: protector → wolves → witch + seer ----
@@ -380,10 +391,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private startProtectorStep() {
-    if (!this.aliveWithRole("protector")) return this.startWolvesStep();
+    const protector = this.aliveWithRole("protector");
+    if (!protector) return this.startWolvesStep();
     this.state.nightStep = "protector";
     this.state.nightRoles = "protector";
     this.logEvent("step", { role: "protector" });
+    this.sendProtectorTurn(protector);
     this.setPhaseTimer(STEP_MS, () => this.startWolvesStep());
   }
 
@@ -395,6 +408,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       return;
     }
     this.protectTarget = msg.targetId;
+    this.logEvent("protected", { name: this.nameOf(msg.targetId) }, client.sessionId); // his confirmation
     this.startWolvesStep();
   }
 
