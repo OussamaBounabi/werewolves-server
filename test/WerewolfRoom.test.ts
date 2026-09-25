@@ -21,7 +21,7 @@ describe("WerewolfRoom", () => {
 
   async function startGame(options: object = {}) {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", options);
-    const clients = [];
+    const clients: any[] = [];
     for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room)); // join order: clients[0] is host
     const rolesPromise = Promise.all(clients.map((c) => c.waitForMessage("role_assigned")));
     clients[0].send("start_game");
@@ -35,6 +35,45 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual([...roles].sort(), ["protector", "seer", "villager", "werewolf", "witch"]);
     assert.strictEqual(room.state.phase, "night");
     assert.strictEqual(room.state.nightStep, "protector");
+  });
+
+  it("uses the host's role mix, dropping villagers first when fewer players join", async () => {
+    const roles = { werewolf: 2, villager: 3, seer: true, witch: true, protector: true }; // 8 seats
+    const { room, roles: dealt } = await startGame({ roles });
+    assert.strictEqual(room.maxClients, 8);
+    assert.deepStrictEqual([...dealt].sort(), ["protector", "seer", "werewolf", "werewolf", "witch"]);
+  });
+
+  it("lets a dead mayor name his successor", async function () {
+    this.timeout(30_000); // waits out the 10s debate
+    const { room, clients, roles, byRole } = await startGame({
+      roles: { werewolf: 1, villager: 2, seer: true, witch: true, protector: false },
+    });
+    const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
+    const [mayor, heir] = clients.filter((_, i) => roles[i] === "villager");
+
+    // Quiet night (no protector in this mix): the witch revives the wolves' victim.
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: mayor.sessionId });
+    await waitFor(() => room.state.nightStep === "witch_seer");
+    seer.send("seer_peek", { targetId: wolf.sessionId });
+    witch.send("witch_revive");
+    witch.send("witch_pass");
+    await waitFor(() => room.state.phase === "mayor");
+
+    for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId });
+    await waitFor(() => room.state.mayorId === mayor.sessionId);
+
+    await waitFor(() => room.state.phase === "vote", 15_000);
+    for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId }); // the village votes its mayor out
+    await waitFor(() => room.state.phase === "succession");
+    assert.strictEqual(room.state.successionFrom, mayor.sessionId);
+
+    const handover = heir.waitForMessage("mayor_result");
+    mayor.send("mayor_successor", { targetId: heir.sessionId });
+    assert.deepStrictEqual(await handover, { mayorId: heir.sessionId, successor: true });
+    assert.strictEqual(room.state.mayorId, heir.sessionId);
+    assert.strictEqual(room.state.phase, "night");
   });
 
   it("gives the host their test role", async () => {

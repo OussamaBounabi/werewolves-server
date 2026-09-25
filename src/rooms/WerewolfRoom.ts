@@ -3,6 +3,9 @@ import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 
 type Role = "werewolf" | "villager" | "seer" | "witch" | "protector";
 type Meta = { title: string; host: string; started: boolean };
+/** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
+type Composition = { werewolf: number; villager: number; seer: boolean; witch: boolean; protector: boolean };
+const SPECIALS = ["seer", "witch", "protector"] as const;
 
 const ROLES: readonly Role[] = ["werewolf", "villager", "seer", "witch", "protector"];
 const MIN_PLAYERS = 5;
@@ -17,6 +20,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // Server-only — never synced to clients, so role/night info can't leak.
   private roles = new Map<string, Role>();
+  private composition: Composition | null = null; // null = default mix for the player count
   private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
@@ -34,6 +38,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private witchReviveUsed = false;
   private witchPoisonUsed = false;
   private lastProtected: string | null = null; // can't be protected two nights in a row
+  private mayorElected = false; // the village elects once; a dead mayor can only hand the title on
+  private pendingSuccession: string | null = null; // mayor who just died and picks a successor
 
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
   onBeforePatch() {
@@ -44,8 +50,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.broadcast("state", { ...snapshot, serverNow: Date.now() });
   }
 
-  onCreate(options: { title?: string; maxPlayers?: number; testRole?: string } = {}) {
-    this.maxClients = Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.floor(Number(options.maxPlayers) || MAX_PLAYERS)));
+  onCreate(options: { title?: string; maxPlayers?: number; roles?: Partial<Composition>; testRole?: string } = {}) {
+    this.composition = parseComposition(options.roles);
+    const size = this.composition ? compositionSize(this.composition) : Number(options.maxPlayers);
+    this.maxClients = Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.floor(size) || MAX_PLAYERS));
     this.testHostRole = ROLES.includes(options.testRole as Role) ? (options.testRole as Role) : null;
     this.setMatchmaking({
       metadata: { title: String(options.title ?? "").trim().slice(0, 32) || "Village", host: "", started: false },
@@ -59,6 +67,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("witch_poison", (client, msg: { targetId: string }) => this.handleWitchPoison(client, msg));
     this.onMessage("witch_pass", (client) => this.handleWitchPass(client));
     this.onMessage("day_vote", (client, msg: { targetId: string }) => this.handleDayVote(client, msg));
+    this.onMessage("mayor_successor", (client, msg: { targetId: string }) => this.handleSuccessor(client, msg));
+    this.onMessage("mayor_pass", (client) => this.handleSuccessor(client, null));
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
   }
 
@@ -127,14 +137,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private assignRoles() {
     const ids = [...this.state.players.keys()];
-    const wolfCount = Math.max(1, Math.floor(ids.length / 4));
-    const deck: Role[] = [
-      ...Array<Role>(wolfCount).fill("werewolf"),
-      "seer",
-      "witch",
-      "protector",
-      ...Array<Role>(Math.max(0, ids.length - wolfCount - 3)).fill("villager"),
-    ];
+    const deck = buildDeck(this.composition ?? defaultComposition(ids.length), ids.length);
 
     // TEST ONLY: give the host the role they picked when creating the room.
     const hostId = this.state.hostId;
@@ -240,7 +243,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.state.nightStep !== "witch_seer" || this.seerDone || !this.actorIs(client, "seer")) return;
     if (!this.isAlive(msg?.targetId) || msg.targetId === client.sessionId) return;
     this.seerDone = true;
-    client.send("seer_result", { targetId: msg.targetId, isWerewolf: this.roles.get(msg.targetId) === "werewolf" });
+    const role = this.roles.get(msg.targetId);
+    client.send("seer_result", { targetId: msg.targetId, role, isWerewolf: role === "werewolf" });
     this.maybeEndWitchSeer();
   }
 
@@ -285,9 +289,35 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightStep = "";
     this.broadcast("night_result", { deaths: [...deaths], saved: this.witchReviving });
     if (this.endGameIfOver()) return;
-    // The village (re-)elects a mayor whenever it has none: after the first night, or once the mayor died.
-    if (this.state.mayorId) this.startDay();
-    else this.startMayorVote();
+    // The village elects its mayor once, after the first night.
+    this.afterDeaths(() => (this.mayorElected ? this.startDay() : this.startMayorVote()));
+  }
+
+  /** If the mayor just died, he first gets a turn to name a successor; then [next] runs. */
+  private afterDeaths(next: () => void) {
+    const from = this.pendingSuccession;
+    this.pendingSuccession = null;
+    if (!from) return next();
+    this.state.phase = "succession";
+    this.state.successionFrom = from;
+    this.afterSuccession = next;
+    this.setPhaseTimer(STEP_MS, () => this.endSuccession(null));
+  }
+
+  private afterSuccession: () => void = () => {};
+
+  private handleSuccessor(client: Client, msg: { targetId: string } | null) {
+    if (this.state.phase !== "succession" || client.sessionId !== this.state.successionFrom) return;
+    if (msg && !this.isAlive(msg.targetId)) return;
+    this.endSuccession(msg?.targetId ?? null);
+  }
+
+  /** A null successor (pass or timeout) leaves the village without a mayor for the rest of the game. */
+  private endSuccession(successor: string | null) {
+    this.state.mayorId = successor ?? "";
+    this.state.successionFrom = "";
+    this.broadcast("mayor_result", { mayorId: successor, successor: true });
+    this.afterSuccession();
   }
 
   // ---- mayor election, day discussion, exclusion vote ----
@@ -302,6 +332,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const top = topCandidates(this.aliveVotes(1));
     const mayor = top.length ? top[Math.floor(Math.random() * top.length)] : ""; // ties are drawn at random
     this.state.mayorId = mayor;
+    this.mayorElected = true;
     this.broadcast("mayor_result", { mayorId: mayor || null });
     this.startDay();
   }
@@ -355,7 +386,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (excluded) this.kill(excluded);
 
     this.broadcast("vote_result", { excluded, votes: bestCount, voters, day: this.state.dayNumber });
-    if (!this.endGameIfOver()) this.startNight();
+    if (!this.endGameIfOver()) this.afterDeaths(() => this.startNight());
   }
 
   // ---- chat ----
@@ -398,7 +429,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!player) return;
     player.alive = false;
     player.revealedRole = this.roles.get(sessionId) ?? "";
-    if (this.state.mayorId === sessionId) this.state.mayorId = "";
+    if (this.state.mayorId === sessionId) {
+      this.state.mayorId = "";
+      this.pendingSuccession = sessionId;
+    }
   }
 
   private isAlive(sessionId: string | undefined): boolean {
@@ -447,6 +481,46 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.phaseEndsAt = Date.now() + ms;
     this.phaseTimer = this.clock.setTimeout(onExpire, ms);
   }
+}
+
+function parseComposition(raw: Partial<Composition> | undefined): Composition | null {
+  if (!raw || typeof raw !== "object") return null;
+  const count = (v: unknown, min: number) => Math.max(min, Math.min(MAX_PLAYERS, Math.floor(Number(v)) || 0));
+  const c: Composition = {
+    werewolf: count(raw.werewolf, 1),
+    villager: count(raw.villager, 0),
+    seer: raw.seer === true,
+    witch: raw.witch === true,
+    protector: raw.protector === true,
+  };
+  const size = compositionSize(c);
+  return size >= MIN_PLAYERS && size <= MAX_PLAYERS ? c : null;
+}
+
+function compositionSize(c: Composition): number {
+  return c.werewolf + c.villager + SPECIALS.filter((r) => c[r]).length;
+}
+
+function defaultComposition(players: number): Composition {
+  const werewolf = Math.max(1, Math.floor(players / 4));
+  return { werewolf, villager: Math.max(0, players - werewolf - 3), seer: true, witch: true, protector: true };
+}
+
+/** Roles for [players] seats: when fewer joined than planned, drop villagers, then protector, witch, seer, then extra wolves. */
+function buildDeck(c: Composition, players: number): Role[] {
+  let { werewolf, villager } = c;
+  const specials: Role[] = SPECIALS.filter((r) => c[r]);
+  let extra = werewolf + villager + specials.length - players;
+  for (; extra > 0 && villager > 0; extra--) villager--;
+  for (const r of ["protector", "witch", "seer"] as const) {
+    if (extra > 0 && specials.includes(r)) {
+      specials.splice(specials.indexOf(r), 1);
+      extra--;
+    }
+  }
+  for (; extra > 0 && werewolf > 1; extra--) werewolf--;
+  villager += Math.max(0, -extra); // more players than planned (default mix only)
+  return [...Array<Role>(werewolf).fill("werewolf"), ...specials, ...Array<Role>(villager).fill("villager")];
 }
 
 /** Every target sharing the highest vote count (empty when nobody voted). */
