@@ -13,8 +13,20 @@ export type PlayerState = SchemaType<typeof PlayerState>;
 // Phase: "lobby" | "night" | "mayor" | "succession" | "day" | "vote" | "gameover"
 // Night steps, in order: "protector" | "wolves" | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
+  // Room settings, editable by the host in the lobby.
+  title: t.string().default(""),
+  roomType: t.string().default("public"), // "public" | "friends" | "private" — not enforced yet
+  maxPlayers: t.number().default(8),
+  roundSeconds: t.number().default(30), // day discussion; night steps and votes are fixed
+  wolves: t.number().default(2),
+  villagers: t.number().default(3),
+  seer: t.boolean().default(true),
+  witch: t.boolean().default(true),
+  protector: t.boolean().default(true),
+
   phase: t.string().default("lobby"),
   nightStep: t.string().default(""),
+  nightRoles: t.string().default(""), // comma-separated roles awake in the current night step
   mayorId: t.string().default(""), // mayor's day vote counts twice
   successionFrom: t.string().default(""), // dead mayor choosing a successor during "succession"
   dayNumber: t.number().default(0),

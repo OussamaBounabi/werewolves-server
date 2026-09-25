@@ -5,12 +5,27 @@ type Role = "werewolf" | "villager" | "seer" | "witch" | "protector";
 type Meta = { title: string; host: string; started: boolean };
 /** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
 type Composition = { werewolf: number; villager: number; seer: boolean; witch: boolean; protector: boolean };
+/** What the host can change in the lobby (also accepted as create options). */
+type Settings = {
+  title?: string;
+  roomType?: string;
+  maxPlayers?: number;
+  roundSeconds?: number;
+  wolves?: number;
+  villagers?: number;
+  seer?: boolean;
+  witch?: boolean;
+  protector?: boolean;
+  testRole?: string | null;
+};
 const SPECIALS = ["seer", "witch", "protector"] as const;
 
 const ROLES: readonly Role[] = ["werewolf", "villager", "seer", "witch", "protector"];
-const MIN_PLAYERS = 5;
+const ROOM_TYPES = ["public", "friends", "private"];
+const ROUND_OPTIONS = [10, ...Array.from({ length: 30 }, (_, i) => (i + 1) * 30)]; // 10s, 30s … 15min
+const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
-const STEP_MS = 10_000; // every phase and every night step
+const STEP_MS = 10_000; // night steps and votes — TEMPORARY fixed value, the user wants it configurable later
 const RECONNECT_SECONDS = 60;
 const CHAT_MAX = 200;
 
@@ -20,7 +35,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // Server-only — never synced to clients, so role/night info can't leak.
   private roles = new Map<string, Role>();
-  private composition: Composition | null = null; // null = default mix for the player count
   private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
@@ -50,15 +64,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.broadcast("state", { ...snapshot, serverNow: Date.now() });
   }
 
-  onCreate(options: { title?: string; maxPlayers?: number; roles?: Partial<Composition>; testRole?: string } = {}) {
-    this.composition = parseComposition(options.roles);
-    const size = this.composition ? compositionSize(this.composition) : Number(options.maxPlayers);
-    this.maxClients = Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.floor(size) || MAX_PLAYERS));
-    this.testHostRole = ROLES.includes(options.testRole as Role) ? (options.testRole as Role) : null;
-    this.setMatchmaking({
-      metadata: { title: String(options.title ?? "").trim().slice(0, 32) || "Village", host: "", started: false },
-    });
+  onCreate(options: Settings = {}) {
+    this.applySettings(options);
 
+    this.onMessage("settings", (client, msg: Settings) => {
+      if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
+    });
     this.onMessage("start_game", (client) => this.handleStartGame(client));
     this.onMessage("protect", (client, msg: { targetId: string }) => this.handleProtect(client, msg));
     this.onMessage("wolf_target", (client, msg: { targetId: string }) => this.handleWolfTarget(client, msg));
@@ -112,6 +123,26 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
   }
 
+  /** Validates and applies host settings; anything missing or invalid keeps its current value. */
+  private applySettings(s: Settings) {
+    const st = this.state;
+    const int = (v: unknown, min: number, max: number) => Math.min(max, Math.max(min, Math.floor(Number(v)) || min));
+    if (typeof s.title === "string" && s.title.trim()) st.title = s.title.trim().slice(0, 32);
+    if (!st.title) st.title = "Village";
+    if (ROOM_TYPES.includes(s.roomType as string)) st.roomType = s.roomType as string;
+    if (s.maxPlayers !== undefined) st.maxPlayers = int(s.maxPlayers, Math.max(MIN_PLAYERS, st.players.size), MAX_PLAYERS);
+    if (ROUND_OPTIONS.includes(Number(s.roundSeconds))) st.roundSeconds = Number(s.roundSeconds);
+    if (s.wolves !== undefined) st.wolves = int(s.wolves, 1, 8);
+    if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
+    for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
+    if (s.testRole !== undefined) this.testHostRole = ROLES.includes(s.testRole as Role) ? (s.testRole as Role) : null;
+
+    this.setMatchmaking({
+      maxClients: st.maxPlayers,
+      metadata: { title: st.title, host: this.metadata?.host ?? "", started: this.metadata?.started ?? false },
+    });
+  }
+
   private setHost(sessionId: string) {
     this.state.hostId = sessionId;
     const host = this.state.players.get(sessionId)?.name ?? "";
@@ -137,7 +168,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private assignRoles() {
     const ids = [...this.state.players.keys()];
-    const deck = buildDeck(this.composition ?? defaultComposition(ids.length), ids.length);
+    const st = this.state;
+    const mix = { werewolf: st.wolves, villager: st.villagers, seer: st.seer, witch: st.witch, protector: st.protector };
+    const deck = buildDeck(mix, ids.length);
 
     // TEST ONLY: give the host the role they picked when creating the room.
     const hostId = this.state.hostId;
@@ -178,6 +211,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private startProtectorStep() {
     if (!this.aliveWithRole("protector")) return this.startWolvesStep();
     this.state.nightStep = "protector";
+    this.state.nightRoles = "protector";
     this.setPhaseTimer(STEP_MS, () => this.startWolvesStep());
   }
 
@@ -194,17 +228,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private startWolvesStep() {
     this.state.nightStep = "wolves";
+    this.state.nightRoles = "werewolf";
     this.setPhaseTimer(STEP_MS, () => this.endWolvesStep());
   }
 
+  /** Wolves vote for any living player — packmates too — and may change their vote until the step ends. */
   private handleWolfTarget(client: Client, msg: { targetId: string }) {
     if (this.state.nightStep !== "wolves" || !this.actorIs(client, "werewolf")) return;
     if (!this.isAlive(msg?.targetId)) return;
-    // A wolf may pick himself, but never a packmate.
-    if (this.roles.get(msg.targetId) === "werewolf" && msg.targetId !== client.sessionId) return;
     this.wolfVotes.set(client.sessionId, msg.targetId);
-    const wolves = this.idsWithRole("werewolf").filter((id) => this.isAlive(id));
-    if (wolves.every((id) => this.wolfVotes.has(id))) this.endWolvesStep();
+    const votes = Object.fromEntries(this.wolfVotes);
+    for (const id of this.idsWithRole("werewolf")) this.clients.getById(id)?.send("wolf_votes", votes);
   }
 
   private endWolvesStep() {
@@ -221,10 +255,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private startWitchSeerStep() {
-    const witch = this.aliveWithRole("witch");
+    // The witch only wakes while she still has a potion.
+    const witch = !this.witchReviveUsed || !this.witchPoisonUsed ? this.aliveWithRole("witch") : undefined;
     const seer = this.aliveWithRole("seer");
     if (!witch && !seer) return this.resolveNight();
     this.state.nightStep = "witch_seer";
+    this.state.nightRoles = [witch && "witch", seer && "seer"].filter(Boolean).join(",");
     this.seerDone = !seer;
     this.witchDone = !witch;
     if (witch) this.sendWitchTurn(witch);
@@ -287,6 +323,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const id of deaths) this.kill(id);
 
     this.state.nightStep = "";
+    this.state.nightRoles = "";
     this.broadcast("night_result", { deaths: [...deaths], saved: this.witchReviving });
     if (this.endGameIfOver()) return;
     // The village elects its mayor once, after the first night.
@@ -339,7 +376,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private startDay() {
     this.state.phase = "day";
-    this.setPhaseTimer(STEP_MS, () => this.startVote());
+    this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.startVote());
   }
 
   private startVote() {
@@ -469,6 +506,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private endGame(winner: "werewolves" | "villagers") {
     this.state.phase = "gameover";
     this.state.nightStep = "";
+    this.state.nightRoles = "";
     this.state.winner = winner;
     this.state.phaseEndsAt = 0;
     this.phaseTimer?.clear();
@@ -483,30 +521,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 }
 
-function parseComposition(raw: Partial<Composition> | undefined): Composition | null {
-  if (!raw || typeof raw !== "object") return null;
-  const count = (v: unknown, min: number) => Math.max(min, Math.min(MAX_PLAYERS, Math.floor(Number(v)) || 0));
-  const c: Composition = {
-    werewolf: count(raw.werewolf, 1),
-    villager: count(raw.villager, 0),
-    seer: raw.seer === true,
-    witch: raw.witch === true,
-    protector: raw.protector === true,
-  };
-  const size = compositionSize(c);
-  return size >= MIN_PLAYERS && size <= MAX_PLAYERS ? c : null;
-}
-
-function compositionSize(c: Composition): number {
-  return c.werewolf + c.villager + SPECIALS.filter((r) => c[r]).length;
-}
-
-function defaultComposition(players: number): Composition {
-  const werewolf = Math.max(1, Math.floor(players / 4));
-  return { werewolf, villager: Math.max(0, players - werewolf - 3), seer: true, witch: true, protector: true };
-}
-
-/** Roles for [players] seats: when fewer joined than planned, drop villagers, then protector, witch, seer, then extra wolves. */
+/**
+ * Roles for [players] seats. Fewer players than planned: drop villagers, then protector, witch, seer,
+ * then extra wolves. More players than planned: the extras are villagers.
+ */
 function buildDeck(c: Composition, players: number): Role[] {
   let { werewolf, villager } = c;
   const specials: Role[] = SPECIALS.filter((r) => c[r]);
@@ -519,7 +537,7 @@ function buildDeck(c: Composition, players: number): Role[] {
     }
   }
   for (; extra > 0 && werewolf > 1; extra--) werewolf--;
-  villager += Math.max(0, -extra); // more players than planned (default mix only)
+  villager += Math.max(0, -extra);
   return [...Array<Role>(werewolf).fill("werewolf"), ...specials, ...Array<Role>(villager).fill("villager")];
 }
 
