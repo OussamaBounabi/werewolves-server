@@ -84,11 +84,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private handleStartGame(client: Client) {
     if (this.state.phase !== "lobby") return;
     if (client.sessionId !== this.state.hostId) {
-      client.send("error", { message: "Seul l'hôte peut lancer la partie." });
+      client.send("error", { code: "not_host" });
       return;
     }
     if (this.state.players.size < MIN_PLAYERS) {
-      client.send("error", { message: `Il faut au moins ${MIN_PLAYERS} joueurs.` });
+      client.send("error", { code: "not_enough_players", min: MIN_PLAYERS });
       return;
     }
     this.setMatchmaking({ locked: true, metadata: { ...this.metadata, started: true } });
