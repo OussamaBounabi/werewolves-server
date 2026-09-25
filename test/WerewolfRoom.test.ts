@@ -27,8 +27,8 @@ describe("WerewolfRoom", () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", options);
     const clients: any[] = [];
     for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room)); // join order: clients[0] is host
-    const rolesPromise = Promise.all(clients.map((c) => c.waitForMessage("role_assigned")));
-    clients[0].send("start_game");
+    const rolesPromise = Promise.all(clients.map((c) => c.waitForMessage("role_assigned", STEP)));
+    clients[0].send("start_game"); // roles are dealt after the 10s countdown
     const roles = (await rolesPromise).map((m: any) => m.role as string);
     const byRole = (role: string) => clients[roles.indexOf(role)];
     return { room, clients, roles, byRole };
@@ -62,6 +62,37 @@ describe("WerewolfRoom", () => {
     host.send("settings", { roundSeconds: 45 }); // not a 10s/30s-step value
     await new Promise((r) => setTimeout(r, 100));
     assert.strictEqual(room.state.roundSeconds, 90);
+  });
+
+  it("counts down 10s before starting; the host can cancel; joining is closed meanwhile", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
+    const clients: any[] = [];
+    for (let i = 0; i < 4; i++) clients.push(await colyseus.connectTo(room));
+
+    clients[0].send("start_game");
+    await waitFor(() => room.state.phase === "starting");
+    assert.ok(room.state.phaseEndsAt > Date.now() + 8_000);
+    await assert.rejects(colyseus.connectTo(room), /started/);
+
+    const cancelled = clients[1].waitForMessage("event");
+    clients[0].send("cancel_start");
+    await waitFor(() => room.state.phase === "lobby");
+    assert.strictEqual(((await cancelled) as any).type, "start_cancelled");
+  });
+
+  it("keeps the event log on the server: waiting-room lines, host change, and a full log for newcomers", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room, { name: "Aya" });
+    const other = await colyseus.connectTo(room, { name: "Bilal" });
+    await host.leave();
+    await waitFor(() => room.state.hostId === other.sessionId);
+
+    // (Newcomers get this list in their join handshake — before a test could listen, so read it from the room.)
+    const log: any[] = (room as any).publicLog;
+    assert.deepStrictEqual(
+      log.map((e) => [e.type, e.name]),
+      [["created", "Aya"], ["joined", "Bilal"], ["left", "Aya"], ["new_host", "Bilal"]],
+    );
   });
 
   it("kicks and bans a player until the host changes", async () => {
@@ -102,6 +133,7 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(g.reason, "quit");
     assert.strictEqual(room.state.players.get(quitter.sessionId)?.alive, false);
 
+    dropper.reconnection.enabled = false; // like a killed app: the JS SDK would otherwise reconnect by itself
     await dropper.leave(false); // network drop / app killed
     await waitFor(() => room.state.players.get(dropper.sessionId)?.connected === false);
     assert.strictEqual(room.state.players.get(dropper.sessionId)?.alive, true); // seat held for 10 minutes
@@ -204,6 +236,14 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(r.mayorId, villager.sessionId);
     assert.strictEqual(r.ballots[seer.sessionId], witch.sessionId); // every ballot is kept for the history
     assert.strictEqual(room.state.winner, "villagers");
+    assert.ok(room.state.phaseEndsAt > Date.now() + 50_000); // the room closes a minute after the game
+
+    // What someone arriving now gets: the whole game's log, lobby lines excluded.
+    const types = ((room as any).publicLog as any[]).map((e) => e.type);
+    assert.strictEqual(types[0], "night");
+    assert.ok(types.includes("mayor") && types.includes("vote_result"));
+    assert.strictEqual(types.at(-1), "game_over");
+    assert.ok(!types.includes("your_role")); // private lines stay private
   });
 
   it("lets a dead mayor name his successor", async function () {

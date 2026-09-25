@@ -5,6 +5,9 @@ type Role = "werewolf" | "villager" | "seer" | "witch" | "protector";
 type Meta = { host: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type JoinOptions = { name?: string; playerId?: string; spectator?: boolean };
 type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
+/** One line of the event log; clients render it in their language from [type] and its params. */
+type GameEvent = { seq: number; time: number; type: string; [param: string]: unknown };
+type ChatLine = { from: string; name: string; text: string; wolvesOnly: boolean };
 /** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
 type Composition = { werewolf: number; villager: number; seer: boolean; witch: boolean; protector: boolean };
 /** What the host can change in the lobby (also accepted as create options). */
@@ -29,6 +32,7 @@ const MAX_PLAYERS = 16;
 const STEP_MS = 10_000; // night steps and votes — TEMPORARY fixed value, the user wants it configurable later
 const RECONNECT_SECONDS = 600; // a dropped player's seat is held 10 minutes, then he dies
 const ROOM_LIFESPAN_MS = 60 * 60_000; // a room lives at most 1 hour from creation
+const CLOSE_AFTER_GAME_MS = 60_000; // after the game ends, the room closes a minute later
 const MAX_CONNECTIONS = 100; // players + spectators; the player limit is maxPlayers, checked in onAuth
 const CHAT_MAX = 200;
 
@@ -45,6 +49,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private heldSeats = new Map<string, { reject: Function }>(); // pending reconnections (Colyseus Deferred)
   private voteHistory: VoteRecord[] = [];
   private seerKnown: Record<string, string> = {}; // what the seer has seen, re-sent after a reconnect
+  // The event log and chat live on the server, so a reconnecting or relaunched app gets them back.
+  private publicLog: GameEvent[] = [];
+  private privateLogs = new Map<string, GameEvent[]>(); // sessionId → events only that player saw
+  private eventSeq = 0;
+  private chatLog: ChatLine[] = [];
+  private wolfChatLog: ChatLine[] = [];
+  private closeTimer: { clear(): void } | null = null;
   private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
@@ -83,6 +94,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     });
     this.onMessage("kick", (client, msg: { targetId: string }) => this.handleKick(client, msg));
     this.onMessage("start_game", (client) => this.handleStartGame(client));
+    this.onMessage("cancel_start", (client) => this.handleCancelStart(client));
     this.onMessage("protect", (client, msg: { targetId: string }) => this.handleProtect(client, msg));
     this.onMessage("wolf_target", (client, msg: { targetId: string }) => this.handleWolfTarget(client, msg));
     this.onMessage("seer_peek", (client, msg: { targetId: string }) => this.handleSeerPeek(client, msg));
@@ -105,7 +117,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
-    client.send("vote_history", this.voteHistory);
+    this.sendHistory(client);
     if (options.spectator) {
       this.spectators.add(client.sessionId);
       this.state.spectators = this.spectators.size;
@@ -114,8 +126,36 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const name = String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`;
     this.playerIds.set(client.sessionId, String(options.playerId ?? client.sessionId));
     this.state.players.set(client.sessionId, new PlayerState({ sessionId: client.sessionId, name }));
+    this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId) this.setHost(client.sessionId);
     this.updateListing();
+  }
+
+  /** Adds to the event log and sends it: to everyone, or only to [onlyFor] (kept for his reconnects). */
+  private logEvent(type: string, params: Record<string, unknown> = {}, onlyFor?: string) {
+    const event: GameEvent = { seq: ++this.eventSeq, time: Date.now(), type, ...params };
+    if (!onlyFor) {
+      this.publicLog.push(event);
+      this.broadcast("event", event);
+      return;
+    }
+    if (!this.privateLogs.has(onlyFor)) this.privateLogs.set(onlyFor, []);
+    this.privateLogs.get(onlyFor)!.push(event);
+    this.clients.getById(onlyFor)?.send("event", event);
+  }
+
+  /** Everything a (re)joining app needs to rebuild its screens: event log, chat, vote history. */
+  private sendHistory(client: Client) {
+    const id = client.sessionId;
+    const mine = this.privateLogs.get(id) ?? [];
+    client.send("events", [...this.publicLog, ...mine].sort((a, b) => a.seq - b.seq));
+    const chat = this.roles.get(id) === "werewolf" ? [...this.chatLog, ...this.wolfChatLog] : this.chatLog;
+    client.send("chat_history", chat);
+    client.send("vote_history", this.voteHistory);
+  }
+
+  private nameOf(id: string | null | undefined) {
+    return (id && this.state.players.get(id)?.name) || null;
   }
 
   // Network drop or app closed: hold the seat 10 minutes so the app can come back.
@@ -142,7 +182,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (role === "seer") client.send("seer_known", this.seerKnown);
     if (role === "werewolf" && this.state.nightStep === "wolves") client.send("wolf_votes", Object.fromEntries(this.wolfVotes));
     if (role === "witch" && this.state.nightStep === "witch_seer" && !this.witchDone) this.sendWitchTurn(id);
-    client.send("vote_history", this.voteHistory);
+    this.sendHistory(client);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
   }
 
@@ -156,8 +196,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const timedOut = this.dropped.delete(id);
     this.heldSeats.delete(id);
     if (!player) return;
-    if (this.state.phase === "lobby") {
-      this.removeFromLobby(id);
+    if (this.state.phase === "lobby" || this.state.phase === "starting") {
+      this.removeFromLobby(id); // during the start countdown he just misses the game
     } else if (this.state.phase !== "gameover") {
       // Quitting on purpose is final; a dropped player who never came back dies too.
       player.connected = false;
@@ -168,21 +208,28 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.updateListing();
   }
 
-  private removeFromLobby(id: string) {
+  private removeFromLobby(id: string, kicked = false) {
+    this.logEvent(kicked ? "kicked" : "left", { name: this.nameOf(id) });
     this.state.players.delete(id);
     this.playerIds.delete(id);
-    if (this.state.hostId === id) this.setHost(this.state.players.keys().next().value ?? "");
+    if (this.state.hostId !== id) return;
+    const next = this.state.players.keys().next().value ?? "";
+    this.setHost(next);
+    if (next) this.logEvent("new_host", { name: this.nameOf(next) });
   }
 
   /** A player gone for good mid-game dies on the spot, outside any night/vote resolution. */
   private removeFromGame(id: string, reason: "quit" | "timeout") {
     if (!this.isAlive(id)) return;
     this.kill(id);
-    this.broadcast("player_gone", { id, reason, role: this.roles.get(id) });
+    const role = this.roles.get(id);
+    this.broadcast("player_gone", { id, reason, role });
+    this.logEvent("player_gone", { name: this.nameOf(id), role, reason });
     if (this.pendingSuccession === id) {
       // He isn't here to name a successor: the village has no mayor from now on.
       this.pendingSuccession = null;
       this.broadcast("mayor_result", { mayorId: null, successor: true });
+      this.logEvent("mayor", { name: null, successor: true });
     }
     this.endGameIfOver();
   }
@@ -196,15 +243,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.heldSeats.get(target)?.reject("kicked"); // a disconnected player's held seat
     const kicked = this.clients.getById(target);
     kicked?.send("kicked");
-    this.removeFromLobby(target);
+    this.removeFromLobby(target, true);
     this.updateListing();
     kicked?.leave(4000);
   }
 
-  /** The 1-hour limit: an unfinished game ends with no winner, then everyone is sent home. */
+  /** The 1-hour limit: an unfinished game ends with no winner (endGame then closes the room). */
   private expire() {
     if (this.state.phase !== "gameover") this.endGame(null);
-    this.clock.setTimeout(() => this.disconnect(), 15_000);
   }
 
   /** What the lobby screen lists for this room. */
@@ -214,7 +260,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       maxClients: MAX_CONNECTIONS,
       metadata: {
         host,
-        started: this.state.phase !== "lobby",
+        started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,
         maxPlayers: this.state.maxPlayers,
         spectators: this.spectators.size,
@@ -254,7 +300,33 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       client.send("error", { code: "not_enough_players", min: MIN_PLAYERS });
       return;
     }
-    // The room stays unlocked so spectators can still join; onAuth turns new players away.
+    // A 10-second countdown everyone sees; joining closes now (onAuth), spectators still welcome.
+    this.state.phase = "starting";
+    this.logEvent("starting");
+    this.setPhaseTimer(STEP_MS, () => this.beginGame());
+    this.updateListing();
+  }
+
+  private handleCancelStart(client: Client) {
+    if (this.state.phase !== "starting" || client.sessionId !== this.state.hostId) return;
+    this.backToLobby("host");
+  }
+
+  private backToLobby(reason: "host" | "players") {
+    this.phaseTimer?.clear();
+    this.state.phase = "lobby";
+    this.state.phaseEndsAt = 0;
+    this.logEvent("start_cancelled", { reason });
+    this.updateListing();
+  }
+
+  private beginGame() {
+    if (this.state.players.size < MIN_PLAYERS) return this.backToLobby("players"); // people left during the countdown
+    // The waiting-room log is over; the game's log starts fresh.
+    this.publicLog = [];
+    this.privateLogs.clear();
+    this.chatLog = [];
+    this.broadcast("events", []);
     this.assignRoles();
     this.startNight();
     this.updateListing();
@@ -276,7 +348,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
     shuffle(deck);
     ids.forEach((id, i) => this.roles.set(id, deck[i]));
-    for (const id of this.roles.keys()) this.sendRole(id);
+    const pack = this.idsWithRole("werewolf").map((id) => this.nameOf(id));
+    for (const [id, role] of this.roles) {
+      this.sendRole(id);
+      this.logEvent("your_role", role === "werewolf" ? { role, pack } : { role }, id);
+    }
   }
 
   private sendRole(sessionId: string) {
@@ -299,6 +375,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.witchDone = false;
     this.witchReviving = false;
     this.witchPoisonTarget = null;
+    this.logEvent("night", { day: this.state.dayNumber });
     this.startProtectorStep();
   }
 
@@ -306,6 +383,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!this.aliveWithRole("protector")) return this.startWolvesStep();
     this.state.nightStep = "protector";
     this.state.nightRoles = "protector";
+    this.logEvent("step", { role: "protector" });
     this.setPhaseTimer(STEP_MS, () => this.startWolvesStep());
   }
 
@@ -323,6 +401,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private startWolvesStep() {
     this.state.nightStep = "wolves";
     this.state.nightRoles = "werewolf";
+    this.logEvent("step", { role: "werewolf" });
     this.setPhaseTimer(STEP_MS, () => this.endWolvesStep());
   }
 
@@ -355,6 +434,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!witch && !seer) return this.resolveNight();
     this.state.nightStep = "witch_seer";
     this.state.nightRoles = [witch && "witch", seer && "seer"].filter(Boolean).join(",");
+    if (witch) this.logEvent("step", { role: "witch" });
+    if (seer) this.logEvent("step", { role: "seer" });
     this.seerDone = !seer;
     this.witchDone = !witch;
     if (witch) this.sendWitchTurn(witch);
@@ -376,6 +457,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const role = this.roles.get(msg.targetId);
     if (role) this.seerKnown[msg.targetId] = role;
     client.send("seer_result", { targetId: msg.targetId, role, isWerewolf: role === "werewolf" });
+    this.logEvent("seer_saw", { name: this.nameOf(msg.targetId), role }, client.sessionId);
     this.maybeEndWitchSeer();
   }
 
@@ -384,6 +466,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.witchReviveUsed || !this.wolfVictim) return;
     this.witchReviveUsed = true;
     this.witchReviving = true;
+    this.logEvent("witch_revived", { name: this.nameOf(this.wolfVictim) }, client.sessionId);
     this.finishWitchIfNothingLeft();
   }
 
@@ -420,6 +503,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightStep = "";
     this.state.nightRoles = "";
     this.broadcast("night_result", { deaths: [...deaths], saved: this.witchReviving });
+    if (this.witchReviving) this.logEvent("witch_saved");
+    this.logEvent("night_result", {
+      deaths: [...deaths].map((id) => ({ name: this.nameOf(id), role: this.roles.get(id) })),
+    });
     if (this.endGameIfOver()) return;
     // The village elects its mayor once, after the first night.
     this.afterDeaths(() => (this.mayorElected ? this.startDay() : this.startMayorVote()));
@@ -432,6 +519,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!from) return next();
     this.state.phase = "succession";
     this.state.successionFrom = from;
+    this.logEvent("succession", { name: this.nameOf(from) });
     this.afterSuccession = next;
     this.setPhaseTimer(STEP_MS, () => this.endSuccession(null));
   }
@@ -449,6 +537,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.mayorId = successor ?? "";
     this.state.successionFrom = "";
     this.broadcast("mayor_result", { mayorId: successor, successor: true });
+    this.logEvent("mayor", { name: this.nameOf(successor), successor: true });
     this.afterSuccession();
   }
 
@@ -457,6 +546,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private startMayorVote() {
     this.state.phase = "mayor";
     this.clearVotes();
+    this.logEvent("mayor_election");
     this.setPhaseTimer(STEP_MS, () => this.resolveMayor());
   }
 
@@ -466,17 +556,20 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.mayorId = mayor;
     this.mayorElected = true;
     this.broadcast("mayor_result", { mayorId: mayor || null });
+    this.logEvent("mayor", { name: this.nameOf(mayor), successor: false });
     this.startDay();
   }
 
   private startDay() {
     this.state.phase = "day";
+    this.logEvent("day", { day: this.state.dayNumber });
     this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.startVote());
   }
 
   private startVote() {
     this.state.phase = "vote";
     this.clearVotes();
+    this.logEvent("vote_start");
     this.setPhaseTimer(STEP_MS, () => this.resolveVote());
   }
 
@@ -523,6 +616,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.voteHistory.push(record);
 
     this.broadcast("vote_result", { ...record, votes: bestCount, voters });
+    this.logEvent("vote_result", { name: this.nameOf(excluded), role: excluded ? this.roles.get(excluded) : null });
     if (!this.endGameIfOver()) this.afterDeaths(() => this.startNight());
   }
 
@@ -537,13 +631,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const open = phase === "lobby" || phase === "gameover";
     if (!open && !player.alive) return;
 
-    const payload = { from: client.sessionId, name: player.name, text, wolvesOnly: phase === "night" };
+    const payload: ChatLine = { from: client.sessionId, name: player.name, text, wolvesOnly: phase === "night" };
     if (phase !== "night") {
+      this.chatLog.push(payload);
       this.broadcast("chat", payload);
       return;
     }
     // At night only the pack talks, and only to itself.
     if (this.roles.get(client.sessionId) !== "werewolf") return;
+    this.wolfChatLog.push(payload);
     for (const id of this.idsWithRole("werewolf")) this.clients.getById(id)?.send("chat", payload);
   }
 
@@ -603,16 +699,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return false;
   }
 
-  /** A null winner means the room ran out of time: nobody wins. */
+  /** A null winner means the room ran out of time: nobody wins. The room then closes after a visible 60s. */
   private endGame(winner: "werewolves" | "villagers" | null) {
     this.state.phase = "gameover";
     this.state.nightStep = "";
     this.state.nightRoles = "";
     this.state.winner = winner ?? "none";
-    this.state.phaseEndsAt = 0;
     this.phaseTimer?.clear();
     for (const [id, player] of this.state.players) player.revealedRole = this.roles.get(id) ?? "";
     this.broadcast("game_over", { winner, reason: winner ? "win" : "expired" });
+    this.logEvent("game_over", { winner, reason: winner ? "win" : "expired" });
+    this.state.phaseEndsAt = Date.now() + CLOSE_AFTER_GAME_MS; // clients count down to the room closing
+    this.closeTimer ??= this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
     this.updateListing();
   }
 
