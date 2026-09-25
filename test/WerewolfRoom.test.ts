@@ -4,6 +4,14 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import { WerewolfState } from "../src/rooms/schema/WerewolfState.js";
 
+async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for condition");
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 describe("WerewolfRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
@@ -56,7 +64,40 @@ describe("WerewolfRoom", () => {
     witch.send("witch_revive");
     witch.send("witch_pass");
     assert.deepStrictEqual(await night, { deaths: [], saved: true });
-    assert.strictEqual(room.state.phase, "day");
+    assert.strictEqual(room.state.phase, "mayor"); // first night over → the village elects a mayor
+  });
+
+  it("elects a mayor whose exclusion vote counts twice", async function () {
+    this.timeout(30_000); // waits out the 10s debate
+    const { room, byRole } = await startGame();
+    const [wolf, witch, seer] = [byRole("werewolf"), byRole("witch"), byRole("seer")];
+    const [villager, protector] = [byRole("villager"), byRole("protector")];
+
+    // A quick night where nobody dies.
+    protector.send("protect", { targetId: villager.sessionId });
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: villager.sessionId });
+    await waitFor(() => room.state.nightStep === "witch_seer");
+    seer.send("seer_peek", { targetId: wolf.sessionId });
+    witch.send("witch_pass");
+    await waitFor(() => room.state.phase === "mayor");
+
+    const elected = villager.waitForMessage("mayor_result");
+    for (const c of [wolf, witch, seer, villager, protector]) c.send("day_vote", { targetId: villager.sessionId });
+    assert.deepStrictEqual(await elected, { mayorId: villager.sessionId });
+    assert.strictEqual(room.state.mayorId, villager.sessionId);
+
+    await waitFor(() => room.state.phase === "vote", 15_000);
+    const result = villager.waitForMessage("vote_result");
+    villager.send("day_vote", { targetId: wolf.sessionId }); // mayor: 2 votes
+    seer.send("day_vote", { targetId: witch.sessionId });
+    witch.send("day_vote", { targetId: protector.sessionId });
+    protector.send("day_vote", { targetId: seer.sessionId });
+    wolf.send("day_vote", { targetId: wolf.sessionId }); // voting for yourself is allowed
+    const r: any = await result;
+    assert.strictEqual(r.excluded, wolf.sessionId);
+    assert.strictEqual(r.votes, 3); // mayor ×2 + the wolf himself
+    assert.strictEqual(room.state.winner, "villagers");
   });
 
   it("hides the revive when the wolves attack the protected player", async () => {

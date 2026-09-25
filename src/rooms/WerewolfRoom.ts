@@ -33,6 +33,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // Per game
   private witchReviveUsed = false;
   private witchPoisonUsed = false;
+  private lastProtected: string | null = null; // can't be protected two nights in a row
 
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
   onBeforePatch() {
@@ -160,6 +161,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private startNight() {
     this.state.dayNumber += 1;
     this.state.phase = "night";
+    this.lastProtected = this.protectTarget;
     this.protectTarget = null;
     this.wolfVotes.clear();
     this.wolfVictim = null;
@@ -179,6 +181,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private handleProtect(client: Client, msg: { targetId: string }) {
     if (this.state.nightStep !== "protector" || !this.actorIs(client, "protector")) return;
     if (!this.isAlive(msg?.targetId)) return;
+    if (msg.targetId === this.lastProtected) {
+      client.send("error", { code: "same_protect" });
+      return;
+    }
     this.protectTarget = msg.targetId;
     this.startWolvesStep();
   }
@@ -190,7 +196,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private handleWolfTarget(client: Client, msg: { targetId: string }) {
     if (this.state.nightStep !== "wolves" || !this.actorIs(client, "werewolf")) return;
-    if (!this.isAlive(msg?.targetId) || this.roles.get(msg.targetId) === "werewolf") return;
+    if (!this.isAlive(msg?.targetId)) return;
+    // A wolf may pick himself, but never a packmate.
+    if (this.roles.get(msg.targetId) === "werewolf" && msg.targetId !== client.sessionId) return;
     this.wolfVotes.set(client.sessionId, msg.targetId);
     const wolves = this.idsWithRole("werewolf").filter((id) => this.isAlive(id));
     if (wolves.every((id) => this.wolfVotes.has(id))) this.endWolvesStep();
@@ -246,7 +254,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private handleWitchPoison(client: Client, msg: { targetId: string }) {
     if (this.state.nightStep !== "witch_seer" || this.witchDone || !this.actorIs(client, "witch")) return;
-    if (this.witchPoisonUsed || !this.isAlive(msg?.targetId) || msg.targetId === client.sessionId) return;
+    if (this.witchPoisonUsed || !this.isAlive(msg?.targetId)) return; // she may poison herself
     this.witchPoisonUsed = true;
     this.witchPoisonTarget = msg.targetId;
     this.finishWitchIfNothingLeft();
@@ -276,10 +284,27 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
     this.state.nightStep = "";
     this.broadcast("night_result", { deaths: [...deaths], saved: this.witchReviving });
-    if (!this.endGameIfOver()) this.startDay();
+    if (this.endGameIfOver()) return;
+    // The village (re-)elects a mayor whenever it has none: after the first night, or once the mayor died.
+    if (this.state.mayorId) this.startDay();
+    else this.startMayorVote();
   }
 
-  // ---- day discussion + vote ----
+  // ---- mayor election, day discussion, exclusion vote ----
+
+  private startMayorVote() {
+    this.state.phase = "mayor";
+    this.clearVotes();
+    this.setPhaseTimer(STEP_MS, () => this.resolveMayor());
+  }
+
+  private resolveMayor() {
+    const top = topCandidates(this.aliveVotes(1));
+    const mayor = top.length ? top[Math.floor(Math.random() * top.length)] : ""; // ties are drawn at random
+    this.state.mayorId = mayor;
+    this.broadcast("mayor_result", { mayorId: mayor || null });
+    this.startDay();
+  }
 
   private startDay() {
     this.state.phase = "day";
@@ -288,29 +313,45 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private startVote() {
     this.state.phase = "vote";
-    for (const p of this.state.players.values()) p.votedFor = "";
+    this.clearVotes();
     this.setPhaseTimer(STEP_MS, () => this.resolveVote());
   }
 
+  private clearVotes() {
+    for (const p of this.state.players.values()) p.votedFor = "";
+  }
+
+  /** Every living player's vote; the mayor's counts [mayorWeight] times. */
+  private aliveVotes(mayorWeight: number): string[] {
+    const votes: string[] = [];
+    for (const [id, p] of this.state.players) {
+      if (!p.alive || !p.votedFor) continue;
+      for (let i = 0; i < (id === this.state.mayorId ? mayorWeight : 1); i++) votes.push(p.votedFor);
+    }
+    return votes;
+  }
+
   private handleDayVote(client: Client, msg: { targetId: string }) {
-    if (this.state.phase !== "vote") return;
+    const phase = this.state.phase;
+    if (phase !== "vote" && phase !== "mayor") return;
     const voter = this.state.players.get(client.sessionId);
     if (!voter?.alive) return;
-    if (!this.isAlive(msg?.targetId)) return;
+    if (!this.isAlive(msg?.targetId)) return; // voting for yourself is allowed
     voter.votedFor = msg.targetId;
 
     let voted = 0;
     for (const p of this.state.players.values()) if (p.alive && p.votedFor) voted++;
-    if (voted >= this.aliveCount()) this.resolveVote();
+    if (voted < this.aliveCount()) return;
+    if (phase === "mayor") this.resolveMayor();
+    else this.resolveVote();
   }
 
   private resolveVote() {
-    const votes: string[] = [];
-    for (const p of this.state.players.values()) if (p.alive && p.votedFor) votes.push(p.votedFor);
+    const votes = this.aliveVotes(2);
     const excluded = topVoted(votes); // ponytail: a tie skips elimination; add a runoff vote if that feels unsatisfying
     const bestCount = excluded ? votes.filter((v) => v === excluded).length : 0;
 
-    const voters = this.aliveCount();
+    const voters = this.aliveCount() + (this.isAlive(this.state.mayorId) ? 1 : 0);
     if (excluded) this.kill(excluded);
 
     this.broadcast("vote_result", { excluded, votes: bestCount, voters, day: this.state.dayNumber });
@@ -357,6 +398,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!player) return;
     player.alive = false;
     player.revealedRole = this.roles.get(sessionId) ?? "";
+    if (this.state.mayorId === sessionId) this.state.mayorId = "";
   }
 
   private isAlive(sessionId: string | undefined): boolean {
@@ -382,7 +424,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.endGame("villagers");
       return true;
     }
-    if (othersAlive <= wolvesAlive) {
+    // Wolves need every villager dead: a witch with potions can still win a 1-v-1.
+    if (othersAlive === 0) {
       this.endGame("werewolves");
       return true;
     }
@@ -406,18 +449,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 }
 
-/** The single most-voted target, or null when nobody voted or the top is tied. */
-function topVoted(votes: Iterable<string>): string | null {
+/** Every target sharing the highest vote count (empty when nobody voted). */
+function topCandidates(votes: Iterable<string>): string[] {
   const tally = new Map<string, number>();
   for (const v of votes) tally.set(v, (tally.get(v) ?? 0) + 1);
-  let best: string | null = null;
-  let bestCount = 0;
-  let tied = false;
-  for (const [target, count] of tally) {
-    if (count > bestCount) [best, bestCount, tied] = [target, count, false];
-    else if (count === bestCount) tied = true;
-  }
-  return tied ? null : best;
+  const best = Math.max(0, ...tally.values());
+  return [...tally].filter(([, count]) => count === best && best > 0).map(([target]) => target);
+}
+
+/** The single most-voted target, or null when nobody voted or the top is tied. */
+function topVoted(votes: Iterable<string>): string | null {
+  const top = topCandidates(votes);
+  return top.length === 1 ? top[0] : null;
 }
 
 function shuffle<T>(items: T[]) {
