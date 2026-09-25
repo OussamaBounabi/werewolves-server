@@ -11,8 +11,10 @@ export const PlayerState = schema({
 export type PlayerState = SchemaType<typeof PlayerState>;
 
 // Phase: "lobby" | "night" | "day" | "vote" | "gameover"
+// Night steps, in order: "protector" | "wolves" | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
   phase: t.string().default("lobby"),
+  nightStep: t.string().default(""),
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
   winner: t.string().default(""), // "werewolves" | "villagers" | ""
