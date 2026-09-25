@@ -5,6 +5,7 @@ import {
   playground,
   createRouter,
   createEndpoint,
+  matchMaker,
 } from "colyseus";
 
 /**
@@ -29,8 +30,18 @@ const server = defineServer({
    *
    */
   routes: createRouter({
-    api_hello: createEndpoint("/api/hello", { method: "GET" }, async (ctx) => {
-      return { message: "Hello World" };
+    api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => {
+      const rooms = await matchMaker.query({ name: "werewolf" });
+      return rooms
+        .filter((r) => !r.private && !r.unlisted)
+        .map((r) => ({
+          roomId: r.roomId,
+          clients: r.clients,
+          maxClients: r.maxClients,
+          title: r.metadata?.title ?? "",
+          host: r.metadata?.host ?? "",
+          started: r.metadata?.started === true,
+        }));
     }),
   }),
 
