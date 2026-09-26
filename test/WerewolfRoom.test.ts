@@ -447,4 +447,24 @@ describe("WerewolfRoom", () => {
     r.endGame(null); // the room expired
     assert.deepStrictEqual(r.lastResults, []);
   });
+
+  it("gives voice rights by phase: night is wolves only, the dead and spectators never talk", async function () {
+    this.timeout(30_000);
+    const { room, byRole } = await startGame();
+    const r = room as any;
+    const rights = (c: any) => r.voiceRightsOf(c.sessionId);
+    const [wolf, seer] = [byRole("werewolf"), byRole("seer")];
+    assert.strictEqual(room.state.phase, "night");
+    assert.deepStrictEqual(rights(wolf), { talk: true, hear: true });
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: false }); // villagers sleep: they hear nothing
+
+    room.state.phase = "day";
+    assert.deepStrictEqual(rights(seer), { talk: true, hear: true });
+    room.state.players.get(seer.sessionId)!.alive = false;
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen
+    r.spectators.add("watcher");
+    assert.deepStrictEqual(r.voiceRightsOf("watcher"), { talk: false, hear: true });
+    room.state.phase = "night";
+    assert.deepStrictEqual(r.voiceRightsOf("watcher"), { talk: false, hear: false });
+  });
 });

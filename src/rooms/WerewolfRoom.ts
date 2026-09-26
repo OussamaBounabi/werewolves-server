@@ -1,5 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
+import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
 import { accountFor, firebaseEnabled, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
 
 const SPECIALS = ["seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface"] as const;
@@ -51,6 +52,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private playerIds = new Map<string, string>(); // sessionId → the account uid (or the device's id for guests)
   private accounts = new Map<string, string>(); // sessionId → account uid, for players signed in
   private members = new Map<string, string>(); // sessionId → account uid, players and spectators
+  private voiceRights = new Map<string, string>(); // in the voice room → last rights sent ("talk,hear")
   private gameStartedAt = 0;
   private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
   private banned = new Set<string>(); // player ids kicked by the current host
@@ -94,6 +96,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
   onBeforePatch() {
+    this.syncVoice();
     const snapshot = this.state.toJSON();
     const json = JSON.stringify(snapshot);
     if (json === this.lastSnapshot) return;
@@ -125,6 +128,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("mayor_successor", (client, msg: { targetId: string }) => this.handleSuccessor(client, msg));
     this.onMessage("mayor_pass", (client) => this.handleSuccessor(client, null));
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
+    this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
   }
 
   /**
@@ -237,6 +241,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   onLeave(client: Client) {
     const id = client.sessionId;
     this.clearRoomOf(id);
+    if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.state.spectators = this.spectators.size;
       return this.updateListing();
@@ -954,6 +959,48 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onDispose() {
     for (const id of [...this.members.keys()]) this.clearRoomOf(id);
+    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+  }
+
+  // ---- voice ----
+
+  /**
+   * Who may talk and who hears, now: lobby and game over, every player; night, only living wolves
+   * (talk and hear each other; everyone else hears nothing); day, the living talk and all hear.
+   * The dead and spectators never talk.
+   */
+  private voiceRightsOf(id: string): VoiceRights {
+    const phase = this.state.phase;
+    const night = phase === "night";
+    if (this.spectators.has(id)) return { talk: false, hear: !night };
+    const player = this.state.players.get(id);
+    if (!player) return { talk: false, hear: false };
+    if (phase === "lobby" || phase === "starting" || phase === "gameover") return { talk: true, hear: true };
+    if (night) {
+      const wolf = player.alive && this.roles.get(id) === "werewolf";
+      return { talk: wolf, hear: wolf };
+    }
+    return { talk: player.alive, hear: true };
+  }
+
+  private async handleVoiceJoin(client: Client) {
+    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    const id = client.sessionId;
+    const rights = this.voiceRightsOf(id);
+    this.voiceRights.set(id, `${rights.talk},${rights.hear}`);
+    const name = this.state.players.get(id)?.name ?? "spectator";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, id, name, rights)) });
+  }
+
+  /** Runs before each patch: pushes changed rights to LiveKit (only when they change). */
+  private syncVoice() {
+    for (const [id, last] of this.voiceRights) {
+      const rights = this.voiceRightsOf(id);
+      const now = `${rights.talk},${rights.hear}`;
+      if (now === last) continue;
+      this.voiceRights.set(id, now);
+      setVoiceRights(this.roomId, id, rights).catch(() => {}); // not connected (yet): his token has them
+    }
   }
 
   /** A null winner means the room ran out of time: nobody wins. The room then closes after a visible 60s. */

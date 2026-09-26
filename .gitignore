@@ -5,3 +5,6 @@ build
 # Firebase Admin key: secret, never commit
 service-account.json
 *firebase-adminsdk*.json
+
+# Secrets (LiveKit keys etc.): never commit
+.env

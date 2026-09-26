@@ -33,6 +33,7 @@
     "@colyseus/tools": "^0.18.1",
     "colyseus": "^0.18.2",
     "express": "^5.2.1",
-    "firebase-admin": "^14.5.0"
+    "firebase-admin": "^14.5.0",
+    "livekit-server-sdk": "^2.19.1"
   }
 }
