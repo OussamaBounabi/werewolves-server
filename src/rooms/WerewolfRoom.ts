@@ -1,11 +1,12 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
+import { accountFor, firebaseEnabled, recordResults, rewardFor, type Account, type GameResult } from "../firebase.js";
 
 const SPECIALS = ["seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface"] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
 type Meta = { host: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type JoinOptions = { name?: string; playerId?: string; spectator?: boolean };
+type JoinOptions = { name?: string; playerId?: string; spectator?: boolean; idToken?: string };
 type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
 /** One line of the event log; clients render it in their language from [type] and its params. */
 type GameEvent = { seq: number; time: number; type: string; [param: string]: unknown };
@@ -47,7 +48,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // Server-only — never synced to clients, so role/night info can't leak.
   private roles = new Map<string, Role>();
-  private playerIds = new Map<string, string>(); // sessionId → the device's stable player id
+  private playerIds = new Map<string, string>(); // sessionId → the account uid (or the device's id for guests)
+  private accounts = new Map<string, string>(); // sessionId → account uid, for players signed in
+  private gameStartedAt = 0;
+  private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
   private banned = new Set<string>(); // player ids kicked by the current host
   private spectators = new Set<string>(); // sessionIds watching, not playing
   private dropped = new Set<string>(); // players whose connection dropped (seat held)
@@ -122,13 +126,27 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
   }
 
-  /** Runs when the client's socket connects (not on reconnects): bans, spectators, and the player limit. */
-  onAuth(_client: Client, options: JoinOptions = {}) {
-    if (options.playerId && this.banned.has(String(options.playerId))) throw new ServerError(4403, "banned");
-    if (options.spectator) return true;
-    if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
-    if (this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
-    return true;
+  /**
+   * Runs when the client's socket connects (not on reconnects): the player's account (from his app's
+   * Firebase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
+   */
+  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null }> {
+    // ponytail: guests (no token) are still allowed, for the bots and tests; require a token for release.
+    let account: Account | null = null;
+    if (options.idToken && firebaseEnabled) {
+      try {
+        account = await accountFor(String(options.idToken));
+      } catch {
+        throw new ServerError(4401, "auth");
+      }
+    }
+    const playerId = account?.uid ?? options.playerId;
+    if (playerId && this.banned.has(String(playerId))) throw new ServerError(4403, "banned");
+    if (!options.spectator) {
+      if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
+      if (this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
+    }
+    return { account };
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
@@ -138,9 +156,16 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.state.spectators = this.spectators.size;
       return this.updateListing();
     }
-    const name = String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`;
-    this.playerIds.set(client.sessionId, String(options.playerId ?? client.sessionId));
-    this.state.players.set(client.sessionId, new PlayerState({ sessionId: client.sessionId, name }));
+    const account: Account | null = client.auth?.account ?? null;
+    const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`);
+    this.playerIds.set(client.sessionId, account?.uid ?? String(options.playerId ?? client.sessionId));
+    if (account) this.accounts.set(client.sessionId, account.uid);
+    this.state.players.set(client.sessionId, new PlayerState({
+      sessionId: client.sessionId,
+      name,
+      uid: account?.uid ?? "",
+      avatar: account?.avatar ?? 0,
+    }));
     this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId) this.setHost(client.sessionId);
     this.updateListing();
@@ -238,6 +263,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** A player gone for good mid-game dies on the spot, outside any night/vote resolution. */
   private removeFromGame(id: string, reason: "quit" | "timeout") {
     if (!this.isAlive(id)) return;
+    this.quitAlive.set(id, Date.now()); // leaving alive is a loss, whatever his team does
     this.kill(id, reason);
     const role = this.roles.get(id);
     this.broadcast("player_gone", { id, reason, role });
@@ -341,6 +367,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.state.players.size < MIN_PLAYERS) return this.backToLobby("players"); // people left during the countdown
     // The waiting-room log is over; the game's log starts fresh.
     this.publicLog = [];
+    this.gameStartedAt = Date.now();
     this.privateLogs.clear();
     this.chatLog = [];
     this.broadcast("events", []);
@@ -922,10 +949,34 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const [id, player] of this.state.players) player.revealedRole = this.roles.get(id) ?? "";
     this.broadcast("game_over", { winner, reason: winner ? "win" : "expired" });
     this.logEvent("game_over", { winner, reason: winner ? "win" : "expired" });
+    if (winner) this.awardResults(winner); // an expired room counts for nobody
     this.state.phaseEndsAt = Date.now() + CLOSE_AFTER_GAME_MS; // clients count down to the room closing
     this.closeTimer ??= this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
     this.updateListing();
   }
+
+  /**
+   * Each signed-in player's result: his side won or lost (leaving while alive is a loss), over the
+   * whole minutes played since the deal (at least 1). Written to his account; he's told his reward.
+   */
+  private awardResults(winner: "werewolves" | "villagers") {
+    const now = Date.now();
+    const results: GameResult[] = [];
+    for (const [id, uid] of this.accounts) {
+      const role = this.roles.get(id);
+      if (!role) continue; // joined the lobby but never got a role
+      const left = this.quitAlive.get(id);
+      const minutes = Math.max(1, Math.floor(((left ?? now) - this.gameStartedAt) / 60_000));
+      const won = left === undefined && (role === "werewolf") === (winner === "werewolves");
+      results.push({ uid, role, won, minutes });
+      const { xp, coins } = rewardFor({ uid, role, won, minutes });
+      this.logEvent("reward", { won, xp, coins, minutes }, id);
+    }
+    this.lastResults = results;
+    recordResults(results).catch((e) => console.error("recording results failed", e));
+  }
+
+  private lastResults: GameResult[] = []; // for tests
 
   /** A night step's timer; the game's first one also covers the card deal animation. */
   private setStepTimer(onExpire: () => void) {

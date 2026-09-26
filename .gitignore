@@ -2,3 +2,6 @@ node_modules
 build
 .colyseus-cloud.json
 .devmode.json
+# Firebase Admin key: secret, never commit
+service-account.json
+*firebase-adminsdk*.json

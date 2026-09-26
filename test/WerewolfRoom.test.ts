@@ -417,4 +417,34 @@ describe("WerewolfRoom", () => {
     const types = ((room as any).publicLog as any[]).map((e) => e.type);
     assert.strictEqual(types.includes("bear_roar"), wolfNextToBear);
   });
+
+  it("rewards signed-in players by whole minutes played; leaving alive is a loss; an expired room counts for nobody", async () => {
+    const { room, clients, roles } = await startGame();
+    const r = room as any;
+    const ids: string[] = clients.map((c: any) => c.sessionId);
+    ids.forEach((id, i) => r.accounts.set(id, `uid${i}`));
+    r.gameStartedAt = Date.now() - 7.7 * 60_000; // a 7m42s game → 7 minutes
+    const wolf = roles.indexOf("werewolf");
+    const quitter = roles.indexOf("seer");
+    r.quitAlive.set(ids[quitter], Date.now() - 2.5 * 60_000); // left alive after ~5 minutes
+
+    const told = clients[0].waitForMessage("event");
+    r.endGame("villagers");
+    const byUid = Object.fromEntries(r.lastResults.map((x: any) => [x.uid, x]));
+    assert.deepStrictEqual(byUid[`uid${wolf}`], { uid: `uid${wolf}`, role: "werewolf", won: false, minutes: 7 });
+    assert.deepStrictEqual(byUid[`uid${quitter}`], { uid: `uid${quitter}`, role: "seer", won: false, minutes: 5 });
+    const winner = roles.indexOf("villager");
+    assert.deepStrictEqual(byUid[`uid${winner}`], { uid: `uid${winner}`, role: "villager", won: true, minutes: 7 });
+
+    const events = [await told, ...r.privateLogs.get(ids[0])].filter((e: any) => e.type === "reward");
+    const expected = roles[0] === "werewolf" || ids[0] === ids[quitter]
+      ? { xp: roles[0] === "werewolf" ? 7 : 5, coins: 0 }
+      : { xp: 21, coins: 21 }; // winners: 3 XP + 3 coins a minute; losers: 1 XP
+    assert.strictEqual(events[0].xp, expected.xp);
+    assert.strictEqual(events[0].coins, expected.coins);
+
+    r.lastResults = [];
+    r.endGame(null); // the room expired
+    assert.deepStrictEqual(r.lastResults, []);
+  });
 });

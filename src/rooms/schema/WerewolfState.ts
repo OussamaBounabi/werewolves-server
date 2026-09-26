@@ -3,6 +3,8 @@ import { schema, t, type SchemaType } from "@colyseus/schema";
 export const PlayerState = schema({
   sessionId: t.string().default(""),
   name: t.string().default(""),
+  uid: t.string().default(""), // his account (empty for guests): the app opens his profile card from it
+  avatar: t.number().default(0), // his account avatar (1–4), 0 for guests
   alive: t.boolean().default(true),
   connected: t.boolean().default(true),
   votedFor: t.string().default(""), // day votes are public; cleared each vote phase
