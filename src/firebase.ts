@@ -60,3 +60,21 @@ export async function recordResults(results: GameResult[]) {
   }
   await batch.commit();
 }
+
+/**
+ * The room a signed-in player is in (players and spectators), on his profile: the chat rules use it
+ * to stop players in the same room from messaging each other, and invites to know where he is.
+ * With [ifRoom], only clears it if he's still marked in that room (he may already be in another).
+ */
+export async function setRoom(uid: string, room: string, ifRoom?: string) {
+  if (!app) return;
+  const db = getFirestore(app);
+  const ref = db.doc(`users/${uid}`);
+  if (ifRoom === undefined) {
+    await ref.update({ room });
+    return;
+  }
+  await db.runTransaction(async (tx) => {
+    if ((await tx.get(ref)).get("room") === ifRoom) tx.update(ref, { room });
+  });
+}

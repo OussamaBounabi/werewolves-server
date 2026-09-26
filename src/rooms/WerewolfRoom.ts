@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
-import { accountFor, firebaseEnabled, recordResults, rewardFor, type Account, type GameResult } from "../firebase.js";
+import { accountFor, firebaseEnabled, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
 
 const SPECIALS = ["seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface"] as const;
 type Special = (typeof SPECIALS)[number];
@@ -50,6 +50,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private roles = new Map<string, Role>();
   private playerIds = new Map<string, string>(); // sessionId → the account uid (or the device's id for guests)
   private accounts = new Map<string, string>(); // sessionId → account uid, for players signed in
+  private members = new Map<string, string>(); // sessionId → account uid, players and spectators
   private gameStartedAt = 0;
   private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
   private banned = new Set<string>(); // player ids kicked by the current host
@@ -151,6 +152,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onJoin(client: Client, options: JoinOptions = {}) {
     this.sendHistory(client);
+    const uid: string | undefined = client.auth?.account?.uid;
+    if (uid) {
+      this.members.set(client.sessionId, uid);
+      setRoom(uid, this.roomId).catch((e) => console.error("setRoom failed", e));
+    }
     if (options.spectator) {
       this.spectators.add(client.sessionId);
       this.state.spectators = this.spectators.size;
@@ -230,6 +236,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onLeave(client: Client) {
     const id = client.sessionId;
+    this.clearRoomOf(id);
     if (this.spectators.delete(id)) {
       this.state.spectators = this.spectators.size;
       return this.updateListing();
@@ -935,6 +942,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       return true;
     }
     return false;
+  }
+
+  /** He's gone for good: his profile no longer says he's in this room. */
+  private clearRoomOf(sessionId: string) {
+    const uid = this.members.get(sessionId);
+    if (!uid) return;
+    this.members.delete(sessionId);
+    setRoom(uid, "", this.roomId).catch((e) => console.error("setRoom failed", e));
+  }
+
+  onDispose() {
+    for (const id of [...this.members.keys()]) this.clearRoomOf(id);
   }
 
   /** A null winner means the room ran out of time: nobody wins. The room then closes after a visible 60s. */
