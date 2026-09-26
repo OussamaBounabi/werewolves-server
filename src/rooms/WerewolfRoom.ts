@@ -149,7 +149,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (playerId && this.banned.has(String(playerId))) throw new ServerError(4403, "banned");
     if (!options.spectator) {
       if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
-      if (this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
+      const seated = playerId !== undefined && [...this.playerIds.values()].includes(String(playerId)); // takes his seat back
+      if (!seated && this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
     }
     return { account };
   }
@@ -168,7 +169,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     const account: Account | null = client.auth?.account ?? null;
     const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`);
-    this.playerIds.set(client.sessionId, account?.uid ?? String(options.playerId ?? client.sessionId));
+    const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
+    // Same account (or device) already seated: a join its app gave up on (slow network). That seat goes.
+    const ghost = [...this.playerIds].find(([sid, pid]) => pid === playerId && sid !== client.sessionId)?.[0];
+    const wasHost = ghost !== undefined && this.state.hostId === ghost;
+    if (ghost !== undefined) this.dropGhost(ghost);
+    this.playerIds.set(client.sessionId, playerId);
     if (account) this.accounts.set(client.sessionId, account.uid);
     this.state.players.set(client.sessionId, new PlayerState({
       sessionId: client.sessionId,
@@ -176,9 +182,22 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? 0,
     }));
-    this.logEvent(this.state.hostId ? "joined" : "created", { name });
-    if (!this.state.hostId) this.setHost(client.sessionId);
+    if (ghost === undefined) this.logEvent(this.state.hostId ? "joined" : "created", { name });
+    if (!this.state.hostId || wasHost) this.setHost(client.sessionId);
     this.updateListing();
+  }
+
+  /** Quietly removes an older seat of a player who just joined again (lobby only). */
+  private dropGhost(id: string) {
+    this.members.delete(id); // his account is still here: keep users/{uid}.room
+    this.accounts.delete(id);
+    if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
+    this.heldSeats.get(id)?.reject("replaced");
+    this.heldSeats.delete(id);
+    this.dropped.delete(id);
+    this.state.players.delete(id);
+    this.playerIds.delete(id);
+    this.clients.getById(id)?.leave(4001);
   }
 
   /** Adds to the event log and sends it: to everyone, or only to [onlyFor] (kept for his reconnects). */
@@ -242,6 +261,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const id = client.sessionId;
     this.clearRoomOf(id);
     if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
+    this.graveSent.delete(id);
     if (this.spectators.delete(id)) {
       this.state.spectators = this.spectators.size;
       return this.updateListing();
@@ -954,6 +974,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const uid = this.members.get(sessionId);
     if (!uid) return;
     this.members.delete(sessionId);
+    if ([...this.members.values()].includes(uid)) return; // still here on another connection
     setRoom(uid, "", this.roomId).catch((e) => console.error("setRoom failed", e));
   }
 
@@ -965,9 +986,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // ---- voice ----
 
   /**
-   * Who may talk and who hears, now: lobby and game over, every player; night, only living wolves
-   * (talk and hear each other; everyone else hears nothing); day, the living talk and all hear.
-   * The dead and spectators never talk.
+   * The living voice room, now: lobby and game over, every player talks; night, only living wolves
+   * talk and hear each other (the other living hear nothing); votes, nobody talks; otherwise the living
+   * talk. The dead listen (they talk in the graveyard); spectators too, except at night.
    */
   private voiceRightsOf(id: string): VoiceRights {
     const phase = this.state.phase;
@@ -975,12 +996,32 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.spectators.has(id)) return { talk: false, hear: !night };
     const player = this.state.players.get(id);
     if (!player) return { talk: false, hear: false };
-    if (phase === "lobby" || phase === "starting" || phase === "gameover") return { talk: true, hear: true };
+    if (!this.gameRunning()) return { talk: true, hear: true };
+    if (!player.alive) return { talk: false, hear: true };
     if (night) {
-      const wolf = player.alive && this.roles.get(id) === "werewolf";
+      const wolf = this.roles.get(id) === "werewolf";
       return { talk: wolf, hear: wolf };
     }
-    return { talk: player.alive, hear: true };
+    return { talk: phase !== "vote" && phase !== "mayor", hear: true };
+  }
+
+  private gameRunning() {
+    const phase = this.state.phase;
+    return phase !== "lobby" && phase !== "starting" && phase !== "gameover";
+  }
+
+  /** Out of the game (dead, or watching) while it runs: he gets the graveyard voice room. */
+  private inGraveyard(id: string) {
+    return this.gameRunning() && (this.spectators.has(id) || this.state.players.get(id)?.alive === false);
+  }
+
+  private graveSent = new Set<string>(); // given graveyard access
+
+  private async sendGraveyard(id: string) {
+    this.graveSent.add(id);
+    const name = this.state.players.get(id)?.name ?? "spectator";
+    const access = await voiceToken(this.roomId, id, name, { talk: true, hear: true }, true);
+    this.clients.getById(id)?.send("voice_grave", access);
   }
 
   private async handleVoiceJoin(client: Client) {
@@ -994,6 +1035,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Runs before each patch: pushes changed rights to LiveKit (only when they change). */
   private syncVoice() {
+    if (!voiceEnabled) return;
+    if (!this.gameRunning() && this.graveSent.size > 0) {
+      this.graveSent.clear(); // game over: everyone back together in the living room
+      closeVoice(this.roomId, { graveOnly: true }).catch(() => {});
+    }
+    for (const id of this.voiceRights.keys()) {
+      if (!this.graveSent.has(id) && this.inGraveyard(id)) this.sendGraveyard(id).catch(() => {});
+    }
     for (const [id, last] of this.voiceRights) {
       const rights = this.voiceRightsOf(id);
       const now = `${rights.talk},${rights.hear}`;

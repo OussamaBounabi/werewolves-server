@@ -460,11 +460,26 @@ describe("WerewolfRoom", () => {
 
     room.state.phase = "day";
     assert.deepStrictEqual(rights(seer), { talk: true, hear: true });
+    room.state.phase = "vote";
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // votes: mics off
+    room.state.phase = "day";
     room.state.players.get(seer.sessionId)!.alive = false;
     assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen
+    assert.ok(r.inGraveyard(seer.sessionId) && !r.inGraveyard(wolf.sessionId)); // the dead talk in the graveyard
     r.spectators.add("watcher");
     assert.deepStrictEqual(r.voiceRightsOf("watcher"), { talk: false, hear: true });
     room.state.phase = "night";
     assert.deepStrictEqual(r.voiceRightsOf("watcher"), { talk: false, hear: false });
+  });
+
+  it("keeps one seat per player: joining again replaces the old seat (and keeps host)", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const first = await colyseus.connectTo(room, { playerId: "phone-1", name: "Pablo" });
+    await colyseus.connectTo(room, { playerId: "phone-2", name: "Ferhat" });
+    assert.strictEqual(room.state.hostId, first.sessionId);
+    const again = await colyseus.connectTo(room, { playerId: "phone-1", name: "Pablo" }); // his app gave up and retried
+    await waitFor(() => room.state.players.size === 2);
+    assert.ok(!room.state.players.has(first.sessionId));
+    assert.strictEqual(room.state.hostId, again.sessionId);
   });
 });

@@ -19,13 +19,14 @@ const rooms = voiceEnabled ? new RoomServiceClient(url.replace(/^ws/, "http"), k
 
 export type VoiceRights = { talk: boolean; hear: boolean };
 
-const voiceRoom = (roomId: string) => `werewolf-${roomId}`;
+/** Each game room has two voice rooms: the living one, and the graveyard for the dead and spectators. */
+const voiceRoom = (roomId: string, grave = false) => `werewolf-${roomId}${grave ? "-grave" : ""}`;
 
 /** A token to join the room's voice, with the rights of the moment. [identity] = the game sessionId. */
-export async function voiceToken(roomId: string, identity: string, name: string, rights: VoiceRights) {
+export async function voiceToken(roomId: string, identity: string, name: string, rights: VoiceRights, grave = false) {
   const token = new AccessToken(key, secret, { identity, name, ttl: "4h" });
   token.addGrant({
-    room: voiceRoom(roomId),
+    room: voiceRoom(roomId, grave),
     roomJoin: true,
     canPublish: rights.talk,
     canSubscribe: rights.hear,
@@ -46,6 +47,7 @@ export async function dropFromVoice(roomId: string, identity: string) {
   await rooms?.removeParticipant(voiceRoom(roomId), identity);
 }
 
-export async function closeVoice(roomId: string) {
-  await rooms?.deleteRoom(voiceRoom(roomId));
+export async function closeVoice(roomId: string, { graveOnly = false } = {}) {
+  await rooms?.deleteRoom(voiceRoom(roomId, true)).catch(() => {});
+  if (!graveOnly) await rooms?.deleteRoom(voiceRoom(roomId));
 }
