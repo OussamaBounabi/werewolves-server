@@ -1,12 +1,12 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
-import { accountFor, firebaseEnabled, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
+import { accountFor, firebaseEnabled, isFriendOfAny, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
 
 const SPECIALS = ["seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface"] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
-type Meta = { host: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type JoinOptions = { name?: string; playerId?: string; spectator?: boolean; idToken?: string };
 type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
 /** One line of the event log; clients render it in their language from [type] and its params. */
@@ -52,6 +52,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private playerIds = new Map<string, string>(); // sessionId → the account uid (or the device's id for guests)
   private accounts = new Map<string, string>(); // sessionId → account uid, for players signed in
   private members = new Map<string, string>(); // sessionId → account uid, players and spectators
+  private invited = new Set<string>(); // account uids invited by someone in the room (friends/private rooms)
   private voiceRights = new Map<string, string>(); // in the voice room → last rights sent ("talk,hear")
   private gameStartedAt = 0;
   private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
@@ -129,6 +130,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("mayor_pass", (client) => this.handleSuccessor(client, null));
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    // Someone here invited a friend (the invite itself goes through the app's chat): let him in.
+    this.onMessage("invite", (client, msg: { uid: string }) => {
+      if (this.members.has(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+    });
   }
 
   /**
@@ -147,12 +152,26 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     const playerId = account?.uid ?? options.playerId;
     if (playerId && this.banned.has(String(playerId))) throw new ServerError(4403, "banned");
+    if (options.spectator && this.state.phase === "lobby") throw new ServerError(4409, "lobby"); // join it instead
+    await this.checkRoomType(account);
     if (!options.spectator) {
       if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
       const seated = playerId !== undefined && [...this.playerIds.values()].includes(String(playerId)); // takes his seat back
       if (!seated && this.state.players.size >= this.state.maxPlayers) throw new ServerError(4409, "full");
     }
     return { account };
+  }
+
+  /**
+   * Public rooms are open. Friends rooms: invited players, or friends of someone already in the room.
+   * Private rooms: invited players only. The first player (the host creating it) always gets in.
+   */
+  private async checkRoomType(account: Account | null) {
+    const type = this.state.roomType;
+    if (type === "public" || this.members.size === 0 && this.state.players.size === 0) return;
+    if (account && this.invited.has(account.uid)) return;
+    if (type === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) return;
+    throw new ServerError(4410, type === "private" ? "private" : "friends");
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
@@ -335,6 +354,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       maxClients: MAX_CONNECTIONS,
       metadata: {
         host,
+        roomType: this.state.roomType,
         started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,
         maxPlayers: this.state.maxPlayers,

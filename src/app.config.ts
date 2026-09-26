@@ -13,6 +13,18 @@ import {
  */
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 
+function roomInfo(r: { roomId: string; metadata?: any }) {
+  return {
+    roomId: r.roomId,
+    host: r.metadata?.host ?? "",
+    roomType: r.metadata?.roomType ?? "public",
+    players: r.metadata?.players ?? 0,
+    maxPlayers: r.metadata?.maxPlayers ?? 0,
+    spectators: r.metadata?.spectators ?? 0,
+    started: r.metadata?.started === true,
+  };
+}
+
 const server = defineServer({
 
   /**
@@ -30,18 +42,17 @@ const server = defineServer({
    *
    */
   routes: createRouter({
+    // The room list: public rooms only (friends/private rooms are reached by invite or through a friend).
     api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => {
       const rooms = await matchMaker.query({ name: "werewolf" });
       return rooms
-        .filter((r) => !r.private && !r.unlisted)
-        .map((r) => ({
-          roomId: r.roomId,
-          host: r.metadata?.host ?? "",
-          players: r.metadata?.players ?? 0,
-          maxPlayers: r.metadata?.maxPlayers ?? 0,
-          spectators: r.metadata?.spectators ?? 0,
-          started: r.metadata?.started === true,
-        }));
+        .filter((r) => !r.private && !r.unlisted && (r.metadata?.roomType ?? "public") === "public")
+        .map(roomInfo);
+    }),
+    // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
+    api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {
+      const [room] = await matchMaker.query({ name: "werewolf", roomId: ctx.params.roomId });
+      return room ? { found: true, ...roomInfo(room) } : { found: false };
     }),
   }),
 

@@ -482,4 +482,20 @@ describe("WerewolfRoom", () => {
     assert.ok(!room.state.players.has(first.sessionId));
     assert.strictEqual(room.state.hostId, again.sessionId);
   });
+
+  it("lets only invited players into a private room, and never spectates a lobby", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room, { name: "Host" });
+    host.send("settings", { roomType: "private" });
+    await waitFor(() => room.state.roomType === "private");
+
+
+    const r = room as any;
+    await assert.rejects(r.checkRoomType(null), /private/); // a guest, not invited
+    r.members.set(host.sessionId, "hostUid");
+    await assert.rejects(r.checkRoomType({ uid: "friendUid", name: "F", avatar: 1 }), /private/);
+    r.invited.add("friendUid");
+    await r.checkRoomType({ uid: "friendUid", name: "F", avatar: 1 }); // invited: welcome
+    await assert.rejects(colyseus.connectTo(room, { spectator: true }), /lobby/); // lobbies are joined, not watched
+  });
 });

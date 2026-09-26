@@ -78,3 +78,11 @@ export async function setRoom(uid: string, room: string, ifRoom?: string) {
     if ((await tx.get(ref)).get("room") === ifRoom) tx.update(ref, { room });
   });
 }
+
+/** Whether [uid] is friends with any of [others] (friend rooms let their members' friends in). */
+export async function isFriendOfAny(uid: string, others: string[]): Promise<boolean> {
+  if (!app || others.length === 0) return false;
+  const db = getFirestore(app);
+  const docs = await db.getAll(...others.map((o) => db.doc(`users/${uid}/friends/${o}`)));
+  return docs.some((d) => d.exists);
+}
