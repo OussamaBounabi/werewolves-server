@@ -59,9 +59,12 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.maxPlayers, 16); // clamped
     assert.strictEqual(room.state.roomType, "friends");
     assert.strictEqual(room.state.witch, false);
-    host.send("settings", { roundSeconds: 45 }); // not a 10s/30s-step value
-    await new Promise((r) => setTimeout(r, 100));
+    host.send("settings", { roundSeconds: 45, stepSeconds: 30 }); // 45: not a 10s/30s-step value
+    await waitFor(() => room.state.stepSeconds === 30);
     assert.strictEqual(room.state.roundSeconds, 90);
+    host.send("settings", { stepSeconds: 70 }); // over a minute
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual(room.state.stepSeconds, 30);
   });
 
   it("counts down 10s before starting; the host can cancel; joining is closed meanwhile", async () => {

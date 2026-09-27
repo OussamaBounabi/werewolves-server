@@ -21,7 +21,8 @@ export const WerewolfState = schema({
   // Room settings, editable by the host in the lobby. The room is named after its host.
   roomType: t.string().default("public"), // "public" | "friends" | "private" — not enforced yet
   maxPlayers: t.number().default(8),
-  roundSeconds: t.number().default(30), // day discussion; night steps and votes are fixed
+  roundSeconds: t.number().default(30), // day discussion
+  stepSeconds: t.number().default(10), // each night step, vote, hunter's shot and succession: 10–60s
   wolves: t.number().default(2),
   villagers: t.number().default(3),
   seer: t.boolean().default(true),

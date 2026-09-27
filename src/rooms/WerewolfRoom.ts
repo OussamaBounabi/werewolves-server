@@ -26,6 +26,7 @@ type Settings = {
   roomType?: string;
   maxPlayers?: number;
   roundSeconds?: number;
+  stepSeconds?: number;
   wolves?: number;
   villagers?: number;
   testRole?: string | null;
@@ -47,7 +48,8 @@ const ROOM_TYPES = ["public", "friends", "private"];
 const ROUND_OPTIONS = [10, ...Array.from({ length: 30 }, (_, i) => (i + 1) * 30)]; // 10s, 30s … 15min
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
-const STEP_MS = 10_000; // night steps and votes — TEMPORARY fixed value, the user wants it configurable later
+const STEP_OPTIONS = [10, 20, 30, 40, 50, 60]; // night steps, votes, the hunter's shot, the mayor's succession
+const START_MS = 10_000; // the countdown before the game starts
 const RECONNECT_SECONDS = 600; // a dropped player's seat is held 10 minutes, then he dies
 const ROOM_LIFESPAN_MS = 60 * 60_000; // a room lives at most 1 hour from creation
 const CLOSE_AFTER_GAME_MS = 60_000; // after the game ends, the room closes a minute later
@@ -406,6 +408,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (ROOM_TYPES.includes(s.roomType as string)) st.roomType = s.roomType as string;
     if (s.maxPlayers !== undefined) st.maxPlayers = int(s.maxPlayers, Math.max(MIN_PLAYERS, st.players.size), MAX_PLAYERS);
     if (ROUND_OPTIONS.includes(Number(s.roundSeconds))) st.roundSeconds = Number(s.roundSeconds);
+    if (STEP_OPTIONS.includes(Number(s.stepSeconds))) st.stepSeconds = Number(s.stepSeconds);
     if (s.wolves !== undefined) st.wolves = int(s.wolves, 1, 8);
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
@@ -436,7 +439,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // A 10-second countdown everyone sees; joining closes now (onAuth), spectators still welcome.
     this.state.phase = "starting";
     this.logEvent("starting");
-    this.setPhaseTimer(STEP_MS, () => this.beginGame());
+    this.setPhaseTimer(START_MS, () => this.beginGame());
     this.updateListing();
   }
 
@@ -806,7 +809,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.logEvent("step", role === "tripleface" ? { role, as: day === 1 ? "seer" : "witch" } : { role });
     }
     for (const id of this.witchActors) this.sendWitchTurn(id);
-    this.setPhaseTimer(STEP_MS, () => this.resolveNight());
+    this.setPhaseTimer(this.stepMs(), () => this.resolveNight());
   }
 
   private hasPotion(id: string): boolean {
@@ -1004,7 +1007,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.successionFrom = from;
     this.logEvent("succession", { name: this.nameOf(from) });
     this.afterSuccession = next;
-    this.setPhaseTimer(STEP_MS, () => this.endSuccession(null));
+    this.setPhaseTimer(this.stepMs(), () => this.endSuccession(null));
   }
 
   private afterSuccession: () => void = () => {};
@@ -1022,7 +1025,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.shooterId = hunterId;
     this.state.shooterAim = pickRandom(prey);
     this.logEvent("hunter_turn", { name: this.nameOf(hunterId) });
-    this.setPhaseTimer(STEP_MS, () => this.endHunterShot());
+    this.setPhaseTimer(this.stepMs(), () => this.endHunterShot());
   }
 
   private handleHunterAim(client: Client, msg: { targetId: string }) {
@@ -1070,7 +1073,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.phase = "mayor";
     this.clearVotes();
     this.logEvent("mayor_election");
-    this.setPhaseTimer(STEP_MS, () => this.resolveMayor());
+    this.setPhaseTimer(this.stepMs(), () => this.resolveMayor());
   }
 
   private resolveMayor() {
@@ -1105,7 +1108,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.phase = "vote";
     this.clearVotes();
     this.logEvent("vote_start");
-    this.setPhaseTimer(STEP_MS, () => this.resolveVote());
+    this.setPhaseTimer(this.stepMs(), () => this.resolveVote());
   }
 
   private clearVotes() {
@@ -1409,8 +1412,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** A night step's timer; the game's first one also covers the card deal animation. */
   private setStepTimer(onExpire: () => void) {
-    this.setPhaseTimer(STEP_MS + this.dealTime, onExpire);
+    this.setPhaseTimer(this.stepMs() + this.dealTime, onExpire);
     this.dealTime = 0;
+  }
+
+  /** The host's phase time (night steps, votes, the hunter's shot, the succession). */
+  private stepMs() {
+    return this.state.stepSeconds * 1000;
   }
 
   private setPhaseTimer(ms: number, onExpire: () => void) {
