@@ -615,6 +615,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const role = id && this.roles.get(id);
     if (!id || !(role === "seer" || (role === "tripleface" && this.state.dayNumber === 1))) return;
     if (!this.isAlive(msg?.targetId) || msg.targetId === id) return;
+    if (this.known.get(id)?.[msg.targetId]) {
+      client.send("error", { code: "already_seen" }); // someone new each night
+      return;
+    }
     this.awake.delete(id);
     const seen = this.roles.get(msg.targetId);
     if (seen) this.known.set(id, { ...this.known.get(id), [msg.targetId]: seen });
@@ -1103,8 +1107,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const left = this.quitAlive.get(id);
       const minutes = Math.max(1, Math.floor(((left ?? now) - this.gameStartedAt) / 60_000));
       const won = left === undefined && (role === "werewolf") === (winner === "werewolves");
-      results.push({ uid, role, won, minutes });
-      const { xp, coins } = rewardFor({ uid, role, won, minutes });
+      const p = this.state.players.get(id);
+      const result = { uid, role, won, minutes, survived: p?.alive === true, name: p?.name ?? "?", avatar: p?.avatar ?? 0 };
+      results.push(result);
+      const { xp, coins } = rewardFor(result);
       this.logEvent("reward", { won, xp, coins, minutes }, id);
     }
     this.lastResults = results;

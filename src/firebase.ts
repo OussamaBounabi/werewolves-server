@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { cert, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
  * Firebase Admin, for player accounts: verifies the app's login tokens and writes game results.
@@ -31,7 +32,15 @@ export async function accountFor(idToken: string): Promise<Account> {
   return { uid, name: String(profile.name ?? profile.username), avatar: Number(profile.avatar) || 0 };
 }
 
-export type GameResult = { uid: string; role: string; won: boolean; minutes: number };
+export type GameResult = {
+  uid: string;
+  role: string;
+  won: boolean;
+  minutes: number;
+  survived: boolean; // alive at the end
+  name: string; // for the leaderboard
+  avatar: number;
+};
 
 /** Winners: 3 XP + 3 coins per minute. Losers: 1 XP per minute. */
 export function rewardFor(r: GameResult) {
@@ -57,8 +66,58 @@ export async function recordResults(results: GameResult[]) {
       [`stats.roles.${r.role}.wins`]: FieldValue.increment(r.won ? 1 : 0),
       "stats.minutes": FieldValue.increment(r.minutes),
     });
+    // Mission progress for today and this week, and this week's leaderboard.
+    const counters: Counters = {
+      games: 1,
+      wins: r.won ? 1 : 0,
+      wolfWins: r.won && side === "wolf" ? 1 : 0,
+      villageWins: r.won && side === "village" ? 1 : 0,
+      survived: r.survived ? 1 : 0,
+      minutes: r.minutes,
+    };
+    const inc = Object.fromEntries(Object.entries(counters).map(([k, v]) => [k, FieldValue.increment(v)]));
+    batch.set(db.doc(`users/${r.uid}/missions/${dayKey()}`), inc, { merge: true });
+    batch.set(db.doc(`users/${r.uid}/missions/${weekKey()}`), inc, { merge: true });
+    batch.set(
+      db.doc(`leaderboard/${weekKey()}/players/${r.uid}`),
+      { xp: FieldValue.increment(xp), name: r.name, avatar: r.avatar },
+      { merge: true },
+    );
   }
   await batch.commit();
+}
+
+export class ClaimError extends Error {}
+
+/**
+ * Hands out a mission's reward once: checks the player's progress for the current period, marks it
+ * claimed, adds coins/XP/diamonds (the XP counts for this week's leaderboard too).
+ */
+export async function claimMission(idToken: string, id: string) {
+  if (!app) throw new ClaimError("accounts disabled");
+  const { uid } = await getAuth(app).verifyIdToken(idToken);
+  const mission = id === DAILY_BONUS.id ? { ...DAILY_BONUS, period: "daily" } : MISSIONS.find((m) => m.id === id);
+  if (!mission) throw new ClaimError("unknown mission");
+  const db = getFirestore(app);
+  const progressRef = db.doc(`users/${uid}/missions/${mission.period === "daily" ? dayKey() : weekKey()}`);
+  const userRef = db.doc(`users/${uid}`);
+  const reward = { coins: mission.coins, xp: mission.xp, diamonds: mission.diamonds };
+  await db.runTransaction(async (tx) => {
+    const [progress, user] = await Promise.all([tx.get(progressRef), tx.get(userRef)]);
+    if (!claimable(id, progress.data() ?? {})) throw new ClaimError("not claimable");
+    tx.set(progressRef, { claimed: { [id]: true } }, { merge: true });
+    tx.update(userRef, {
+      coins: FieldValue.increment(reward.coins),
+      xp: FieldValue.increment(reward.xp),
+      diamonds: FieldValue.increment(reward.diamonds),
+    });
+    tx.set(
+      db.doc(`leaderboard/${weekKey()}/players/${uid}`),
+      { xp: FieldValue.increment(reward.xp), name: user.get("name") ?? "?", avatar: user.get("avatar") ?? 1 },
+      { merge: true },
+    );
+  });
+  return reward;
 }
 
 /**

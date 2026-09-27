@@ -12,6 +12,8 @@ import {
  * Import your Room files
  */
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
+import { claimMission, ClaimError } from "./firebase.js";
+import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
   return {
@@ -48,6 +50,27 @@ const server = defineServer({
       return rooms
         .filter((r) => !r.private && !r.unlisted && (r.metadata?.roomType ?? "public") === "public")
         .map(roomInfo);
+    }),
+    // Round-trip check for the app's ping display.
+    api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
+    // Mission definitions and the current periods (the app reads progress from Firestore).
+    api_missions: createEndpoint("/api/missions", { method: "GET" }, async () => ({
+      missions: MISSIONS,
+      dailyBonus: DAILY_BONUS,
+      day: dayKey(),
+      week: weekKey(),
+      ends: periodEnds(),
+    })),
+    // Claim a mission's reward: Authorization: Bearer <Firebase ID token>, body { id }.
+    api_claim: createEndpoint("/api/missions/claim", { method: "POST" }, async (ctx) => {
+      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const id = (ctx.body as { id?: string } | undefined)?.id;
+      if (!token || !id) throw ctx.error(400, { error: "missing token or id" });
+      try {
+        return { ok: true, reward: await claimMission(token, id) };
+      } catch (e) {
+        throw ctx.error(e instanceof ClaimError ? 409 : 401, { error: (e as Error).message });
+      }
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
     api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {

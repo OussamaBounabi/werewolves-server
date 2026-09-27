@@ -430,11 +430,13 @@ describe("WerewolfRoom", () => {
 
     const told = clients[0].waitForMessage("event");
     r.endGame("villagers");
-    const byUid = Object.fromEntries(r.lastResults.map((x: any) => [x.uid, x]));
-    assert.deepStrictEqual(byUid[`uid${wolf}`], { uid: `uid${wolf}`, role: "werewolf", won: false, minutes: 7 });
-    assert.deepStrictEqual(byUid[`uid${quitter}`], { uid: `uid${quitter}`, role: "seer", won: false, minutes: 5 });
+    const byUid = Object.fromEntries(
+      r.lastResults.map((x: any) => [x.uid, { role: x.role, won: x.won, minutes: x.minutes }]),
+    );
+    assert.deepStrictEqual(byUid[`uid${wolf}`], { role: "werewolf", won: false, minutes: 7 });
+    assert.deepStrictEqual(byUid[`uid${quitter}`], { role: "seer", won: false, minutes: 5 });
     const winner = roles.indexOf("villager");
-    assert.deepStrictEqual(byUid[`uid${winner}`], { uid: `uid${winner}`, role: "villager", won: true, minutes: 7 });
+    assert.deepStrictEqual(byUid[`uid${winner}`], { role: "villager", won: true, minutes: 7 });
 
     const events = [await told, ...r.privateLogs.get(ids[0])].filter((e: any) => e.type === "reward");
     const expected = roles[0] === "werewolf" || ids[0] === ids[quitter]
@@ -497,5 +499,18 @@ describe("WerewolfRoom", () => {
     r.invited.add("friendUid");
     await r.checkRoomType({ uid: "friendUid", name: "F", avatar: 1 }); // invited: welcome
     await assert.rejects(colyseus.connectTo(room, { spectator: true }), /lobby/); // lobbies are joined, not watched
+  });
+
+  it("never lets the seer check the same player twice", async () => {
+    const { room, byRole } = await startGame();
+    const r = room as any;
+    const [seer, wolf] = [byRole("seer"), byRole("werewolf")];
+    r.known.set(seer.sessionId, { [wolf.sessionId]: "werewolf" }); // she saw him on an earlier night
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([seer.sessionId]);
+    const refused = seer.waitForMessage("error");
+    seer.send("seer_peek", { targetId: wolf.sessionId });
+    assert.deepStrictEqual(await refused, { code: "already_seen" });
+    assert.ok(r.awake.has(seer.sessionId)); // still her turn: she picks someone else
   });
 });
