@@ -9,12 +9,14 @@ export const PlayerState = schema({
   connected: t.boolean().default(true),
   votedFor: t.string().default(""), // day votes are public; cleared each vote phase
   revealedRole: t.string().default(""), // set when the player dies, or for everyone at game over
+  silenced: t.boolean().default(false), // the black wolf's victim, for the day: no voice, no vote, can't be voted
 });
 export type PlayerState = SchemaType<typeof PlayerState>;
 
 // Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "day" | "vote" | "gameover"
 // ("reveal": the apps play the death card reveals before the game moves on)
-// Night steps, in order: "wild_hunter" (odd nights) | "protector" | "wolves" | "witch_seer" ("" outside the night)
+// Night steps, in order: "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
+// "white_wolf" (even nights) | "wolf_powers" (father / black / green wolves) | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
   // Room settings, editable by the host in the lobby. The room is named after its host.
   roomType: t.string().default("public"), // "public" | "friends" | "private" — not enforced yet
@@ -31,6 +33,13 @@ export const WerewolfState = schema({
   bear: t.boolean().default(false),
   redhood: t.boolean().default(false),
   tripleface: t.boolean().default(false),
+  fatherwolf: t.boolean().default(false),
+  blackwolf: t.boolean().default(false),
+  whitewolf: t.boolean().default(false),
+  bluewolf: t.boolean().default(false), // needs at least one villager in the mix
+  greenwolf: t.boolean().default(false),
+  redwolf: t.boolean().default(false),
+  greenGuesses: t.number().default(3), // the green wolf's guesses for the whole game (one per night)
 
   phase: t.string().default("lobby"),
   nightStep: t.string().default(""),
@@ -41,7 +50,7 @@ export const WerewolfState = schema({
   shooterAim: t.string().default(""), // who he's aiming at — public, like the day votes
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
-  winner: t.string().default(""), // "werewolves" | "villagers" | "none" (room expired) | ""
+  winner: t.string().default(""), // "werewolves" | "villagers" | "whitewolf" | "none" (room expired) | ""
   dealt: t.string().default(""), // JSON {role: count} of the roles actually dealt, for "remaining roles"
   spectators: t.number().default(0),
   hostId: t.string().default(""),

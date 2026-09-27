@@ -35,6 +35,7 @@ export async function accountFor(idToken: string): Promise<Account> {
 export type GameResult = {
   uid: string;
   role: string;
+  side: "wolf" | "village" | "solo"; // the team he ended the game on (infected players are wolves)
   won: boolean;
   minutes: number;
   survived: boolean; // alive at the end
@@ -54,7 +55,7 @@ export async function recordResults(results: GameResult[]) {
   const batch = db.batch();
   for (const r of results) {
     const { xp, coins } = rewardFor(r);
-    const side = r.role === "werewolf" ? "wolf" : "village";
+    const side = r.side;
     batch.update(db.doc(`users/${r.uid}`), {
       xp: FieldValue.increment(xp),
       coins: FieldValue.increment(coins),
