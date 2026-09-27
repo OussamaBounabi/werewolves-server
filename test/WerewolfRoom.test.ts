@@ -607,4 +607,17 @@ describe("WerewolfRoom", () => {
     r.endGameIfOver();
     assert.strictEqual(room.state.winner, "whitewolf");
   });
+
+  it("starts with special wolves or a loner only, but never without a village or an enemy", async () => {
+    const { roles } = await startGame({ wolves: 0, villagers: 2, seer: true, witch: false, protector: false, whitewolf: true, redwolf: true }, 4);
+    assert.deepStrictEqual([...roles].sort(), ["redwolf", "seer", "villager", "whitewolf"]); // a villager made room
+
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", { wolves: 0, villagers: 3, seer: true, witch: false, protector: false });
+    const clients: any[] = [];
+    for (let i = 0; i < 4; i++) clients.push(await colyseus.connectTo(room));
+    const refused = clients[0].waitForMessage("error");
+    clients[0].send("start_game");
+    assert.deepStrictEqual(await refused, { code: "bad_mix" }); // no wolf, no loner
+    assert.strictEqual(room.state.phase, "lobby");
+  });
 });

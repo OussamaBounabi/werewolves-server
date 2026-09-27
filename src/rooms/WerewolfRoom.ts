@@ -37,6 +37,10 @@ type Potions = { revive: boolean; poison: boolean }; // potions not used yet
 const ROLES: readonly Role[] = ["werewolf", "villager", ...SPECIALS];
 /** The pack: they wake together to kill. The white wolf hunts with them but plays for himself. */
 const WOLF_ROLES: ReadonlySet<Role> = new Set(["werewolf", "fatherwolf", "blackwolf", "whitewolf", "bluewolf", "greenwolf", "redwolf"]);
+/** Loners play for themselves (more to come, like the killer). */
+const LONERS: ReadonlySet<Role> = new Set(["whitewolf"]);
+/** The village's enemies: a game needs at least one of them, and at least one village role. */
+const isEvil = (r: Role) => WOLF_ROLES.has(r) || LONERS.has(r);
 /** Village powers the green wolf can guess — and steal on a right guess. */
 const STEALABLE: readonly Role[] = ["seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface"];
 /** When fewer players join than the mix plans, specials leave the deck in this order. */
@@ -409,7 +413,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (s.maxPlayers !== undefined) st.maxPlayers = int(s.maxPlayers, Math.max(MIN_PLAYERS, st.players.size), MAX_PLAYERS);
     if (ROUND_OPTIONS.includes(Number(s.roundSeconds))) st.roundSeconds = Number(s.roundSeconds);
     if (STEP_OPTIONS.includes(Number(s.stepSeconds))) st.stepSeconds = Number(s.stepSeconds);
-    if (s.wolves !== undefined) st.wolves = int(s.wolves, 1, 8);
+    if (s.wolves !== undefined) st.wolves = int(s.wolves, 0, 8); // special wolves or a loner can stand in
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
     if (s.greenGuesses !== undefined) st.greenGuesses = int(s.greenGuesses, 1, 5);
@@ -436,11 +440,22 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       client.send("error", { code: "not_enough_players", min: MIN_PLAYERS });
       return;
     }
+    if (!this.mixIsPlayable()) {
+      client.send("error", { code: "bad_mix" });
+      return;
+    }
     // A 10-second countdown everyone sees; joining closes now (onAuth), spectators still welcome.
     this.state.phase = "starting";
     this.logEvent("starting");
     this.setPhaseTimer(START_MS, () => this.beginGame());
     this.updateListing();
+  }
+
+  /** At least one village role, and at least one wolf (of any kind) or loner. */
+  private mixIsPlayable(): boolean {
+    const st = this.state;
+    const on = SPECIALS.filter((r) => st[r]);
+    return st.villagers + on.filter((r) => !isEvil(r)).length > 0 && st.wolves + on.filter(isEvil).length > 0;
   }
 
   private handleCancelStart(client: Client) {
@@ -1430,20 +1445,22 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
 /**
  * Roles for [players] seats. Fewer players than planned: drop villagers, then specials (DROP_ORDER),
- * then extra wolves. More players than planned: the extras are villagers.
+ * then plain wolves — always keeping at least one village role and one wolf or loner. More players
+ * than planned: the extras are villagers.
  */
 function buildDeck(c: Composition, players: number): Role[] {
   let { werewolf, villager } = c;
   const specials: Role[] = SPECIALS.filter((r) => c[r]);
+  const evil = () => werewolf + specials.filter(isEvil).length;
+  const good = () => villager + specials.filter((r) => !isEvil(r)).length;
   let extra = werewolf + villager + specials.length - players;
-  for (; extra > 0 && villager > 0; extra--) villager--;
+  for (; extra > 0 && villager > 0 && good() > 1; extra--) villager--;
   for (const r of DROP_ORDER) {
-    if (extra > 0 && specials.includes(r)) {
-      specials.splice(specials.indexOf(r), 1);
-      extra--;
-    }
+    if (extra <= 0 || !specials.includes(r) || (isEvil(r) ? evil() : good()) === 1) continue; // the last of its side stays
+    specials.splice(specials.indexOf(r), 1);
+    extra--;
   }
-  for (; extra > 0 && werewolf > 1; extra--) werewolf--;
+  for (; extra > 0 && werewolf > 0 && evil() > 1; extra--) werewolf--;
   villager += Math.max(0, -extra);
   // The blue wolf hides behind a simple villager: with none dealt, he's a plain wolf.
   if (villager === 0 && specials.includes("bluewolf")) specials.splice(specials.indexOf("bluewolf"), 1, "werewolf");
