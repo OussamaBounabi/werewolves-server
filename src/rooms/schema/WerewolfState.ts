@@ -13,7 +13,8 @@ export const PlayerState = schema({
 });
 export type PlayerState = SchemaType<typeof PlayerState>;
 
-// Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "day" | "vote" | "judge" | "gameover"
+// Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "dictator" | "day" | "vote" |
+// "judge" | "gameover"
 // ("reveal": the apps play the death card reveals before the game moves on)
 // Night steps, in order: "cupid" + "lovers" + "wild_child" (night 1) | "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
 // "white_wolf" (even nights) | "wolf_powers" (father / black / green wolves) | "witch_seer" ("" outside the night)
@@ -41,6 +42,9 @@ export const WerewolfState = schema({
   greenwolf: t.boolean().default(false),
   redwolf: t.boolean().default(false),
   greenGuesses: t.number().default(3), // the green wolf's guesses for the whole game (one per night)
+  mayor: t.boolean().default(true), // play with a mayor (elected after night 1)
+  talkingSeer: t.boolean().default(false), // the village hears which role the seer (or triple face) saw
+  talkingDetective: t.boolean().default(false), // the village hears the detective's verdict
   cupid: t.boolean().default(false),
   wildchild: t.boolean().default(false),
   dragon: t.boolean().default(false),

@@ -34,6 +34,9 @@ type Settings = {
   villagers?: number;
   testRole?: string | null;
   greenGuesses?: number;
+  mayor?: boolean;
+  talkingSeer?: boolean;
+  talkingDetective?: boolean;
 } & Partial<Record<Special, boolean>>;
 type Potions = { revive: boolean; poison: boolean }; // potions not used yet
 
@@ -136,6 +139,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private wildModel: string | null = null; // the wild child's model
   private wildTurned: string | null = null; // the wild child, once his model died: a wolf now
   private pendingVote: string[] = []; // the ballots, while the judge decides
+  private dictatorArmed = false; // he said yes last night: his moment comes at daybreak
   private dealTime = 0; // DEAL_MS for the first night step of the game, then 0
   private revealsPending = 0; // deaths whose card reveal the clients are about to play
   private pendingShooters: string[] = []; // dead hunters waiting for their shot
@@ -186,6 +190,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("dragon_fire", (client, msg: { targetId: string }) => this.handleDragon(client, msg));
     this.onMessage("barbe_ask", (client, msg: { targetId: string }) => this.handleBarbe(client, msg));
     this.onMessage("dictator_strike", (client, msg: { targetId: string }) => this.handleDictator(client, msg));
+    this.onMessage("dictator_ready", (client, msg: { use: boolean }) => this.handleDictatorReady(client, msg));
     this.onMessage("judge", (client, msg: { revote: boolean }) => this.handleJudge(client, msg));
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
@@ -335,7 +340,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.powerOf(id) === "protector" && step === "protector") this.sendProtectorTurn(id);
     if (step === "red_wolf" && role === "redwolf") client.send("red_turn", { blocked: this.lastParalysed });
     if (step === "wolf_powers" && this.powerActors.has(id)) this.sendPowerTurn(id);
-    if (this.lovers && (this.lovers.includes(id) || role === "cupid")) client.send("lovers", { ids: this.lovers });
+    if (this.lovers && (this.lovers.includes(id) || role === "cupid")) {
+      const partner = this.lovers.find((l) => l !== id && this.lovers!.includes(id));
+      client.send("lovers", { ids: this.lovers, ...(partner ? { roles: { [partner]: this.roles.get(partner) } } : {}) });
+    }
     if (role === "wildchild" && this.wildModel) client.send("wild_model", { targetId: this.wildModel });
     this.sendHistory(client);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
@@ -440,6 +448,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
     if (s.greenGuesses !== undefined) st.greenGuesses = int(s.greenGuesses, 1, 5);
+    for (const key of ["mayor", "talkingSeer", "talkingDetective"] as const) {
+      if (typeof s[key] === "boolean") st[key] = s[key];
+    }
     if (st.villagers === 0) st.bluewolf = false; // he hides behind a simple villager
     if (s.testRole !== undefined) this.testHostRole = ROLES.includes(s.testRole as Role) ? (s.testRole as Role) : null;
     this.updateListing();
@@ -610,8 +621,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private linkLovers(a: string, b: string) {
     this.lovers = [a, b];
     for (const [me, partner] of [[a, b], [b, a]]) {
-      this.clients.getById(me)?.send("lovers", { ids: this.lovers });
-      this.logEvent("in_love", { name: this.nameOf(partner) }, me);
+      this.clients.getById(me)?.send("lovers", { ids: this.lovers, roles: { [partner]: this.roles.get(partner) } });
+      this.logEvent("in_love", { name: this.nameOf(partner), role: this.roles.get(partner) }, me);
     }
     const cupid = this.aliveWithRole("cupid");
     if (cupid) {
@@ -922,6 +933,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       day === 1 ? tripleFace : undefined,
       this.canInvestigate(detective),
       dragon && !this.spent.has(dragon) ? dragon : undefined, // until he has burned someone
+      this.dictatorToAsk(),
     ];
     this.awake = new Set([...this.witchActors, ...others.filter((id): id is string => !!id)]);
     if (this.awake.size === 0) return this.resolveNight();
@@ -978,10 +990,26 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (seen) this.known.set(id, { ...this.known.get(id), [target]: seen });
     client.send("seer_result", { targetId: target, role: seen, isWerewolf: !!seen && WOLF_ROLES.has(seen) });
     this.logEvent("seer_saw", { name: this.nameOf(target), role: seen }, id);
+    if (this.state.talkingSeer) this.logEvent("seer_public", { role: seen }); // the role, not who
     this.maybeEndWitchSeer();
   }
 
   /** Once per game, any living player but himself; the death is revealed at dawn with the others. */
+  /** Each night until he strikes, the dictator says whether he'll use his power at daybreak. */
+  private dictatorToAsk(): string | undefined {
+    const dictator = this.activeWithRole("dictator");
+    return dictator && !this.spent.has(dictator) ? dictator : undefined;
+  }
+
+  private handleDictatorReady(client: Client, msg: { use: boolean }) {
+    const id = this.awakeActor(client);
+    if (!id || this.powerOf(id) !== "dictator" || this.spent.has(id)) return;
+    this.dictatorArmed = msg?.use === true;
+    this.logEvent(this.dictatorArmed ? "dictator_armed" : "dictator_waits", {}, id);
+    this.awake.delete(id);
+    this.maybeEndWitchSeer();
+  }
+
   private handleDragon(client: Client, msg: { targetId: string }) {
     const id = this.awakeActor(client);
     const target = msg?.targetId;
@@ -1020,6 +1048,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.detectiveKnown.push(check);
     client.send("detective_result", check);
     this.logEvent("detective_saw", { a: this.nameOf(a), b: this.nameOf(b), same }, id);
+    if (this.state.talkingDetective) this.logEvent("detective_public", { same }); // the verdict, not who
     this.awake.delete(id);
     this.maybeEndWitchSeer();
   }
@@ -1098,7 +1127,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     });
     if (this.endGameIfOver()) return;
     // The village elects its mayor once, after the first night.
-    this.afterDeaths(() => (this.mayorElected ? this.startDay() : this.startMayorVote()));
+    this.afterDeaths(() => (this.mayorElected || !this.state.mayor ? this.startDay() : this.startMayorVote()));
   }
 
   /** What the night did to the living, told at daybreak: silenced, infected, robbed of a role. */
@@ -1226,17 +1255,33 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.startDay();
   }
 
+  /** Daybreak: the bear sniffs, the dictator strikes if he said so last night, then the debate. */
   private startDay() {
-    this.state.phase = "day";
     this.logEvent("day", { day: this.state.dayNumber });
     this.bearSniffs();
+    const dictator = this.aliveWithRole("dictator");
+    const armed = this.dictatorArmed && dictator && !this.spent.has(dictator);
+    this.dictatorArmed = false;
+    if (!armed || !dictator) return this.openDebate();
+    this.state.phase = "dictator";
+    this.logEvent("dictator_deciding");
+    this.setPhaseTimer(this.stepMs(), () => {
+      this.spent.add(dictator); // he let his moment pass: the power is lost
+      this.sendRole(dictator);
+      this.logEvent("dictator_lost", {}, dictator);
+      this.openDebate();
+    });
+  }
+
+  private openDebate() {
+    this.state.phase = "day";
     this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.startVote());
   }
 
   /** A living player using his one-shot day power ([role]) during the discussion. */
-  private dayActor(client: Client, role: Role): string | null {
+  private dayActor(client: Client, role: Role, phase = "day"): string | null {
     const id = client.sessionId;
-    const ok = this.state.phase === "day" && this.powerOf(id) === role && this.isAlive(id) && !this.spent.has(id);
+    const ok = this.state.phase === phase && this.powerOf(id) === role && this.isAlive(id) && !this.spent.has(id);
     return ok ? id : null;
   }
 
@@ -1256,8 +1301,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.spent.add(id);
     this.sendRole(id);
     const guilty = this.againstVillage(target);
-    this.state.players.get(target)!.revealedRole = this.roles.get(target) ?? "";
-    this.logEvent("barbe", { name: this.nameOf(target), role: this.roles.get(target), guilty });
+    // An enemy's real card is shown (an infected player's original role); an innocent shows a simple villager.
+    const shown = guilty ? (this.roles.get(target) ?? "") : "villager";
+    this.state.players.get(target)!.revealedRole = shown;
+    this.logEvent("barbe", { name: this.nameOf(target), role: shown, guilty });
     if (guilty) this.kill(target, "barbe");
     else this.kill(id, "barbe_fail");
     this.afterDayPower();
@@ -1265,7 +1312,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Right: the target dies and the dictator takes the mayor's title. Wrong: they both die. */
   private handleDictator(client: Client, msg: { targetId: string }) {
-    const id = this.dayActor(client, "dictator");
+    const id = this.dayActor(client, "dictator", "dictator");
     const target = msg?.targetId;
     if (!id || !this.isAlive(target) || target === id) return;
     this.spent.add(id);
@@ -1280,7 +1327,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     } else {
       this.kill(id, "dictator_fail");
     }
-    this.afterDayPower();
+    if (!this.endGameIfOver()) this.afterDeaths(() => this.openDebate());
   }
 
   /** After a day power's deaths: reveals, hunters, succession — then the discussion goes on. */
@@ -1557,7 +1604,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const wolf = this.isPack(id);
       return { talk: wolf, hear: wolf };
     }
-    return { talk: phase !== "vote" && phase !== "mayor" && phase !== "judge" && !player.silenced, hear: true };
+    return { talk: phase !== "vote" && phase !== "mayor" && phase !== "judge" && phase !== "dictator" && !player.silenced, hear: true };
   }
 
   private gameRunning() {

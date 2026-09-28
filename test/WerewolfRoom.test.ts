@@ -680,7 +680,7 @@ describe("WerewolfRoom", () => {
     const r2 = (await startGame(SIX, 8)).room as any;
     const d = [...r2.roles].find(([, role]: any) => role === "dictator")[0];
     const v = [...r2.roles].find(([, role]: any) => role === "villager")[0];
-    r2.state.phase = "day";
+    r2.state.phase = "dictator"; // his moment at daybreak
     r2.handleDictator({ sessionId: d }, { targetId: v });
     assert.strictEqual(r2.state.players.get(d)?.alive, false);
     assert.strictEqual(r2.state.players.get(v)?.alive, false);
@@ -702,5 +702,38 @@ describe("WerewolfRoom", () => {
     clients[0].send("day_vote", { targetId: target.sessionId });
     await new Promise((res) => setTimeout(res, 150));
     assert.strictEqual(room.state.players.get(clients[0].sessionId)?.votedFor, "");
+  });
+
+  it("the dictator says yes at night and gets his moment at daybreak; otherwise it's lost", async () => {
+    const { room, byRole } = await startGame({ ...SIX, mayor: false }, 8);
+    const r = room as any;
+    const dictator = byRole("dictator");
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([dictator.sessionId, "someone"]);
+    dictator.send("dictator_ready", { use: true });
+    await waitFor(() => r.dictatorArmed === true);
+    r.startDay();
+    assert.strictEqual(room.state.phase, "dictator");
+    r.phaseTimer.clear();
+    r.openDebate();
+    assert.strictEqual(room.state.phase, "day");
+    assert.strictEqual(room.state.mayor, false); // no election in this room
+  });
+
+  it("talking seer tells the village the role (not the player); barbé's innocent shows as a villager", async () => {
+    const { room, clients, byRole } = await startGame({ ...SIX, seer: true, talkingSeer: true, maxPlayers: 9 }, 9);
+    const r = room as any;
+    const [seer, judge, barbe] = [byRole("seer"), byRole("judge"), byRole("barbe")];
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([seer.sessionId, "someone"]);
+    const heard = clients.find((c) => c !== seer).waitForMessage("event");
+    seer.send("seer_peek", { targetId: judge.sessionId });
+    const e: any = await heard;
+    assert.deepStrictEqual([e.type, e.role, e.name], ["seer_public", "judge", undefined]);
+
+    room.state.phase = "day";
+    barbe.send("barbe_ask", { targetId: judge.sessionId });
+    await waitFor(() => room.state.players.get(barbe.sessionId)?.alive === false);
+    assert.strictEqual(room.state.players.get(judge.sessionId)?.revealedRole, "villager");
   });
 });
