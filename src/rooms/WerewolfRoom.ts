@@ -747,15 +747,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private endWolvesStep() {
-    let victim: string | null;
-    if (this.wolfVotes.size === 0) {
-      // TEST ONLY: wolves that didn't pick anyone kill a random villager.
-      const prey = [...this.state.players.keys()].filter((id) => this.isAlive(id) && !this.isPack(id));
-      victim = prey.length ? prey[Math.floor(Math.random() * prey.length)] : null;
-    } else {
-      victim = topVoted(this.wolfVotes.values()); // null on a tie
-    }
-    this.wolfTarget = victim;
+    // No vote, or a tie: nobody is attacked tonight.
+    this.wolfTarget = topVoted(this.wolfVotes.values());
     this.startWhiteWolfStep();
   }
 
@@ -1080,8 +1073,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // The trap: a wolf who went for the trapped player dies instead — unless a witch revived him.
     if (trap && this.wolfTarget === trap && !this.reviving && !this.infectNow) {
       const voters = [...this.wolfVotes].filter(([w, t]) => t === trap && this.isAlive(w)).map(([w]) => w);
-      const pool = voters.length ? voters : this.packIds().filter((w) => this.isAlive(w)); // TEST random victim
-      if (pool.length) deaths.set(pickRandom(pool), "trap");
+      if (voters.length) deaths.set(pickRandom(voters), "trap");
     }
     // Poisoning the trapped player kills the poisoner instead.
     for (const [poisoner, target] of this.poisons) {
