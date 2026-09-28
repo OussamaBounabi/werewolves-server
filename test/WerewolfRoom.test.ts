@@ -620,4 +620,87 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(await refused, { code: "bad_mix" }); // no wolf, no loner
     assert.strictEqual(room.state.phase, "lobby");
   });
+
+  // ---- cupid, wild child, dragon, barbé, dictator, judge ----
+
+  const SIX = {
+    wolves: 1, villagers: 1, seer: false, witch: false, protector: false,
+    cupid: true, wildchild: true, dragon: true, barbe: true, dictator: true, judge: true,
+  };
+
+  it("cupid's lovers die together and win together as the last two from opposite sides", async () => {
+    const { room, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    assert.strictEqual(room.state.nightStep, "cupid"); // night 1 opens with cupid
+    const [wolf, villager, judge] = [byRole("werewolf"), byRole("villager"), byRole("judge")];
+    r.linkLovers(judge.sessionId, villager.sessionId);
+    r.kill(judge.sessionId, "vote");
+    assert.strictEqual(room.state.players.get(villager.sessionId)?.alive, false); // broken heart
+
+    r.linkLovers(wolf.sessionId, byRole("dragon").sessionId);
+    for (const [id, p] of room.state.players) p.alive = id === wolf.sessionId || id === byRole("dragon").sessionId;
+    r.endGameIfOver();
+    assert.strictEqual(room.state.winner, "lovers");
+  });
+
+  it("the wild child becomes a wolf when his model dies", async () => {
+    const { room, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    const [child, model] = [byRole("wildchild"), byRole("barbe")];
+    r.chooseModel(child.sessionId, model.sessionId);
+    const turned = child.waitForMessage("wild_turned");
+    r.kill(model.sessionId, "vote");
+    await turned;
+    assert.ok(r.isPack(child.sessionId));
+    assert.strictEqual(r.teamOf(child.sessionId), "wolves");
+  });
+
+  it("the dragon burns once, at dawn", async () => {
+    const { room, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    const [dragon, target] = [byRole("dragon"), byRole("villager")];
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([dragon.sessionId, "someone"]);
+    dragon.send("dragon_fire", { targetId: target.sessionId });
+    await waitFor(() => r.dragonTarget === target.sessionId);
+    assert.ok(r.spent.has(dragon.sessionId));
+    r.resolveNight();
+    assert.strictEqual(room.state.players.get(target.sessionId)?.alive, false);
+  });
+
+  it("barbé unmasks a wolf; the dictator dies with an innocent", async () => {
+    const { room, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    const [barbe, wolf, dictator, villager] = [byRole("barbe"), byRole("werewolf"), byRole("dictator"), byRole("villager")];
+    room.state.phase = "day";
+    barbe.send("barbe_ask", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.players.get(wolf.sessionId)?.alive === false);
+    assert.strictEqual(room.state.players.get(barbe.sessionId)?.alive, true);
+    // The village won (the only wolf died): check the dictator's rule directly.
+    const r2 = (await startGame(SIX, 8)).room as any;
+    const d = [...r2.roles].find(([, role]: any) => role === "dictator")[0];
+    const v = [...r2.roles].find(([, role]: any) => role === "villager")[0];
+    r2.state.phase = "day";
+    r2.handleDictator({ sessionId: d }, { targetId: v });
+    assert.strictEqual(r2.state.players.get(d)?.alive, false);
+    assert.strictEqual(r2.state.players.get(v)?.alive, false);
+    assert.ok(dictator && villager);
+  });
+
+  it("the judge orders one final revote that can't hit the spared player", async () => {
+    const { room, clients, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    const [judge, target] = [byRole("judge"), byRole("villager")];
+    room.state.phase = "vote";
+    for (const p of room.state.players.values()) p.votedFor = target.sessionId;
+    r.resolveVote();
+    assert.strictEqual(room.state.phase, "judge");
+    assert.strictEqual(room.state.judgeTarget, target.sessionId);
+    judge.send("judge", { revote: true });
+    await waitFor(() => room.state.phase === "vote");
+    assert.strictEqual(room.state.spared, target.sessionId);
+    clients[0].send("day_vote", { targetId: target.sessionId });
+    await new Promise((res) => setTimeout(res, 150));
+    assert.strictEqual(room.state.players.get(clients[0].sessionId)?.votedFor, "");
+  });
 });
