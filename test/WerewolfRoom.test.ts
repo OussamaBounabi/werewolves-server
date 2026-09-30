@@ -778,4 +778,20 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(back.sessionId)?.alive, false);
     assert.strictEqual([...room.state.players.keys()].indexOf(back.sessionId), seat); // same place in the circle
   });
+
+  it("a bitten seer joins the pack at once and still looks that same night", async () => {
+    const mix = { wolves: 1, villagers: 1, seer: true, witch: false, protector: false, fatherwolf: true };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    const [seer, father, wolf] = [byRole("seer"), byRole("fatherwolf"), byRole("werewolf")];
+    r.wolfVotes = new Map([[wolf.sessionId, seer.sessionId], [father.sessionId, seer.sessionId]]);
+    r.wolfTarget = seer.sessionId;
+    const told = seer.waitForMessage("infected");
+    r.startWolfPowersStep();
+    father.send("infect", { infect: true });
+    await told; // right away, not at dawn
+    assert.ok(r.isPack(seer.sessionId));
+    await waitFor(() => room.state.nightStep === "witch_seer");
+    assert.ok(r.awake.has(seer.sessionId)); // she still wakes as the seer tonight
+  });
 });

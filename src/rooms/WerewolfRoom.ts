@@ -912,8 +912,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         // She can't be turned while the hunter protects her — and the father loses his infection.
         this.logEvent("infect_failed", { name: this.nameOf(target) }, id);
       } else {
-        this.infectNow = true; // he joins the pack at dawn: tonight he still plays his own role
+        this.infectNow = true;
         this.logEvent("infect_done", { name: this.nameOf(target) }, id);
+        this.infect(target); // at once — he still plays his own role tonight (a bitten seer still looks)
       }
     }
     this.donePower(id);
@@ -1217,23 +1218,24 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.afterDeaths(() => (this.mayorElected || !this.state.mayor ? this.startDay() : this.startMayorVote()));
   }
 
-  /** What the night did to the living, told at daybreak: silenced, infected, robbed of a role. */
+  /** The father's bite: he joins the pack right away (their chat and voice) and is told so. */
+  private infect(turned: string) {
+    this.infected.add(turned);
+    this.clients.getById(turned)?.send("infected");
+    this.logEvent("you_infected", {}, turned);
+    for (const w of this.packIds()) {
+      if (w !== turned) this.logEvent("pack_joined", { name: this.nameOf(turned) }, w);
+      this.sendRole(w); // everyone in the pack gets the new pack list
+    }
+  }
+
+  /** What the night did to the living, told at daybreak: silenced, robbed of a role, tricked. */
   private morningNews() {
     const silenced = this.silenceTarget;
     if (silenced && this.isAlive(silenced)) {
       this.state.players.get(silenced)!.silenced = true;
       this.clients.getById(silenced)?.send("silenced");
       this.logEvent("silenced", { name: this.nameOf(silenced) });
-    }
-    const turned = this.infectNow ? this.wolfTarget : null;
-    if (turned && this.isAlive(turned)) {
-      this.infected.add(turned);
-      this.clients.getById(turned)?.send("infected");
-      this.logEvent("you_infected", {}, turned);
-      for (const w of this.packIds()) {
-        if (w !== turned) this.logEvent("pack_joined", { name: this.nameOf(turned) }, w);
-        this.sendRole(w); // everyone in the pack gets the new pack list
-      }
     }
     const robbed = this.stolenFrom;
     if (robbed && this.isAlive(robbed)) {
