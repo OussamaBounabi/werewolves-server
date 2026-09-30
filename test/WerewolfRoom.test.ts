@@ -195,8 +195,8 @@ describe("WerewolfRoom", () => {
     await waitFor(() => reveals.length === 2);
     const nameOf = (c: typeof seer) => room.state.players.get(c.sessionId)!.name;
     assert.deepStrictEqual(reveals, [
-      { id: villager.sessionId, name: nameOf(villager), role: "villager", cause: "wolves", shooter: false },
-      { id: seer.sessionId, name: nameOf(seer), role: "seer", cause: "witch", shooter: false },
+      { id: villager.sessionId, name: nameOf(villager), role: "villager", cause: "wolves", shooter: false, infected: false },
+      { id: seer.sessionId, name: nameOf(seer), role: "seer", cause: "witch", shooter: false, infected: false },
     ]);
   });
 
@@ -582,7 +582,7 @@ describe("WerewolfRoom", () => {
     room.state.dayNumber = 2;
     r.wolfTarget = null;
     const turn = green.waitForMessage("green_turn");
-    r.startWolfPowersStep();
+    r.startGreenWolfStep(); // first of the night from night 2
     assert.deepStrictEqual(await turn, { left: 3 });
     const result = green.waitForMessage("green_result");
     green.send("green_guess", { targetId: seer.sessionId, role: "seer" });
@@ -735,5 +735,47 @@ describe("WerewolfRoom", () => {
     barbe.send("barbe_ask", { targetId: judge.sessionId });
     await waitFor(() => room.state.players.get(barbe.sessionId)?.alive === false);
     assert.strictEqual(room.state.players.get(judge.sessionId)?.revealedRole, "villager");
+  });
+
+  it("tapping your vote again takes it back; the trickster shows a card to all at dawn", async () => {
+    const { room, clients, byRole } = await startGame({ ...SIX, trickster: true, maxPlayers: 9 }, 9);
+    const r = room as any;
+    const [a, b] = clients;
+    room.state.phase = "vote";
+    a.send("day_vote", { targetId: b.sessionId });
+    await waitFor(() => room.state.players.get(a.sessionId)?.votedFor === b.sessionId);
+    a.send("day_vote", { targetId: b.sessionId });
+    await waitFor(() => room.state.players.get(a.sessionId)?.votedFor === "");
+
+    const [trickster, judge] = [byRole("trickster"), byRole("judge")];
+    room.state.phase = "night";
+    room.state.dayNumber = 2;
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([trickster.sessionId, "someone"]);
+    trickster.send("trick", { targetId: judge.sessionId });
+    await waitFor(() => r.trickTarget === judge.sessionId);
+    r.morningNews();
+    assert.strictEqual(room.state.players.get(judge.sessionId)?.revealedRole, "judge");
+  });
+
+  it("a dead player who left gets his seat back when he returns", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", { ...SIX });
+    const clients: any[] = [];
+    for (let i = 0; i < 8; i++) clients.push(await colyseus.connectTo(room, { playerId: `dev${i}` }));
+    const dealt = Promise.all(clients.map((c) => c.waitForMessage("role_assigned", STEP)));
+    clients[0].send("start_game");
+    const roles = (await dealt).map((m: any) => m.role);
+    const r = room as any;
+    const seat = roles.indexOf("judge"); // not the only wolf: the game must go on
+    const quitter = clients[seat];
+    const role = r.roles.get(quitter.sessionId);
+    await quitter.leave(true); // leaving mid-game: he dies
+    await waitFor(() => room.state.players.get(quitter.sessionId)?.alive === false && !r.clients.getById(quitter.sessionId));
+    const back = await colyseus.connectTo(room, { playerId: `dev${seat}`, spectator: true });
+    await waitFor(() => room.state.players.has(back.sessionId));
+    assert.ok(!room.state.players.has(quitter.sessionId));
+    assert.strictEqual(r.roles.get(back.sessionId), role);
+    assert.strictEqual(room.state.players.get(back.sessionId)?.alive, false);
+    assert.strictEqual([...room.state.players.keys()].indexOf(back.sessionId), seat); // same place in the circle
   });
 });

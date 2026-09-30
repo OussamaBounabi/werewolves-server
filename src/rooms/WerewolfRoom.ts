@@ -6,7 +6,7 @@ import { accountFor, firebaseEnabled, isFriendOfAny, recordResults, rewardFor, s
 const SPECIALS = [
   "seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface",
   "fatherwolf", "blackwolf", "whitewolf", "bluewolf", "greenwolf", "redwolf",
-  "cupid", "wildchild", "dragon", "barbe", "dictator", "judge",
+  "cupid", "wildchild", "dragon", "barbe", "dictator", "judge", "trickster",
 ] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
@@ -50,12 +50,12 @@ const isEvil = (r: Role) => WOLF_ROLES.has(r) || LONERS.has(r);
 /** Village powers the green wolf can guess — and steal on a right guess. */
 const STEALABLE: readonly Role[] = [
   "seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface",
-  "dragon", "barbe", "dictator", "judge",
+  "dragon", "barbe", "dictator", "judge", "trickster",
 ];
 /** When fewer players join than the mix plans, specials leave the deck in this order. */
 const DROP_ORDER: readonly Special[] = [
   "whitewolf", "greenwolf", "redwolf", "blackwolf", "bluewolf", "fatherwolf",
-  "judge", "dictator", "barbe", "dragon", "wildchild", "cupid",
+  "trickster", "judge", "dictator", "barbe", "dragon", "wildchild", "cupid",
   "redhood", "bear", "tripleface", "detective", "wildhunter", "hunter", "protector", "witch", "seer",
 ];
 const ROOM_TYPES = ["public", "friends", "private"];
@@ -123,6 +123,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private silenceTarget: string | null = null; // the black wolf's pick, silenced tomorrow
   private stolenFrom: string | null = null; // the green wolf guessed his role right tonight
   private dragonTarget: string | null = null; // the dragon's fire, tonight
+  private trickTarget: string | null = null; // the trickster's pick: his card is shown to all at dawn
 
   // Per game
   private potions = new Map<string, Potions>();
@@ -190,6 +191,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("dragon_fire", (client, msg: { targetId: string }) => this.handleDragon(client, msg));
     this.onMessage("barbe_ask", (client, msg: { targetId: string }) => this.handleBarbe(client, msg));
     this.onMessage("dictator_strike", (client, msg: { targetId: string }) => this.handleDictator(client, msg));
+    this.onMessage("trick", (client, msg: { targetId: string }) => this.handleTrick(client, msg));
     this.onMessage("dictator_ready", (client, msg: { use: boolean }) => this.handleDictatorReady(client, msg));
     this.onMessage("judge", (client, msg: { revote: boolean }) => this.handleJudge(client, msg));
     this.onMessage("chat", (client, msg: { text: string }) => this.handleChat(client, msg));
@@ -218,6 +220,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (playerId && this.banned.has(String(playerId))) throw new ServerError(4403, "banned");
     if (options.spectator && this.state.phase === "lobby") throw new ServerError(4409, "lobby"); // join it instead
     await this.checkRoomType(account);
+    if (playerId && this.deadSeatOf(String(playerId))) return { account }; // back to his seat, among the dead
     if (!options.spectator) {
       if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
       const seated = playerId !== undefined && [...this.playerIds.values()].includes(String(playerId)); // takes his seat back
@@ -245,6 +248,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.members.set(client.sessionId, uid);
       setRoom(uid, this.roomId).catch((e) => console.error("setRoom failed", e));
     }
+    const returning = this.deadSeatOf(String(client.auth?.account?.uid ?? options.playerId ?? ""));
+    if (returning) return this.retakeSeat(client, returning);
     if (options.spectator) {
       this.spectators.add(client.sessionId);
       this.state.spectators = this.spectators.size;
@@ -267,6 +272,54 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }));
     if (ghost === undefined) this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId || wasHost) this.setHost(client.sessionId);
+    this.updateListing();
+  }
+
+  /** During a game: the seat of this account (or device) if he's dead and no longer connected. */
+  private deadSeatOf(playerId: string): string | undefined {
+    if (!playerId || !this.gameRunning()) return undefined;
+    const seat = [...this.playerIds].find(([, pid]) => pid === playerId)?.[0];
+    return seat && !this.isAlive(seat) && !this.clients.getById(seat) ? seat : undefined;
+  }
+
+  /**
+   * A dead player who left comes back: his old seat moves to his new connection (same place in the
+   * circle), so he's a dead player again — the graveyard voice, his role and his log.
+   */
+  private retakeSeat(client: Client, old: string) {
+    const id = client.sessionId;
+    const moveKey = <V>(map: Map<string, V>) => {
+      if (!map.has(old)) return;
+      map.set(id, map.get(old)!);
+      map.delete(old);
+    };
+    for (const map of [this.roles, this.powers, this.playerIds, this.accounts, this.privateLogs, this.quitAlive] as Map<
+      string,
+      unknown
+    >[]) {
+      moveKey(map);
+    }
+    for (const set of [this.infected, this.spent]) if (set.delete(old)) set.add(id);
+    if (this.lovers) this.lovers = this.lovers.map((l) => (l === old ? id : l)) as [string, string];
+    if (this.wildModel === old) this.wildModel = id;
+    // Rebuild the seats in the same order, his under the new id.
+    const seats = [...this.state.players.entries()];
+    this.state.players.clear();
+    for (const [sid, p] of seats) {
+      if (sid !== old) {
+        this.state.players.set(sid, p);
+        continue;
+      }
+      this.state.players.set(id, new PlayerState({ ...p.toJSON(), sessionId: id, connected: true }));
+    }
+    this.dropped.delete(old);
+    this.heldSeats.delete(old);
+    this.graveSent.delete(old);
+    if (this.voiceRights.delete(old)) dropFromVoice(this.roomId, old).catch(() => {});
+    client.send("seat_back");
+    this.sendRole(id);
+    this.sendHistory(client); // with his private lines, now under his new id
+    if (this.lovers?.includes(id)) this.clients.getById(id)?.send("lovers", { ids: this.lovers });
     this.updateListing();
   }
 
@@ -340,6 +393,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.powerOf(id) === "protector" && step === "protector") this.sendProtectorTurn(id);
     if (step === "red_wolf" && role === "redwolf") client.send("red_turn", { blocked: this.lastParalysed });
     if (step === "wolf_powers" && this.powerActors.has(id)) this.sendPowerTurn(id);
+    if (step === "green_wolf" && role === "greenwolf") client.send("green_turn", { left: this.greenLeft });
     if (this.lovers && (this.lovers.includes(id) || role === "cupid")) {
       const partner = this.lovers.find((l) => l !== id && this.lovers!.includes(id));
       client.send("lovers", { ids: this.lovers, ...(partner ? { roles: { [partner]: this.roles.get(partner) } } : {}) });
@@ -391,7 +445,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.kill(id, reason);
     const role = this.roles.get(id);
     this.broadcast("player_gone", { id, reason, role });
-    this.logEvent("player_gone", { name: this.nameOf(id), role, reason });
+    this.logEvent("player_gone", { name: this.nameOf(id), role, reason, infected: this.infected.has(id) });
     if (this.pendingSuccession === id) {
       // He isn't here to name a successor: the village has no mayor from now on.
       this.pendingSuccession = null;
@@ -582,6 +636,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.infectNow = false;
     this.stolenFrom = null;
     this.dragonTarget = null;
+    this.trickTarget = null;
     this.trapTarget = null;
     this.lastProtected = this.protectTarget;
     this.protectTarget = null;
@@ -638,14 +693,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** Night 1, after cupid: the wild child picks his model. */
   private startWildChildStep() {
     const child = this.activeWithRole("wildchild");
-    if (!child || this.state.dayNumber !== 1) return this.startRedWolfStep();
+    if (!child || this.state.dayNumber !== 1) return this.startGreenWolfStep();
     this.state.nightStep = "wild_child";
     this.state.nightRoles = "wildchild";
     this.logEvent("step", { role: "wildchild" });
     this.setStepTimer(() => {
       const others = [...this.state.players.keys()].filter((id) => id !== child && this.isAlive(id));
       if (!this.wildModel && others.length) this.chooseModel(child, pickRandom(others)); // he didn't choose
-      this.startRedWolfStep();
+      this.startGreenWolfStep();
     });
   }
 
@@ -654,7 +709,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const target = msg?.targetId;
     if (!this.isAlive(target) || target === client.sessionId) return;
     this.chooseModel(client.sessionId, target);
-    this.startRedWolfStep();
+    this.startGreenWolfStep();
   }
 
   private chooseModel(child: string, model: string) {
@@ -674,6 +729,20 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (w !== child) this.logEvent("wild_joined", { name: this.nameOf(child) }, w);
       this.sendRole(w);
     }
+  }
+
+  /**
+   * From night 2 the green wolf wakes first of all and guesses a role: a right guess steals it before
+   * anyone acts, so the robbed player sleeps tonight and the green wolf uses it this very night.
+   */
+  private startGreenWolfStep() {
+    const green = this.activeWithRole("greenwolf");
+    if (!green || this.state.dayNumber < 2 || this.greenLeft <= 0) return this.startRedWolfStep();
+    this.state.nightStep = "green_wolf";
+    this.state.nightRoles = "greenwolf";
+    this.logEvent("step", { role: "greenwolf" });
+    this.clients.getById(green)?.send("green_turn", { left: this.greenLeft });
+    this.setStepTimer(() => this.startRedWolfStep());
   }
 
   /** From night 2, the red wolf wakes first and paralyses a non-wolf: no power for him tonight. */
@@ -752,7 +821,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const id = client.sessionId;
     if (this.state.nightStep !== "wolves" || this.state.phase !== "night" || !this.isPack(id) || !this.isAlive(id)) return;
     if (!this.isAlive(msg?.targetId)) return;
-    this.wolfVotes.set(id, msg.targetId);
+    if (this.wolfVotes.get(id) === msg.targetId) this.wolfVotes.delete(id); // tapped again: vote taken back
+    else this.wolfVotes.set(id, msg.targetId);
     const votes = Object.fromEntries(this.wolfVotes);
     for (const w of this.packIds()) this.clients.getById(w)?.send("wolf_votes", votes);
   }
@@ -801,8 +871,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     const black = this.aliveWithRole("blackwolf");
     if (black) this.powerActors.add(black);
-    const green = this.aliveWithRole("greenwolf");
-    if (green && this.state.dayNumber >= 2 && this.greenLeft > 0) this.powerActors.add(green);
     if (this.powerActors.size === 0) return this.finishWolfPowers();
 
     this.state.nightStep = "wolf_powers";
@@ -819,7 +887,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const power = this.powerOf(id);
     if (power === "fatherwolf") client?.send("father_turn", { victim: this.wolfTarget });
     if (power === "blackwolf") client?.send("black_turn", { blocked: this.lastSilenced });
-    if (power === "greenwolf") client?.send("green_turn", { left: this.greenLeft });
   }
 
   /** Acting in the wolf powers step as [role] and still to act. */
@@ -845,8 +912,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         // She can't be turned while the hunter protects her — and the father loses his infection.
         this.logEvent("infect_failed", { name: this.nameOf(target) }, id);
       } else {
-        this.infectNow = true;
-        this.infected.add(target);
+        this.infectNow = true; // he joins the pack at dawn: tonight he still plays his own role
         this.logEvent("infect_done", { name: this.nameOf(target) }, id);
       }
     }
@@ -868,7 +934,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** One guess a night: the right role steals it (he keeps being a wolf); the victim becomes a simple villager. */
   private handleGreenGuess(client: Client, msg: { targetId: string; role: string }) {
-    const id = this.powerActor(client, "greenwolf");
+    const id = this.state.nightStep === "green_wolf" && this.actorIs(client, "greenwolf") ? client.sessionId : null;
     const target = msg?.targetId;
     const guess = msg?.role as Role;
     if (!id || !this.isAlive(target) || this.isPack(target) || !STEALABLE.includes(guess)) return;
@@ -886,20 +952,22 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (this.spent.has(target)) this.spent.add(id); // a one-shot power already used stays used
       this.stolenFrom = target;
       this.sendRole(id);
+      this.sendRole(target); // he sleeps tonight: his app shows him a simple villager now (the panel comes at dawn)
     }
     client.send("green_result", { targetId: target, role: guess, right, left: this.greenLeft });
     this.logEvent("green_guessed", { name: this.nameOf(target), role: guess, right }, id);
-    this.donePower(id);
+    this.startRedWolfStep();
   }
 
   /** Skipping a wolf power: the red or white wolf's step ends at once; the others stop waiting on him. */
   private handlePowerPass(client: Client) {
     const id = client.sessionId;
     const step = this.state.nightStep;
-    if (step === "witch_seer" && this.awakeActor(client) && this.powerOf(id) === "dragon") {
+    if (step === "witch_seer" && this.awakeActor(client) && ["dragon", "trickster"].includes(this.powerOf(id)!)) {
       this.awake.delete(id); // keeps his fire for another night
       return this.maybeEndWitchSeer();
     }
+    if (step === "green_wolf" && this.actorIs(client, "greenwolf")) return this.startRedWolfStep();
     if (step === "red_wolf" && this.actorIs(client, "redwolf")) return this.startWildHunterStep();
     if (step === "white_wolf" && this.actorIs(client, "whitewolf")) return this.startWolfPowersStep();
     if (step !== "wolf_powers" || !this.powerActors.has(id)) return;
@@ -934,6 +1002,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.canInvestigate(detective),
       dragon && !this.spent.has(dragon) ? dragon : undefined, // until he has burned someone
       this.dictatorToAsk(),
+      this.tricksterReady(),
     ];
     this.awake = new Set([...this.witchActors, ...others.filter((id): id is string => !!id)]);
     if (this.awake.size === 0) return this.resolveNight();
@@ -995,6 +1064,25 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   /** Once per game, any living player but himself; the death is revealed at dawn with the others. */
+  /** From night 2, once per game, with the seer and the witch. */
+  private tricksterReady(): string | undefined {
+    const trickster = this.activeWithRole("trickster");
+    return trickster && !this.spent.has(trickster) && this.state.dayNumber >= 2 ? trickster : undefined;
+  }
+
+  private handleTrick(client: Client, msg: { targetId: string }) {
+    const id = this.awakeActor(client);
+    const target = msg?.targetId;
+    if (!id || this.powerOf(id) !== "trickster" || this.spent.has(id)) return;
+    if (!this.isAlive(target) || target === id) return;
+    this.spent.add(id);
+    this.trickTarget = target;
+    this.sendRole(id);
+    this.logEvent("trick_chose", { name: this.nameOf(target) }, id);
+    this.awake.delete(id);
+    this.maybeEndWitchSeer();
+  }
+
   /** Each night until he strikes, the dictator says whether he'll use his power at daybreak. */
   private dictatorToAsk(): string | undefined {
     const dictator = this.activeWithRole("dictator");
@@ -1115,16 +1203,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.dragonTarget && this.isAlive(this.dragonTarget) && !deaths.has(this.dragonTarget)) {
       deaths.set(this.dragonTarget, "dragon");
     }
-    for (const [id, cause] of deaths) this.kill(id, cause);
-    this.morningNews();
-
     this.state.nightStep = "";
     this.state.nightRoles = "";
-    this.broadcast("night_result", { deaths: [...deaths.keys()], saved: this.reviving });
+    // The log reads: "Day N", "the village wakes up", then one line per death (who killed whom).
+    this.logEvent("day", { day: this.state.dayNumber });
+    this.logEvent("village_wakes", { deaths: deaths.size });
     if (this.reviving) this.logEvent("witch_saved");
-    this.logEvent("night_result", {
-      deaths: [...deaths].map(([id, cause]) => ({ name: this.nameOf(id), role: this.roles.get(id), cause })),
-    });
+    for (const [id, cause] of deaths) this.kill(id, cause);
+    this.morningNews();
+    this.broadcast("night_result", { deaths: [...deaths.keys()], saved: this.reviving });
     if (this.endGameIfOver()) return;
     // The village elects its mayor once, after the first night.
     this.afterDeaths(() => (this.mayorElected || !this.state.mayor ? this.startDay() : this.startMayorVote()));
@@ -1140,6 +1227,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     const turned = this.infectNow ? this.wolfTarget : null;
     if (turned && this.isAlive(turned)) {
+      this.infected.add(turned);
       this.clients.getById(turned)?.send("infected");
       this.logEvent("you_infected", {}, turned);
       for (const w of this.packIds()) {
@@ -1152,6 +1240,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.clients.getById(robbed)?.send("role_stolen");
       this.logEvent("role_stolen", {}, robbed);
       this.sendRole(robbed);
+    }
+    // The trickster shows his pick's real card to the whole village (and the infection, if any).
+    const tricked = this.trickTarget;
+    if (tricked && this.isAlive(tricked)) {
+      const p = this.state.players.get(tricked)!;
+      p.revealedRole = this.roles.get(tricked) ?? "";
+      p.infectedShown = this.infected.has(tricked);
+      this.logEvent("tricked", { name: p.name, role: p.revealedRole, infected: p.infectedShown });
     }
   }
 
@@ -1215,7 +1311,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.shooterId = "";
     if (target && this.isAlive(target)) {
       this.kill(target, "hunter");
-      this.logEvent("hunter_shot", { name: this.nameOf(target), role: this.roles.get(target) });
     }
     if (this.endGameIfOver()) return;
     this.afterDeaths(this.afterShot);
@@ -1257,8 +1352,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Daybreak: the bear sniffs, the dictator strikes if he said so last night, then the debate. */
   private startDay() {
-    this.logEvent("day", { day: this.state.dayNumber });
-    this.bearSniffs();
+    this.bearSniffs(); // ("Day N" was logged at dawn)
     const dictator = this.aliveWithRole("dictator");
     const armed = this.dictatorArmed && dictator && !this.spent.has(dictator);
     this.dictatorArmed = false;
@@ -1304,7 +1398,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // An enemy's real card is shown (an infected player's original role); an innocent shows a simple villager.
     const shown = guilty ? (this.roles.get(target) ?? "") : "villager";
     this.state.players.get(target)!.revealedRole = shown;
-    this.logEvent("barbe", { name: this.nameOf(target), role: shown, guilty });
+    if (!guilty) this.logEvent("barbe", { name: this.nameOf(target), role: shown, guilty });
     if (guilty) this.kill(target, "barbe");
     else this.kill(id, "barbe_fail");
     this.afterDayPower();
@@ -1318,7 +1412,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.spent.add(id);
     this.sendRole(id);
     const right = this.againstVillage(target);
-    this.logEvent("dictator", { name: this.nameOf(target), role: this.roles.get(target), right });
     this.kill(target, "dictator");
     if (right) {
       if (this.pendingSuccession === target) this.pendingSuccession = null; // the title goes to him
@@ -1380,6 +1473,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!this.isAlive(msg?.targetId)) return; // voting for yourself is allowed
     if (this.state.players.get(msg.targetId)?.silenced) return; // …and can't be voted against
     if (phase === "vote" && msg.targetId === this.state.spared) return; // the judge's revote spares him
+    if (voter.votedFor === msg.targetId) {
+      voter.votedFor = ""; // tapped again: vote taken back
+      return;
+    }
     voter.votedFor = msg.targetId;
 
     let voted = 0;
@@ -1439,7 +1536,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.voteHistory.push(record);
 
     this.broadcast("vote_result", { ...record, votes: bestCount, voters });
-    this.logEvent("vote_result", { name: this.nameOf(excluded), role: excluded ? this.roles.get(excluded) : null });
+    this.logEvent("vote_result", {
+      name: this.nameOf(excluded),
+      role: excluded ? this.roles.get(excluded) : null,
+      infected: !!excluded && this.infected.has(excluded),
+    });
     if (!this.endGameIfOver()) this.afterDeaths(() => this.startNight());
   }
 
@@ -1515,9 +1616,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!player?.alive) return;
     player.alive = false;
     player.revealedRole = this.roles.get(sessionId) ?? "";
+    const infected = this.infected.has(sessionId);
+    if (infected) player.infectedShown = true;
     const inPlay = cause !== "quit" && cause !== "timeout";
     const shooter = inPlay && this.isHunter(sessionId);
-    this.broadcast("death_reveal", { id: sessionId, name: player.name, role: player.revealedRole, cause, shooter });
+    this.broadcast("death_reveal", { id: sessionId, name: player.name, role: player.revealedRole, cause, shooter, infected });
+    // The vote and leaving have their own lines; every other death says who killed whom.
+    if (!["vote", "quit", "timeout"].includes(cause)) {
+      this.logEvent("death", { name: player.name, role: player.revealedRole, cause, infected });
+    }
     if (inPlay) this.revealsPending++;
     if (shooter) this.pendingShooters.push(sessionId);
     if (this.state.mayorId === sessionId) {
@@ -1527,7 +1634,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // A lover dies of a broken heart; the wild child's model's death turns him into a wolf.
     const partner = this.lovers?.find((id) => id !== sessionId && this.lovers!.includes(sessionId));
     if (partner && this.isAlive(partner)) {
-      this.logEvent("love_death", { name: this.nameOf(partner), role: this.roles.get(partner) });
       this.kill(partner, "love");
     }
     if (sessionId === this.wildModel) this.turnWildChild();
