@@ -1009,10 +1009,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.awake.size === 0) return this.resolveNight();
 
     this.state.nightStep = "witch_seer";
-    this.state.nightRoles = [...this.awake].map((id) => this.powerOf(id)).join(",");
+    // Who's awake is public (the seer, the witch…), except the trickster: nobody may know he woke.
+    const secret = (id: string) => this.powerOf(id) === "trickster";
+    this.state.nightRoles = [...this.awake].filter((id) => !secret(id)).map((id) => this.powerOf(id)).join(",");
     for (const id of this.awake) {
       const role = this.powerOf(id);
-      this.logEvent("step", role === "tripleface" ? { role, as: day === 1 ? "seer" : "witch" } : { role });
+      const step = role === "tripleface" ? { role, as: day === 1 ? "seer" : "witch" } : { role };
+      this.logEvent("step", step, secret(id) ? id : undefined); // his own line only for him
     }
     for (const id of this.witchActors) this.sendWitchTurn(id);
     this.setPhaseTimer(this.stepMs(), () => this.resolveNight());
