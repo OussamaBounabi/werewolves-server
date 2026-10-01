@@ -10,14 +10,15 @@ export const PlayerState = schema({
   votedFor: t.string().default(""), // day votes are public; cleared each vote phase
   revealedRole: t.string().default(""), // set when the player dies, or for everyone at game over
   silenced: t.boolean().default(false), // the black wolf's victim, for the day: no voice, no vote, can't be voted
+  voteBonus: t.number().default(0), // today: +2 from the raven, −2 from the owl (everyone sees it)
   infectedShown: t.boolean().default(false), // everyone knows he was infected (revealed by death or the trickster)
 });
 export type PlayerState = SchemaType<typeof PlayerState>;
 
 // Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "dictator" | "day" | "vote" |
-// "judge" | "gameover"
+// "judge" | "joker" | "gameover"
 // ("reveal": the apps play the death card reveals before the game moves on)
-// Night steps, in order: "cupid" + "lovers" + "wild_child" (night 1) | "green_wolf" + "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
+// Night steps, in order: "doubler" (until he copies) | "cupid" + "lovers" + "wild_child" (night 1) | "green_wolf" + "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
 // "white_wolf" (even nights) | "wolf_powers" (father / black / green wolves) | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
   // Room settings, editable by the host in the lobby. The room is named after its host.
@@ -53,6 +54,12 @@ export const WerewolfState = schema({
   dictator: t.boolean().default(false),
   judge: t.boolean().default(false),
   trickster: t.boolean().default(false),
+  fox: t.boolean().default(false),
+  ancient: t.boolean().default(false),
+  doubler: t.boolean().default(false),
+  joker: t.boolean().default(false),
+  raven: t.boolean().default(false),
+  owl: t.boolean().default(false),
 
   phase: t.string().default("lobby"),
   nightStep: t.string().default(""),
@@ -63,6 +70,7 @@ export const WerewolfState = schema({
   shooterAim: t.string().default(""), // who he's aiming at — public, like the day votes
   judgeTarget: t.string().default(""), // "judge" phase: the player the vote put out, while the (secret) judge decides
   spared: t.string().default(""), // the judge's revote: this player can't be voted this time
+  jokerId: t.string().default(""), // "joker" phase: the voted-out joker picking who dies in his place
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
   winner: t.string().default(""), // "werewolves" | "villagers" | "whitewolf" | "none" (room expired) | ""

@@ -794,4 +794,73 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.nightStep === "witch_seer");
     assert.ok(r.awake.has(seer.sessionId)); // she still wakes as the seer tonight
   });
+
+  // ---- fox, ancient, doubler, joker, raven, owl ----
+
+  const SIX_MORE = {
+    wolves: 1, villagers: 1, seer: true, witch: false, protector: false,
+    fox: true, ancient: true, doubler: true, joker: true, raven: true, owl: true, maxPlayers: 9,
+  };
+
+  it("the fox smells three neighbours; a clean smell costs him his nose", async () => {
+    const { room, byRole } = await startGame(SIX_MORE, 9);
+    const r = room as any;
+    const fox = byRole("fox");
+    const seats = [...room.state.players.keys()];
+    const wolfSeat = seats.indexOf(byRole("werewolf").sessionId);
+    const smell = async (target: string) => {
+      room.state.nightStep = "witch_seer";
+      r.awake = new Set([fox.sessionId, "someone"]);
+      const result = fox.waitForMessage("fox_result");
+      fox.send("fox_smell", { targetId: target });
+      return (await result) as any;
+    };
+    const nextToWolf = seats[(wolfSeat + 1) % seats.length];
+    if (nextToWolf !== fox.sessionId) {
+      const near = await smell(nextToWolf);
+      assert.ok(near.wolf && near.ids.length === 3);
+      assert.ok(!r.spent.has(fox.sessionId)); // a wolf found: he keeps his power
+    }
+    // Far from the wolf (3 seats away): clean, and he loses his power.
+    const far = seats[(wolfSeat + 3) % seats.length];
+    if (far !== fox.sessionId && !r.isPack(far)) {
+      const clean = await smell(far);
+      if (!clean.wolf) assert.ok(r.spent.has(fox.sessionId));
+    }
+  });
+
+  it("the ancient survives one wolf attack; killed by the vote, the village loses its powers", async () => {
+    const { room, byRole } = await startGame(SIX_MORE, 9);
+    const r = room as any;
+    const [ancient, wolf, seer] = [byRole("ancient"), byRole("werewolf"), byRole("seer")];
+    r.wolfTarget = ancient.sessionId;
+    r.wolfVotes = new Map([[wolf.sessionId, ancient.sessionId]]);
+    r.finishWolfPowers();
+    assert.strictEqual(r.wolfVictim, null); // first attack: he survives
+    assert.ok(r.ancientUsed.has(ancient.sessionId));
+    r.kill(ancient.sessionId, "vote");
+    assert.strictEqual(r.powerOf(seer.sessionId), "villager"); // the seer's power is gone…
+    assert.strictEqual(r.roles.get(seer.sessionId), "seer"); // …but she's still the seer
+  });
+
+  it("the doubler copies a role; the joker sends someone else to die; the raven's +2 counts", async () => {
+    const { room, clients, byRole } = await startGame(SIX_MORE, 9);
+    const r = room as any;
+    const [doubler, seer] = [byRole("doubler"), byRole("seer")];
+    room.state.nightStep = "doubler";
+    const copied = doubler.waitForMessage("doubler_result");
+    doubler.send("copy", { targetId: seer.sessionId });
+    assert.strictEqual(((await copied) as any).role, "seer");
+    assert.strictEqual(r.powerOf(doubler.sessionId), "seer");
+
+    const [joker, raven] = [byRole("joker"), byRole("raven")];
+    room.state.players.get(joker.sessionId)!.voteBonus = 2; // the raven marked him
+    assert.deepStrictEqual(r.withMarks([]), [joker.sessionId, joker.sessionId]);
+    r.finishVote(joker.sessionId, [joker.sessionId]);
+    assert.strictEqual(room.state.phase, "joker");
+    joker.send("joker_pick", { targetId: raven.sessionId });
+    await waitFor(() => room.state.players.get(raven.sessionId)?.alive === false);
+    assert.strictEqual(room.state.players.get(joker.sessionId)?.alive, true);
+    assert.ok(clients.length === 9);
+  });
 });
