@@ -80,6 +80,8 @@ const DEAL_MS = 3_500; // the app's role-card deal animation, on top of night 1'
 const REVEAL_MS = 4_500; // the app's card reveal for one death; the game waits for them before moving on
 const LOVERS_MS = 5_000; // night 1: the lovers open their eyes and see each other
 const JUDGE_MS = 10_000; // after a vote puts someone out: the judge may order a new vote
+const REVOTE_MS = 60_000; // the judge's revote: a one-minute day
+const SHRINK_MS = 30_000; // all voters but one have voted: the day ends in 30 seconds
 
 export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }> {
   maxClients = MAX_CONNECTIONS;
@@ -151,6 +153,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private wildModel: string | null = null; // the wild child's model
   private wildTurned: string | null = null; // the wild child, once his model died: a wolf now
   private pendingVote: string[] = []; // the ballots, while the judge decides
+  private dayShrunk = false; // today's time already dropped to 30s
   private dictatorArmed = false; // he said yes last night: his moment comes at daybreak
   private ancientUsed = new Set<string>(); // ancients who already survived a wolf attack
   private villageDisabled = false; // the ancient died by the village's hand: no village powers any more
@@ -440,6 +443,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const player = this.state.players.get(client.sessionId);
     if (player) player.connected = false;
     this.dropped.add(client.sessionId);
+    this.maybeShrinkDay(); // he no longer counts among today's voters
     const seat = this.allowReconnection(client, RECONNECT_SECONDS);
     this.heldSeats.set(client.sessionId, seat);
     // Rejects when the seat expires (onLeave then runs), on a kick, or if the client never finished joining.
@@ -1545,9 +1549,27 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     });
   }
 
-  private openDebate() {
+  /** The day: players debate and vote at the same time; the vote is counted when the time runs out. */
+  private openDebate(ms = this.state.roundSeconds * 1000) {
     this.state.phase = "day";
-    this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.startVote());
+    this.clearVotes();
+    this.dayShrunk = false;
+    this.setPhaseTimer(ms, () => this.resolveVote());
+  }
+
+  /** Living, connected players who may vote today (the silenced can't). */
+  private eligibleVoters() {
+    return [...this.state.players.values()].filter((p) => p.alive && p.connected && !p.silenced);
+  }
+
+  /** Once all of them but one have voted, the day's remaining time drops to 30 seconds (if it was longer). */
+  private maybeShrinkDay() {
+    if (this.state.phase !== "day" || this.dayShrunk) return;
+    const voters = this.eligibleVoters();
+    if (voters.filter((p) => p.votedFor).length < voters.length - 1) return;
+    if (this.state.phaseEndsAt - Date.now() <= SHRINK_MS) return;
+    this.dayShrunk = true; // stays at 30s even if someone takes his vote back
+    this.setPhaseTimer(SHRINK_MS, () => this.resolveVote());
   }
 
   /** A living player using his one-shot day power ([role]) during the discussion. */
@@ -1606,8 +1628,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.endGameIfOver()) return;
     const left = Math.max(10_000, this.state.phaseEndsAt - Date.now());
     this.afterDeaths(() => {
-      this.state.phase = "day";
-      this.setPhaseTimer(left, () => this.startVote());
+      this.state.phase = "day"; // the votes already cast stay
+      this.setPhaseTimer(left, () => this.resolveVote());
     });
   }
 
@@ -1620,13 +1642,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const n = seats.length;
     const neighbours = [seats[(i + 1) % n], seats[(i - 1 + n) % n]];
     if (neighbours.some((id) => id !== bear && this.isPack(id))) this.logEvent("bear_roar");
-  }
-
-  private startVote() {
-    this.state.phase = "vote";
-    this.clearVotes();
-    this.logEvent("vote_start");
-    this.setPhaseTimer(this.stepMs(), () => this.resolveVote());
   }
 
   private clearVotes() {
@@ -1645,17 +1660,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private handleDayVote(client: Client, msg: { targetId: string }) {
     const phase = this.state.phase;
-    if (phase !== "vote" && phase !== "mayor") return;
+    if (phase !== "day" && phase !== "mayor") return;
     const voter = this.state.players.get(client.sessionId);
     if (!voter?.alive || voter.silenced) return; // the black wolf's victim doesn't vote today…
     if (!this.isAlive(msg?.targetId)) return; // voting for yourself is allowed
     if (this.state.players.get(msg.targetId)?.silenced) return; // …and can't be voted against
-    if (phase === "vote" && msg.targetId === this.state.spared) return; // the judge's revote spares him
+    if (phase === "day" && msg.targetId === this.state.spared) return; // the judge's revote spares him
     if (voter.votedFor === msg.targetId) {
       voter.votedFor = ""; // tapped again: vote taken back
       return;
     }
     voter.votedFor = msg.targetId;
+    if (phase === "day") return this.maybeShrinkDay(); // the day's vote is counted when its time ends
 
     let voted = 0;
     let voters = 0;
@@ -1665,8 +1681,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (p.votedFor) voted++;
     }
     if (voted < voters) return;
-    if (phase === "mayor") this.resolveMayor();
-    else this.resolveVote();
+    this.resolveMayor();
   }
 
   /** A vote that puts someone out first gives the (secret) judge a few seconds to order a new one. */
@@ -1694,10 +1709,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.sendRole(id);
     this.state.judgeTarget = "";
     this.state.spared = target; // the new vote is final, and can't put him out
-    this.state.phase = "vote";
-    this.clearVotes();
     this.logEvent("judge_revote", { name: this.nameOf(target) });
-    this.setPhaseTimer(this.stepMs(), () => this.resolveVote());
+    this.openDebate(REVOTE_MS); // a short day: talk and vote again
   }
 
   /** The raven's +2 and the owl's −2 (never below zero) added to the ballots. */
@@ -1852,6 +1865,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.state.mayorId = "";
       this.pendingSuccession = sessionId;
     }
+    for (const p of this.state.players.values()) if (p.votedFor === sessionId) p.votedFor = ""; // no votes for the dead
     // A lover dies of a broken heart; the wild child's model's death turns him into a wolf.
     const partner = this.lovers?.find((id) => id !== sessionId && this.lovers!.includes(sessionId));
     if (partner && this.isAlive(partner)) {
@@ -1938,7 +1952,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const wolf = this.isPack(id);
       return { talk: wolf, hear: wolf };
     }
-    return { talk: phase !== "vote" && phase !== "mayor" && phase !== "judge" && phase !== "dictator" && phase !== "joker" && !player.silenced, hear: true };
+    return { talk: phase !== "mayor" && phase !== "judge" && phase !== "dictator" && phase !== "joker" && !player.silenced, hear: true };
   }
 
   private gameRunning() {

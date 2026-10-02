@@ -252,8 +252,8 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(await elected, { mayorId: villager.sessionId });
     assert.strictEqual(room.state.mayorId, villager.sessionId);
 
-    await waitFor(() => room.state.phase === "vote", STEP);
-    const result = villager.waitForMessage("vote_result");
+    await waitFor(() => room.state.phase === "day", STEP);
+    const result = villager.waitForMessage("vote_result", STEP); // counted when the day ends
     villager.send("day_vote", { targetId: wolf.sessionId }); // mayor: 2 votes
     seer.send("day_vote", { targetId: witch.sessionId });
     witch.send("day_vote", { targetId: protector.sessionId });
@@ -293,7 +293,7 @@ describe("WerewolfRoom", () => {
     };
     // A day whose vote is a 2–2 tie (nobody votes in the mayor election, so there's no mayor): nobody goes out.
     const quietDay = async () => {
-      await waitFor(() => room.state.phase === "vote", 60_000);
+      await waitFor(() => room.state.phase === "day", 60_000);
       protector.send("day_vote", { targetId: villagerA.sessionId });
       seer.send("day_vote", { targetId: villagerA.sessionId });
       villagerA.send("day_vote", { targetId: villagerB.sessionId });
@@ -331,9 +331,9 @@ describe("WerewolfRoom", () => {
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId });
     await waitFor(() => room.state.mayorId === mayor.sessionId);
 
-    await waitFor(() => room.state.phase === "vote", STEP);
+    await waitFor(() => room.state.phase === "day", STEP);
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId }); // the village votes its mayor out
-    await waitFor(() => room.state.phase === "reveal"); // his card reveal plays first…
+    await waitFor(() => room.state.phase === "reveal", STEP); // the day ends, his card reveal plays first…
     await waitFor(() => room.state.phase === "succession", 6_000); // …then his 10s to name a successor
     assert.strictEqual(room.state.successionFrom, mayor.sessionId);
 
@@ -465,8 +465,8 @@ describe("WerewolfRoom", () => {
 
     room.state.phase = "day";
     assert.deepStrictEqual(rights(seer), { talk: true, hear: true });
-    room.state.phase = "vote";
-    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // votes: mics off
+    room.state.phase = "mayor";
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the mayor election: mics off
     room.state.phase = "day";
     room.state.players.get(seer.sessionId)!.alive = false;
     assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen
@@ -566,7 +566,7 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(muted.sessionId)?.silenced, true);
 
     // The silenced player can't vote, and nobody can vote against him.
-    r.state.phase = "vote";
+    r.state.phase = "day";
     muted.send("day_vote", { targetId: wolf.sessionId });
     wolf.send("day_vote", { targetId: muted.sessionId });
     await new Promise((res) => setTimeout(res, 150));
@@ -691,13 +691,13 @@ describe("WerewolfRoom", () => {
     const { room, clients, byRole } = await startGame(SIX, 8);
     const r = room as any;
     const [judge, target] = [byRole("judge"), byRole("villager")];
-    room.state.phase = "vote";
+    room.state.phase = "day";
     for (const p of room.state.players.values()) p.votedFor = target.sessionId;
     r.resolveVote();
     assert.strictEqual(room.state.phase, "judge");
     assert.strictEqual(room.state.judgeTarget, target.sessionId);
     judge.send("judge", { revote: true });
-    await waitFor(() => room.state.phase === "vote");
+    await waitFor(() => room.state.phase === "day");
     assert.strictEqual(room.state.spared, target.sessionId);
     clients[0].send("day_vote", { targetId: target.sessionId });
     await new Promise((res) => setTimeout(res, 150));
@@ -741,7 +741,7 @@ describe("WerewolfRoom", () => {
     const { room, clients, byRole } = await startGame({ ...SIX, trickster: true, maxPlayers: 9 }, 9);
     const r = room as any;
     const [a, b] = clients;
-    room.state.phase = "vote";
+    room.state.phase = "day";
     a.send("day_vote", { targetId: b.sessionId });
     await waitFor(() => room.state.players.get(a.sessionId)?.votedFor === b.sessionId);
     a.send("day_vote", { targetId: b.sessionId });
@@ -869,5 +869,18 @@ describe("WerewolfRoom", () => {
     await colyseus.connectTo(room);
     await assert.rejects(colyseus.connectTo(room, { admin: true, idToken: "not-an-admin" }), /admin/);
     assert.strictEqual(room.state.spectators, 0);
+  });
+
+  it("votes happen during the day; all voters but one cut the day to 30 seconds", async () => {
+    const { room, clients } = await startGame({ ...ONE_OF_EACH, roundSeconds: 300 });
+    const r = room as any;
+    r.openDebate(); // a 5-minute day
+    const voters = clients.filter((c: any) => room.state.players.get(c.sessionId)?.alive);
+    for (const c of voters.slice(0, voters.length - 2)) c.send("day_vote", { targetId: voters[0].sessionId });
+    await new Promise((res) => setTimeout(res, 200));
+    assert.ok(room.state.phaseEndsAt - Date.now() > 60_000); // not yet
+    voters[voters.length - 2].send("day_vote", { targetId: voters[0].sessionId }); // all but one
+    await waitFor(() => room.state.phaseEndsAt - Date.now() <= 30_000);
+    assert.strictEqual(room.state.phase, "day");
   });
 });
