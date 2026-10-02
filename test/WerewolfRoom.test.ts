@@ -863,4 +863,11 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(joker.sessionId)?.alive, true);
     assert.ok(clients.length === 9);
   });
+
+  it("god view is for admins only", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    await colyseus.connectTo(room);
+    await assert.rejects(colyseus.connectTo(room, { admin: true, idToken: "not-an-admin" }), /admin/);
+    assert.strictEqual(room.state.spectators, 0);
+  });
 });

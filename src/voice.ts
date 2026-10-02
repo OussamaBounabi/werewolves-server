@@ -23,7 +23,14 @@ export type VoiceRights = { talk: boolean; hear: boolean };
 const voiceRoom = (roomId: string, grave = false) => `werewolf-${roomId}${grave ? "-grave" : ""}`;
 
 /** A token to join the room's voice, with the rights of the moment. [identity] = the game sessionId. */
-export async function voiceToken(roomId: string, identity: string, name: string, rights: VoiceRights, grave = false) {
+export async function voiceToken(
+  roomId: string,
+  identity: string,
+  name: string,
+  rights: VoiceRights,
+  grave = false,
+  hidden = false, // an admin listening: invisible to the other participants
+) {
   const token = new AccessToken(key, secret, { identity, name, ttl: "4h" });
   token.addGrant({
     room: voiceRoom(roomId, grave),
@@ -31,6 +38,7 @@ export async function voiceToken(roomId: string, identity: string, name: string,
     canPublish: rights.talk,
     canSubscribe: rights.hear,
     canPublishData: false,
+    hidden,
   });
   return { url, token: await token.toJwt() };
 }

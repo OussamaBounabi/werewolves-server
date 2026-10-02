@@ -1,7 +1,7 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
-import { accountFor, firebaseEnabled, isFriendOfAny, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
+import { accountFor, firebaseEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
 
 const SPECIALS = [
   "seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface",
@@ -11,8 +11,11 @@ const SPECIALS = [
 ] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
-type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type JoinOptions = { name?: string; playerId?: string; spectator?: boolean; idToken?: string };
+type Meta = {
+  host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number;
+  phase: string; day: number;
+};
+type JoinOptions = { name?: string; playerId?: string; spectator?: boolean; idToken?: string; admin?: boolean };
 type VoteRecord = { day: number; excluded: string | null; ballots: Record<string, string>; mayorId: string };
 /** One line of the event log; clients render it in their language from [type] and its params. */
 type GameEvent = { seq: number; time: number; type: string; [param: string]: unknown };
@@ -93,6 +96,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
   private banned = new Set<string>(); // player ids kicked by the current host
   private spectators = new Set<string>(); // sessionIds watching, not playing
+  private admins = new Set<string>(); // god view: invisible, see every role and secret, hear everyone
+  private lastGod = "";
   private dropped = new Set<string>(); // players whose connection dropped (seat held)
   private heldSeats = new Map<string, { reject: Function }>(); // pending reconnections (Colyseus Deferred)
   private voteHistory: VoteRecord[] = [];
@@ -159,6 +164,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
   onBeforePatch() {
     this.syncVoice();
+    this.sendGod();
     const snapshot = this.state.toJSON();
     const json = JSON.stringify(snapshot);
     if (json === this.lastSnapshot) return;
@@ -219,7 +225,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    * Runs when the client's socket connects (not on reconnects): the player's account (from his app's
    * Firebase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
    */
-  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null }> {
+  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null; admin?: boolean }> {
+    // God view: the admin app's login, any room, any phase, invisible.
+    if (options.admin) {
+      if (!options.idToken || !(await isAdmin(String(options.idToken)))) throw new ServerError(4403, "admin");
+      return { account: null, admin: true };
+    }
     // ponytail: guests (no token) are still allowed, for the bots and tests; require a token for release.
     let account: Account | null = null;
     if (options.idToken && firebaseEnabled) {
@@ -255,6 +266,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    if (client.auth?.admin) {
+      this.admins.add(client.sessionId);
+      this.sendGodHistory(client);
+      this.lastGod = ""; // send him the god state with the next patch
+      return; // not a player, not a spectator, not in the listing
+    }
     this.sendHistory(client);
     const uid: string | undefined = client.auth?.account?.uid;
     if (uid) {
@@ -360,6 +377,47 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!this.privateLogs.has(onlyFor)) this.privateLogs.set(onlyFor, []);
     this.privateLogs.get(onlyFor)!.push(event);
     this.clients.getById(onlyFor)?.send("event", event);
+    for (const admin of this.admins) this.clients.getById(admin)?.send("event", { ...event, for: this.nameOf(onlyFor) });
+  }
+
+  /** God view: the whole log (every player's private lines, tagged) and both chats. */
+  private sendGodHistory(client: Client) {
+    const all = [...this.publicLog];
+    for (const [id, events] of this.privateLogs) for (const e of events) all.push({ ...e, for: this.nameOf(id) });
+    client.send("events", all.sort((a, b) => a.seq - b.seq));
+    client.send("chat_history", [...this.chatLog, ...this.wolfChatLog]);
+    client.send("vote_history", this.voteHistory);
+  }
+
+  /** God view: every player's role and the night's secrets, sent to admins when it changes. */
+  private sendGod() {
+    if (this.admins.size === 0) return;
+    const god = {
+      roles: Object.fromEntries(this.roles),
+      powers: Object.fromEntries([...this.roles.keys()].map((id) => [id, this.powerOf(id)])),
+      pack: this.packIds(),
+      infected: [...this.infected],
+      lovers: this.lovers ?? [],
+      wildModel: this.wildModel,
+      wolfVotes: Object.fromEntries(this.wolfVotes),
+      night: {
+        protect: this.protectTarget,
+        trap: this.trapTarget,
+        paralysed: this.paralysed,
+        silence: this.silenceTarget,
+        white: this.whiteTarget,
+        dragon: this.dragonTarget,
+        poisons: Object.fromEntries(this.poisons),
+        reviving: this.reviving,
+        raven: this.ravenTarget,
+        owl: this.owlTarget,
+      },
+      villageDisabled: this.villageDisabled,
+    };
+    const json = JSON.stringify(god);
+    if (json === this.lastGod) return;
+    this.lastGod = json;
+    for (const admin of this.admins) this.clients.getById(admin)?.send("god", god);
   }
 
   /** Everything a (re)joining app needs to rebuild its screens: event log, chat, vote history. */
@@ -419,6 +477,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onLeave(client: Client) {
     const id = client.sessionId;
+    if (this.admins.delete(id)) {
+      if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
+      this.graveSent.delete(id);
+      return;
+    }
     this.clearRoomOf(id);
     if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
     this.graveSent.delete(id);
@@ -500,6 +563,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         players: this.state.players.size,
         maxPlayers: this.state.maxPlayers,
         spectators: this.spectators.size,
+        phase: this.state.phase,
+        day: this.state.dayNumber,
       },
     });
   }
@@ -1717,7 +1782,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // At night only the pack talks, and only to itself.
     if (!this.isPack(client.sessionId)) return;
     this.wolfChatLog.push(payload);
-    for (const id of this.packIds()) this.clients.getById(id)?.send("chat", payload);
+    for (const id of [...this.packIds(), ...this.admins]) this.clients.getById(id)?.send("chat", payload);
   }
 
   // ---- shared helpers ----
@@ -1861,6 +1926,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    * talk. The dead listen (they talk in the graveyard); spectators too, except at night.
    */
   private voiceRightsOf(id: string): VoiceRights {
+    if (this.admins.has(id)) return { talk: false, hear: true };
     const phase = this.state.phase;
     const night = phase === "night";
     if (this.spectators.has(id)) return { talk: false, hear: !night };
@@ -1882,6 +1948,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Out of the game (dead, or watching) while it runs: he gets the graveyard voice room. */
   private inGraveyard(id: string) {
+    if (this.admins.has(id)) return this.gameRunning();
     return this.gameRunning() && (this.spectators.has(id) || this.state.players.get(id)?.alive === false);
   }
 
@@ -1890,7 +1957,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private async sendGraveyard(id: string) {
     this.graveSent.add(id);
     const name = this.state.players.get(id)?.name ?? "spectator";
-    const access = await voiceToken(this.roomId, id, name, { talk: true, hear: true }, true);
+    const admin = this.admins.has(id);
+    const access = await voiceToken(this.roomId, id, name, { talk: !admin, hear: true }, true, admin);
     this.clients.getById(id)?.send("voice_grave", access);
   }
 
@@ -1900,7 +1968,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const rights = this.voiceRightsOf(id);
     this.voiceRights.set(id, `${rights.talk},${rights.hear}`);
     const name = this.state.players.get(id)?.name ?? "spectator";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, id, name, rights)) });
+    const hidden = this.admins.has(id);
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, id, name, rights, false, hidden)) });
   }
 
   /** Runs before each patch: pushes changed rights to LiveKit (only when they change). */

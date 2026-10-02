@@ -12,7 +12,7 @@ import {
  * Import your Room files
  */
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
-import { claimMission, ClaimError } from "./firebase.js";
+import { claimMission, ClaimError, isAdmin } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -71,6 +71,16 @@ const server = defineServer({
       } catch (e) {
         throw ctx.error(e instanceof ClaimError ? 409 : 401, { error: (e as Error).message });
       }
+    }),
+    // Admins only (Authorization: Bearer <ID token>): every room, private ones included.
+    api_admin_rooms: createEndpoint("/api/admin/rooms", { method: "GET" }, async (ctx) => {
+      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
+      if (!(await isAdmin(token))) throw ctx.error(403, { error: "admins only" });
+      return (await matchMaker.query({ name: "werewolf" })).map((r) => ({
+        ...roomInfo(r),
+        phase: r.metadata?.phase ?? "",
+        day: r.metadata?.day ?? 0,
+      }));
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
     api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {

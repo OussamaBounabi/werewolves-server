@@ -32,6 +32,20 @@ export async function accountFor(idToken: string): Promise<Account> {
   return { uid, name: String(profile.name ?? profile.username), avatar: Number(profile.avatar) || 0 };
 }
 
+/** Whether this login token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
+export async function isAdmin(idToken: string): Promise<boolean> {
+  const adminEmails = new Set(
+    (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
+  );
+  if (!app || adminEmails.size === 0) return false;
+  try {
+    const { email } = await getAuth(app).verifyIdToken(idToken);
+    return !!email && adminEmails.has(email.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export type GameResult = {
   uid: string;
   role: string;
