@@ -1515,16 +1515,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // ---- mayor election, day discussion, exclusion vote ----
 
+  /** The mayor election is a whole day after night 1: talk and vote, same length and rules as any day. */
   private startMayorVote() {
     this.state.phase = "mayor";
     this.clearVotes();
+    this.dayShrunk = false;
     this.logEvent("mayor_election");
-    this.setPhaseTimer(this.stepMs(), () => this.resolveMayor());
+    this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.resolveMayor());
   }
 
   private resolveMayor() {
-    const top = topCandidates(this.aliveVotes(1));
-    const mayor = top.length ? top[Math.floor(Math.random() * top.length)] : ""; // ties are drawn at random
+    const mayor = topVoted(this.aliveVotes(1)) ?? ""; // a tie (or no vote): no mayor
     this.state.mayorId = mayor;
     this.mayorElected = true;
     this.broadcast("mayor_result", { mayorId: mayor || null });
@@ -1562,14 +1563,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return [...this.state.players.values()].filter((p) => p.alive && p.connected && !p.silenced);
   }
 
-  /** Once all of them but one have voted, the day's remaining time drops to 30 seconds (if it was longer). */
+  /** Once all of them but one have voted, the day's (or election day's) time drops to 30 seconds (if it was longer). */
   private maybeShrinkDay() {
-    if (this.state.phase !== "day" || this.dayShrunk) return;
+    if ((this.state.phase !== "day" && this.state.phase !== "mayor") || this.dayShrunk) return;
     const voters = this.eligibleVoters();
     if (voters.filter((p) => p.votedFor).length < voters.length - 1) return;
     if (this.state.phaseEndsAt - Date.now() <= SHRINK_MS) return;
     this.dayShrunk = true; // stays at 30s even if someone takes his vote back
-    this.setPhaseTimer(SHRINK_MS, () => this.resolveVote());
+    const phase = this.state.phase;
+    this.setPhaseTimer(SHRINK_MS, () => (phase === "mayor" ? this.resolveMayor() : this.resolveVote()));
   }
 
   /** A living player using his one-shot day power ([role]) during the discussion. */
@@ -1671,17 +1673,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       return;
     }
     voter.votedFor = msg.targetId;
-    if (phase === "day") return this.maybeShrinkDay(); // the day's vote is counted when its time ends
-
-    let voted = 0;
-    let voters = 0;
-    for (const p of this.state.players.values()) {
-      if (!p.alive || p.silenced) continue;
-      voters++;
-      if (p.votedFor) voted++;
-    }
-    if (voted < voters) return;
-    this.resolveMayor();
+    this.maybeShrinkDay(); // the vote is counted when the day's time ends
   }
 
   /** A vote that puts someone out first gives the (secret) judge a few seconds to order a new one. */
@@ -1952,7 +1944,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const wolf = this.isPack(id);
       return { talk: wolf, hear: wolf };
     }
-    return { talk: phase !== "mayor" && phase !== "judge" && phase !== "dictator" && phase !== "joker" && !player.silenced, hear: true };
+    return { talk: phase !== "judge" && phase !== "dictator" && phase !== "joker" && !player.silenced, hear: true };
   }
 
   private gameRunning() {

@@ -247,7 +247,7 @@ describe("WerewolfRoom", () => {
     witch.send("witch_pass");
     await waitFor(() => room.state.phase === "mayor");
 
-    const elected = villager.waitForMessage("mayor_result");
+    const elected = villager.waitForMessage("mayor_result", STEP); // at the end of the election day
     for (const c of [wolf, witch, seer, villager, protector]) c.send("day_vote", { targetId: villager.sessionId });
     assert.deepStrictEqual(await elected, { mayorId: villager.sessionId });
     assert.strictEqual(room.state.mayorId, villager.sessionId);
@@ -314,7 +314,7 @@ describe("WerewolfRoom", () => {
   });
 
   it("lets a dead mayor name his successor", async function () {
-    this.timeout(45_000);
+    this.timeout(90_000); // the election is a whole day before day 1
     const { room, clients, roles, byRole } = await startGame({ ...ONE_OF_EACH, villagers: 2, protector: false });
     const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
     const [mayor, heir] = clients.filter((_, i) => roles[i] === "villager");
@@ -329,7 +329,7 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.phase === "mayor");
 
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId });
-    await waitFor(() => room.state.mayorId === mayor.sessionId);
+    await waitFor(() => room.state.mayorId === mayor.sessionId, STEP); // at the end of the election day
 
     await waitFor(() => room.state.phase === "day", STEP);
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId }); // the village votes its mayor out
@@ -412,7 +412,7 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.phase === "mayor");
     assert.ok([...room.state.players.values()].every((p) => p.alive)); // Red Hood survived
     for (const c of clients) c.send("day_vote", { targetId: wolf.sessionId });
-    await waitFor(() => room.state.phase === "day");
+    await waitFor(() => room.state.phase === "day", 2 * STEP); // after the election day
 
     const bear = roles.indexOf("bear");
     const n = roles.length;
@@ -465,8 +465,8 @@ describe("WerewolfRoom", () => {
 
     room.state.phase = "day";
     assert.deepStrictEqual(rights(seer), { talk: true, hear: true });
-    room.state.phase = "mayor";
-    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the mayor election: mics off
+    room.state.phase = "judge";
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the judge deciding: mics off
     room.state.phase = "day";
     room.state.players.get(seer.sessionId)!.alive = false;
     assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen
@@ -882,5 +882,18 @@ describe("WerewolfRoom", () => {
     voters[voters.length - 2].send("day_vote", { targetId: voters[0].sessionId }); // all but one
     await waitFor(() => room.state.phaseEndsAt - Date.now() <= 30_000);
     assert.strictEqual(room.state.phase, "day");
+  });
+
+  it("the mayor election is a whole day; a tie leaves the village without a mayor", async () => {
+    const { room, clients } = await startGame({ ...ONE_OF_EACH, roundSeconds: 300 });
+    const r = room as any;
+    r.startMayorVote();
+    assert.ok(room.state.phaseEndsAt - Date.now() > 250_000); // as long as a day
+    const [a, b] = clients;
+    a.send("day_vote", { targetId: b.sessionId });
+    b.send("day_vote", { targetId: a.sessionId });
+    await waitFor(() => room.state.players.get(b.sessionId)?.votedFor === a.sessionId);
+    r.resolveMayor();
+    assert.strictEqual(room.state.mayorId, ""); // 1–1: no mayor
   });
 });
