@@ -12,6 +12,7 @@ import {
  * Import your Room files
  */
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
+import { RummyRoom } from "./rooms/RummyRoom.js";
 import { claimMission, ClaimError, isAdmin } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -27,6 +28,12 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
   };
 }
 
+async function publicRooms(name: string) {
+  return (await matchMaker.query({ name }))
+    .filter((r) => !r.private && !r.unlisted && (r.metadata?.roomType ?? "public") === "public")
+    .map(roomInfo);
+}
+
 const server = defineServer({
 
   /**
@@ -34,6 +41,7 @@ const server = defineServer({
    */
   rooms: {
     werewolf: defineRoom(WerewolfRoom),
+    rummy: defineRoom(RummyRoom),
   },
 
   /**
@@ -45,12 +53,8 @@ const server = defineServer({
    */
   routes: createRouter({
     // The room list: public rooms only (friends/private rooms are reached by invite or through a friend).
-    api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => {
-      const rooms = await matchMaker.query({ name: "werewolf" });
-      return rooms
-        .filter((r) => !r.private && !r.unlisted && (r.metadata?.roomType ?? "public") === "public")
-        .map(roomInfo);
-    }),
+    api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => publicRooms("werewolf")),
+    api_rummy_rooms: createEndpoint("/api/rummy/rooms", { method: "GET" }, async () => publicRooms("rummy")),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
@@ -84,8 +88,8 @@ const server = defineServer({
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
     api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {
-      const [room] = await matchMaker.query({ name: "werewolf", roomId: ctx.params.roomId });
-      return room ? { found: true, ...roomInfo(room) } : { found: false };
+      const [room] = await matchMaker.query({ roomId: ctx.params.roomId });
+      return room ? { found: true, game: room.name, ...roomInfo(room) } : { found: false };
     }),
   }),
 
