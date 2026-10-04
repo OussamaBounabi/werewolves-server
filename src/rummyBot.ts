@@ -1,4 +1,6 @@
-import { isJoker, jokerFits, layError, meldOf, openingError, rankOf, suitOf, type Meld, type MeldKind, type Rules } from "./rummy.js";
+import {
+  isJoker, jokerFits, layError, meldOf, openingError, rankOf, suitOf, teamLayError, type Meld, type MeldKind, type Rules,
+} from "./rummy.js";
 
 /**
  * The rummy bot's brain: pure functions from what a seat sees to what it does this turn.
@@ -15,6 +17,8 @@ export type TableMeld = { id: number; owner: string; kind: MeldKind; cards: numb
 export type BotView = {
   level: BotLevel;
   me: string; // its seat (whose melds are its own)
+  partner: string | null; // 2 vs 2: its partner (his melds count as its own)
+  partnerOpened: boolean; // 2 vs 2: its partner opened, it hasn't: it lays under the team rules, no points
   rules: Rules;
   hand: number[];
   opened: boolean;
@@ -128,7 +132,7 @@ function cardsOf(combo: Combo, pool: number[], taken: number | null): number[][]
 function addsFor(pool: number[], table: TableMeld[], keep: number, jokersToo: boolean, view: BotView) {
   const adds: { meldId: number; cards: number[] }[] = [];
   const fits = (m: TableMeld, card: number) => {
-    if (!view.rules.addToOthers && m.owner !== view.me) return false;
+    if (!view.rules.addToOthers && m.owner !== view.me && m.owner !== view.partner) return false;
     const grown = meldOf([...m.cards, card]);
     return grown?.kind === m.kind && !(view.rules.oneJoker && grown.cards.filter(isJoker).length > 1);
   };
@@ -154,7 +158,7 @@ export function planTurn(view: BotView): BotPlan | null {
   let hand = [...view.hand];
   const swaps: BotPlan["swaps"] = [];
   // Real cards from the hand take the jokers' places on the table: free jokers.
-  if (view.opened && !easy && view.taken === null && view.rules.jokerSwap) {
+  if ((view.opened || view.partnerOpened) && !easy && view.taken === null && view.rules.jokerSwap) {
     for (const meld of table) {
       for (let i = 0; i < meld.cards.length; i++) {
         const card = hand.find((c) => jokerFits(meld, i, c));
@@ -168,6 +172,7 @@ export function planTurn(view: BotView): BotPlan | null {
   // Opening: the table's rules (points, a real run), and maybe the taken card in it.
   const opens = (c: Combo) =>
     view.opened ||
+    (view.partnerOpened && (c.used === 0 || !teamLayError(c.cands.map((x) => x.meld), view.rules))) ||
     (!openingError(c.cands.map((x) => x.meld), view.threshold, view.rules) &&
       (!view.rules.openWithDiscard || (view.taken !== null && usesTaken(view.taken, comboCards(c, view.taken)))));
   const moreCards = (a: Combo, b: Combo) => a.used > b.used || (a.used === b.used && a.jokers < b.jokers);
@@ -182,7 +187,7 @@ export function planTurn(view: BotView): BotPlan | null {
     const pool = [...rest];
     const lay = cardsOf(combo, pool, view.taken);
     const tableAfter = table.map((m) => ({ ...m, cards: [...m.cards] }));
-    const adds = combo.used > 0 || view.opened ? addsFor(pool, tableAfter, 0, true, view) : [];
+    const adds = combo.used > 0 || view.opened || view.partnerOpened ? addsFor(pool, tableAfter, 0, true, view) : [];
     if (pool.length > 0) continue;
     const down = [...lay.flat(), ...adds.flatMap((a) => a.cards)];
     if (!usesTaken(view.taken, down) && !(last === view.taken && isJoker(last))) continue;
@@ -204,14 +209,16 @@ export function planTurn(view: BotView): BotPlan | null {
     : bestCombo(hand, view.rules, moreCards, keepOne);
   const pool = [...hand];
   const lay = combo && combo.used > 0 ? cardsOf(combo, pool, view.taken) : [];
-  const opened = view.opened || lay.length > 0;
+  const opened = view.opened || view.partnerOpened || lay.length > 0;
   const adds = opened && !easy ? addsFor(pool, table, 1, false, view) : [];
   if (!usesTaken(view.taken, [...lay.flat(), ...adds.flatMap((a) => a.cards)])) {
     // The taken card fits a table meld: add it on its own.
     const meld =
       opened && view.taken !== null
         ? table.find(
-            (m) => (view.rules.addToOthers || m.owner === view.me) && meldOf([...m.cards, view.taken!])?.kind === m.kind,
+            (m) =>
+              (view.rules.addToOthers || m.owner === view.me || m.owner === view.partner) &&
+              meldOf([...m.cards, view.taken!])?.kind === m.kind,
           )
         : undefined;
     if (!meld || pool.length < 2) return null;
@@ -257,5 +264,6 @@ function chooseDiscard(pool: number[], view: BotView, opened: boolean, table: Ta
 /** Should it take the discard? Only when the turn's plan can lay it down. */
 export function wantsDiscard(view: BotView, top: number): boolean {
   if (view.level === "easy") return false;
+  if (view.rules.noDiscardOnLast && view.hand.length === 1) return false;
   return planTurn({ ...view, hand: [...view.hand, top], taken: top }) !== null;
 }

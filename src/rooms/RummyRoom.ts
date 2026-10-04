@@ -1,7 +1,8 @@
 import { Room, Client, ServerError } from "colyseus";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import {
-  DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError, openingPoints, shuffled, type MeldKind, type Rules,
+  DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
+  type Rules,
 } from "../rummy.js";
 import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
@@ -26,6 +27,7 @@ type Settings = {
   losingScore?: number;
   openPoints?: number;
   rules?: Partial<Rules>;
+  teams?: boolean; // 2 vs 2 (4 players): partners sit face to face, one score per team
 };
 type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
 type Seat = {
@@ -50,10 +52,11 @@ const OPEN_OPTIONS = [0, 51, 71, 91, 101]; // 0: by the number of players
 const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
 const HAND = 14;
-const NEVER_OPENED = 200, PER_CARD = 10;
+const NEVER_OPENED = 100, PER_CARD = 10; // a hand that never laid down / each card left; doubled by a joker finish
 const DEAL_MS = 3_200; // the apps' deal animation, before the first turn
 const LAY_MS = 350; // the apps' lay-down animation, per meld
-const ROUND_PAUSE_MS = 10_000; // the round's results, before the next deal
+const READY_WAIT_MS = 30_000; // the round's results: who hasn't pressed "ready" by then is ready anyway
+const NEXT_ROUND_MS = 5_000; // everyone's ready: the next deal comes after this
 const RECONNECT_SECONDS = 600;
 const CLOSE_AFTER_GAME_MS = 60_000;
 
@@ -73,6 +76,11 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private openPoints = 0;
   private rules: Rules = { ...DEFAULT_RULES };
   private lastOpening = 0; // this round's highest opening (each opening must beat it, by the rules)
+  private teams = false; // 2 vs 2: seats 0 & 2 against 1 & 3 (partners face to face)
+  private teamScores = [0, 0];
+  private ready = new Set<string>(); // between rounds: who pressed "ready" (bots always are)
+  private nextRoundAt = 0; // everyone's ready: when the next round is dealt
+  private discardDown = false; // the round's last card went face down (a plain rummy)
   private seats: Seat[] = []; // seat order = turn order
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>(); // account uids invited by someone at the table
@@ -118,7 +126,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on("lay", (c) => this.handleLay(c));
     on<{ meldId: number; cards: number[] }>("add", (c, m) => this.handleAdd(c, m.meldId, m.cards));
     on<{ meldId: number; card: number }>("swap", (c, m) => this.handleSwap(c, m.meldId, m.card));
-    on<{ card: number }>("discard", (c, m) => this.handleDiscard(c, m.card));
+    on<{ card: number; faceUp?: boolean }>("discard", (c, m) => this.handleDiscard(c, m.card, m.faceUp));
+    on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
+    on("ready", (c) => this.handleReady(c.sessionId));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     // Someone at the table invited a friend (the invite itself goes through the app's chat): let him in.
     this.onMessage("invite", (client, msg: { uid: string }) => {
@@ -226,7 +236,39 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     for (const [key, value] of Object.entries(s.rules ?? {})) {
       if (key in DEFAULT_RULES && typeof value === "boolean") this.rules[key as keyof Rules] = value;
     }
+    // 2 vs 2 needs exactly four seats.
+    if (typeof s.teams === "boolean") this.teams = s.teams && this.seats.length <= 4;
+    if (this.teams) this.maxPlayers = 4;
     this.updateListing();
+  }
+
+  /**
+   * 2 vs 2: the host picks his partner. Seats are reordered host, opponent, partner, opponent, so
+   * partners sit face to face and turns alternate between the teams.
+   */
+  private handlePartner(client: Client, partnerId: string) {
+    const host = client.sessionId;
+    if (this.phase !== "lobby" || host !== this.hostId || !this.teams || host === partnerId) return;
+    const partner = this.seat(partnerId);
+    if (!partner) return;
+    const others = this.seats.filter((x) => x.id !== host && x.id !== partnerId);
+    this.seats = [this.seat(host)!, others[0], partner, others[1]].filter((x) => x !== undefined);
+  }
+
+  private teamOf(id: string) {
+    return this.seats.findIndex((x) => x.id === id) % 2;
+  }
+
+  private partnerOf(id: string): string | null {
+    if (!this.teams) return null;
+    const i = this.seats.findIndex((x) => x.id === id);
+    return this.seats[(i + 2) % 4]?.id ?? null;
+  }
+
+  /** He may add to melds and swap jokers: he opened, or (2 vs 2) his partner did. */
+  private teamOpened(id: string) {
+    const partner = this.partnerOf(id);
+    return this.opened.has(id) || (partner !== null && this.opened.has(partner));
   }
 
   private handleAddBot(client: Client, level: string) {
@@ -255,6 +297,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
+    if (this.teams && this.seats.length !== 4) return "teams_need_four";
     this.lock();
     this.deal();
   }
@@ -272,6 +315,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!seat || seat.bot) return;
     seat.bot = "normal";
     seat.connected = true;
+    if (this.phase === "round_end") this.handleReady(id);
     if (this.turn === id && this.phase === "playing") {
       this.staged.delete(id);
       this.botTurn(id);
@@ -296,6 +340,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.staged.clear();
     this.waited.clear();
     this.lastOpening = 0;
+    this.ready.clear();
+    this.nextRoundAt = 0;
+    this.discardDown = false;
     this.starter = (this.starter + 1) % this.seats.length;
     // One card at a time around the table, from the first player (who gets the 15th).
     const order = [...this.seats.slice(this.starter), ...this.seats.slice(0, this.starter)];
@@ -353,6 +400,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.drawn = card;
     this.stage = "play";
     this.broadcast("rummy_fx", { type: "draw", who: id, from: "deck" });
+    // The deck's last card: the discards become the new deck right away.
+    if (this.deck.length === 0 && this.discard.length > 0) {
+      this.deck = shuffled().filter((c) => this.discard.includes(c));
+      this.broadcast("rummy_fx", { type: "refill", count: this.discard.length });
+      this.discard = [];
+    }
   }
 
   private handleDraw(client: Client) {
@@ -363,6 +416,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private handleTake(client: Client) {
     const id = this.actor(client, "draw");
     if (!id || this.discard.length === 0) return;
+    if (this.rules.noDiscardOnLast && this.hands.get(id)!.length === 1) return "last_card_take";
     this.taken = this.discard.pop()!;
     this.hands.get(id)!.push(this.taken);
     this.stage = "play";
@@ -434,7 +488,13 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const staged = id ? this.staged.get(id) ?? [] : [];
     if (!id || staged.length === 0) return;
     if (!this.takenUsed(staged.flat()) && !this.jokerFinish(id, staged.flat().length)) return "use_taken";
-    if (!this.opened.has(id)) {
+    const partner = this.partnerOf(id);
+    if (!this.opened.has(id) && partner !== null && this.opened.has(partner)) {
+      // 2 vs 2: my partner opened, so I lay without points — under the team rules.
+      const broken = teamLayError(staged.map((c) => meldOf(c)!), this.rules);
+      if (broken) return broken;
+      this.opened.add(id);
+    } else if (!this.opened.has(id)) {
       // The opening: enough points (by default without the jokers' melds), a real run, maybe a taken card.
       const melds = staged.map((c) => meldOf(c)!);
       if (this.rules.openWithDiscard && (this.taken === null || !this.takenUsed(staged.flat()))) return "open_with_discard";
@@ -459,11 +519,11 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private handleAdd(client: Client, meldId: number, cards: number[]) {
     const id = this.actor(client, "play");
     if (!id) return;
-    if (!this.opened.has(id)) return "not_opened";
+    if (!this.teamOpened(id)) return "not_opened";
     const meld = this.melds.find((m) => m.id === Number(meldId));
     const picked = this.free(id, cards);
     if (!meld || !picked) return "bad_cards";
-    if (!this.rules.addToOthers && meld.owner !== id) return "not_yours";
+    if (!this.rules.addToOthers && meld.owner !== id && meld.owner !== this.partnerOf(id)) return "not_yours";
     const grown = meldOf([...meld.cards, ...picked]);
     if (!grown || grown.kind !== meld.kind) return "not_a_meld";
     if (this.rules.oneJoker && grown.cards.filter(isJoker).length > 1) return "two_jokers";
@@ -480,7 +540,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private handleSwap(client: Client, meldId: number, card: number) {
     const id = this.actor(client, "play");
     if (!id) return;
-    if (!this.opened.has(id)) return "not_opened";
+    if (!this.teamOpened(id)) return "not_opened";
     if (!this.rules.jokerSwap) return "no_swap";
     const meld = this.melds.find((m) => m.id === Number(meldId));
     if (!meld || !this.free(id, [card])) return "bad_cards";
@@ -493,22 +553,29 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.taken = null;
   }
 
-  private handleDiscard(client: Client, card: number) {
+  private handleDiscard(client: Client, card: number, faceUp?: boolean) {
     const id = this.actor(client, "play");
     if (!id) return;
     const hand = this.hands.get(id)!;
     if (this.taken !== null && !(isJoker(this.taken) && hand.length === 1)) return "use_taken";
     if (!hand.includes(Number(card))) return "bad_cards";
-    this.throwCard(id, Number(card));
+    this.throwCard(id, Number(card), faceUp !== false);
   }
 
-  private throwCard(id: string, card: number) {
+  /**
+   * The last card (the rummy) goes face down — unless it's a joker the player shows face up: a joker
+   * rummy, penalties doubled. Laid face down, a joker counts as a plain rummy.
+   */
+  private throwCard(id: string, card: number, faceUp = true) {
     const hand = this.hands.get(id)!;
     hand.splice(hand.indexOf(card), 1);
     this.staged.delete(id);
     this.discard.push(card);
-    this.broadcast("rummy_fx", { type: "discard", who: id, card });
-    if (hand.length === 0) return this.endRound(id, isJoker(card));
+    const last = hand.length === 0;
+    const jokerRummy = last && isJoker(card) && faceUp;
+    this.discardDown = last && !jokerRummy;
+    this.broadcast("rummy_fx", { type: "discard", who: id, card, faceDown: this.discardDown });
+    if (last) return this.endRound(id, jokerRummy);
     const next = this.seats[(this.seats.findIndex((s) => s.id === id) + 1) % this.seats.length];
     this.startTurn(next.id, "draw");
   }
@@ -517,18 +584,43 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.timer?.clear();
     this.botTimer?.clear();
     const penalties: Record<string, number> = {};
+    const winners = this.teams ? this.seats.filter((x) => this.teamOf(x.id) === this.teamOf(winner)) : [this.seat(winner)];
     for (const s of this.seats) {
-      if (s.id === winner) continue;
+      if (winners.includes(s)) continue; // 2 vs 2: the winner's partner takes nothing either
       const base = this.opened.has(s.id) ? PER_CARD * this.hands.get(s.id)!.length : NEVER_OPENED;
       penalties[s.id] = joker && this.rules.jokerDouble ? base * 2 : base;
-      s.score += penalties[s.id];
+      if (this.teams) this.teamScores[this.teamOf(s.id)] += penalties[s.id];
+      else s.score += penalties[s.id];
     }
+    if (this.teams) for (const s of this.seats) s.score = this.teamScores[this.teamOf(s.id)]; // one score per team
     this.lastRound = { winner, joker, penalties };
     this.turn = "";
     if (this.seats.some((s) => s.score >= this.losingScore)) return this.endGame();
+    // Results: everyone presses "ready" (bots are), or is ready anyway after a while.
     this.phase = "round_end";
-    this.turnEndsAt = Date.now() + ROUND_PAUSE_MS;
-    this.timer = this.clock.setTimeout(() => (this.deal(), this.sync()), ROUND_PAUSE_MS);
+    this.ready = new Set(this.seats.filter((x) => x.bot).map((x) => x.id));
+    this.nextRoundAt = 0;
+    this.turnEndsAt = Date.now() + READY_WAIT_MS;
+    this.timer = this.clock.setTimeout(() => {
+      for (const x of this.seats) this.ready.add(x.id);
+      this.allReady();
+      this.sync();
+    }, READY_WAIT_MS);
+    this.allReady();
+  }
+
+  private handleReady(id: string) {
+    if (this.phase !== "round_end" || !this.seat(id)) return;
+    this.ready.add(id);
+    this.allReady();
+  }
+
+  /** Everyone's ready: the next round in 5 seconds. */
+  private allReady() {
+    if (this.nextRoundAt || this.seats.some((x) => !this.ready.has(x.id))) return;
+    this.timer?.clear();
+    this.nextRoundAt = this.turnEndsAt = Date.now() + NEXT_ROUND_MS;
+    this.timer = this.clock.setTimeout(() => (this.deal(), this.sync()), NEXT_ROUND_MS);
   }
 
   private endGame() {
@@ -552,7 +644,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       level: seat.bot ?? "normal",
       hand: [...hand],
       me: id,
+      partner: this.partnerOf(id),
       opened: this.opened.has(id),
+      partnerOpened: this.teamOpened(id) && !this.opened.has(id),
       threshold: this.threshold(),
       rules: this.rules,
       melds: this.melds,
@@ -603,7 +697,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         });
       }
       for (const a of plan.adds) steps.push(() => this.handleAdd(me, a.meldId, a.cards));
-      steps.push(() => this.handleDiscard(me, plan.discard));
+      steps.push(() => this.handleDiscard(me, plan.discard, true)); // a joker rummy is shown face up
     });
     run(delayMs * RummyRoom.botSpeed + think());
   }
@@ -638,10 +732,15 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       losingScore: this.losingScore,
       openPoints: this.openPoints,
       rules: this.rules,
+      teams: this.teams,
+      ready: [...this.ready],
+      nextRoundAt: this.nextRoundAt,
+      discardDown: this.discardDown,
       round: this.round,
       threshold: this.threshold(),
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, score: s.score, bot: s.bot ?? "",
+        team: this.teams ? this.teamOf(s.id) : -1,
         opened: this.opened.has(s.id), cards: this.hands.get(s.id)?.length ?? 0,
       })),
       turn: this.turn,

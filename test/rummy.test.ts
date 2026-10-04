@@ -159,6 +159,67 @@ describe("RummyRoom", () => {
     assert.strictEqual(room.threshold(), 120);
   });
 
+  it("can't take the discard with one card left, and refills the deck from the discards at once", async () => {
+    const { room, b, errors, send } = await rigged([c(2, 3)], c(5, 0), true);
+    await send("take");
+    assert.deepStrictEqual(errors, ["last_card_take"]);
+    room.deck = [c(9, 1)];
+    room.discard = [c(5, 0), c(6, 0), c(7, 0)];
+    await send("draw");
+    assert.strictEqual(room.deck.length, 3); // the discards became the deck right away
+    assert.strictEqual(room.discard.length, 0);
+    assert.ok(room.hands.get(b.sessionId).includes(c(9, 1)));
+  });
+
+  it("lays the last card face down — a joker shown face up doubles, face down it's a plain rummy", async () => {
+    const down = await rigged([J], c(5, 0), true);
+    down.room.stage = "play";
+    down.room.handleDiscard({ sessionId: down.b.sessionId }, J, false);
+    assert.strictEqual(down.room.lastRound.joker, false);
+    assert.strictEqual(down.room.discardDown, true);
+    const up = await rigged([J], c(5, 0), true);
+    up.room.stage = "play";
+    up.room.handleDiscard({ sessionId: up.b.sessionId }, J, true);
+    assert.strictEqual(up.room.lastRound.joker, true);
+    assert.strictEqual(Object.values(up.room.lastRound.penalties)[0], 200); // never laid down: 100, doubled
+  });
+
+  it("2 vs 2: partners face to face, the partner lays without points, one score per team", async () => {
+    const room: any = await colyseus.createRoom("rummy", { teams: true });
+    const host = await colyseus.connectTo(room);
+    host.onMessage("rummy", () => {});
+    host.onMessage("rummy_fx", () => {});
+    for (let i = 0; i < 3; i++) host.send("add_bot", { level: "normal" });
+    await new Promise((r) => setTimeout(r, 150));
+    const partner = room.seats[1].id;
+    host.send("partner", { id: partner });
+    await new Promise((r) => setTimeout(r, 150));
+    assert.strictEqual(room.maxPlayers, 4);
+    assert.strictEqual(room.seats[2].id, partner); // face to face with the host
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.timer?.clear();
+    room.botTimer?.clear();
+    // The host opened; his partner lays a small meld without points.
+    room.opened.add(host.sessionId);
+    room.turn = partner;
+    room.stage = "play";
+    room.hands.set(partner, [c(2, 1), c(3, 1), c(4, 1), c(8, 3)]);
+    assert.strictEqual(room.handleStage({ sessionId: partner }, [c(2, 1), c(3, 1), c(4, 1)]), undefined);
+    assert.strictEqual(room.handleLay({ sessionId: partner }), undefined);
+    assert.ok(room.opened.has(partner));
+    // He goes out: the other team takes 100 each (never laid down), one team score.
+    room.handleDiscard({ sessionId: partner }, c(8, 3));
+    assert.strictEqual(room.phase, "round_end");
+    assert.deepStrictEqual(room.teamScores, [0, 200]);
+    assert.strictEqual(room.seats[1].score, 200);
+    assert.strictEqual(room.seats[3].score, 200);
+    // Bots are ready; the host presses ready: the next round comes 5 seconds later.
+    assert.strictEqual(room.nextRoundAt, 0);
+    room.handleReady(host.sessionId);
+    assert.ok(room.nextRoundAt > Date.now());
+  });
+
   it("takes a discarded joker to rummy: lays all 14 cards and throws the joker", async () => {
     const hand = [
       c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0),
@@ -173,7 +234,7 @@ describe("RummyRoom", () => {
     await send("discard", { card: J });
     assert.deepStrictEqual(errors, []);
     assert.strictEqual(room.lastRound.joker, true);
-    assert.strictEqual(Object.values(room.lastRound.penalties)[0], 400); // never opened, doubled
+    assert.strictEqual(Object.values(room.lastRound.penalties)[0], 200); // never opened: 100, doubled
   });
 
   it("plays whole rounds with bots only, every move legal", async () => {
@@ -199,11 +260,36 @@ describe("RummyRoom", () => {
     assert.ok(room.lastRound, "a round ended");
     assert.strictEqual(room.botFailures, 0);
   });
+
+  it("2 vs 2: bots play a whole round with partners, every move legal", async () => {
+    RummyRoom.botSpeed = 0.01;
+    after(() => (RummyRoom.botSpeed = 1));
+    const room: any = await colyseus.createRoom("rummy", { losingScore: 500, teams: true });
+    const host = await colyseus.connectTo(room);
+    host.onMessage("rummy", () => {});
+    host.onMessage("rummy_fx", () => {});
+    for (const level of ["easy", "normal", "hard"]) host.send("add_bot", { level });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(room.seats.length, 4);
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.becomeBot(host.sessionId); // the host's seat plays itself too
+    const deadline = Date.now() + 50_000;
+    while (room.round < 2 && !room.lastRound && room.phase !== "gameover" && Date.now() < deadline) {
+      // Every card is somewhere: deck, discard, hands or the table.
+      const all = [...room.deck, ...room.discard, ...[...room.hands.values()].flat(), ...room.melds.flatMap((m: any) => m.cards)];
+      assert.strictEqual(new Set(all).size, 108);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(room.lastRound, "a round ended");
+    assert.strictEqual(room.botFailures, 0);
+  });
 });
 
 describe("rummy bot", () => {
   const view = (hand: number[], extra: Partial<BotView> = {}): BotView => ({
-    level: "normal", me: "bot", rules: DEFAULT_RULES, hand, opened: false, threshold: 101, melds: [], taken: null,
+    level: "normal", me: "bot", partner: null, partnerOpened: false, rules: DEFAULT_RULES, hand, opened: false,
+    threshold: 101, melds: [], taken: null,
     canWait: false, nextOpened: false, ...extra,
   });
   const strong = [

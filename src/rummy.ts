@@ -27,6 +27,9 @@ export type Rules = {
   jokerDouble: boolean; // going out with a joker doubles the penalties
   jokerSwap: boolean; // a real card can take a joker's place on the table
   addToOthers: boolean; // cards can be added to other players' melds
+  noDiscardOnLast: boolean; // a player with one card left can't take the discard
+  teamRun: boolean; // 2 vs 2: once my partner opened, I still need a run without a joker to lay mine
+  teamCleanMeld: boolean; // 2 vs 2: once my partner opened, I need at least one meld without a joker to lay mine
 };
 export const DEFAULT_RULES: Rules = {
   needRun: true,
@@ -38,6 +41,9 @@ export const DEFAULT_RULES: Rules = {
   jokerDouble: true,
   jokerSwap: true,
   addToOthers: true,
+  noDiscardOnLast: true,
+  teamRun: false,
+  teamCleanMeld: true,
 };
 
 const jokersIn = (m: { cards: number[] }) => m.cards.filter(isJoker).length;
@@ -52,6 +58,13 @@ export function layError(m: Meld, rules: Rules): string {
 /** The opening's points: melds without a joker, or every meld when jokers count. */
 export function openingPoints(melds: Meld[], rules: Rules): number {
   return melds.reduce((n, m) => n + (rules.jokerPoints ? m.full : jokersIn(m) === 0 ? m.points : 0), 0);
+}
+
+/** 2 vs 2, my partner opened: why I can't lay these melds ("" when I can) — no points needed. */
+export function teamLayError(melds: Meld[], rules: Rules): string {
+  if (rules.teamRun && !melds.some((m) => m.kind === "run" && jokersIn(m) === 0)) return "need_run";
+  if (rules.teamCleanMeld && !melds.some((m) => jokersIn(m) === 0)) return "need_clean";
+  return "";
 }
 
 /** Why these melds can't open ("" when they can): a real run when required, and enough points. */
