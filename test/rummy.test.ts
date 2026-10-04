@@ -2,7 +2,9 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { jokerFits, meldOf } from "../src/rummy.js";
+import { isJoker, jokerFits, meldOf } from "../src/rummy.js";
+import { planTurn, wantsDiscard, type BotView } from "../src/rummyBot.js";
+import { RummyRoom } from "../src/rooms/RummyRoom.js";
 
 // Card numbers: suit * 13 + rank - 1 (♠ 0, ♥ 1, ♦ 2, ♣ 3), +52 for the second deck, 104+ jokers.
 const c = (rank: number, suit: number, deck = 0) => deck * 52 + suit * 13 + rank - 1;
@@ -71,10 +73,10 @@ describe("RummyRoom", () => {
 
     b.send("draw"); // not his turn: nothing happens
     a.send("discard", { card: sa.hand[0] });
-    const after = await next(b, (v) => v.discardTop >= 0);
+    const after = await next(b, (v) => v.discardCount > 0);
     assert.strictEqual(after.turn, sb.me);
     assert.strictEqual(after.stage, "draw");
-    assert.strictEqual(after.discardTop, sa.hand[0]);
+    assert.deepStrictEqual(after.discardTail, [sa.hand[0]]);
 
     b.send("take");
     const took = await next(b, (v) => v.taken >= 0);
@@ -138,5 +140,68 @@ describe("RummyRoom", () => {
     assert.deepStrictEqual(errors, []);
     assert.strictEqual(room.lastRound.joker, true);
     assert.strictEqual(Object.values(room.lastRound.penalties)[0], 400); // never opened, doubled
+  });
+
+  it("plays whole rounds with bots only, every move legal", async () => {
+    RummyRoom.botSpeed = 0.01;
+    after(() => (RummyRoom.botSpeed = 1));
+    const room: any = await colyseus.createRoom("rummy", { losingScore: 500 });
+    const host = await colyseus.connectTo(room);
+    host.onMessage("rummy", () => {});
+    host.onMessage("rummy_fx", () => {});
+    for (const level of ["easy", "normal", "hard"]) host.send("add_bot", { level });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(room.seats.length, 4);
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.becomeBot(host.sessionId); // the host's seat plays itself too
+    const deadline = Date.now() + 50_000;
+    while (room.round < 2 && room.phase !== "gameover" && Date.now() < deadline) {
+      // Every card is somewhere: deck, discard, hands or the table.
+      const all = [...room.deck, ...room.discard, ...[...room.hands.values()].flat(), ...room.melds.flatMap((m: any) => m.cards)];
+      assert.strictEqual(new Set(all).size, 108);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(room.lastRound, "a round ended");
+    assert.strictEqual(room.botFailures, 0);
+  });
+});
+
+describe("rummy bot", () => {
+  const view = (hand: number[], extra: Partial<BotView> = {}): BotView => ({
+    level: "normal", hand, opened: false, threshold: 101, melds: [], taken: null, canWait: false, nextOpened: false, ...extra,
+  });
+  const strong = [
+    c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0), // 49
+    c(9, 1), c(10, 1), c(11, 1), c(12, 1), c(13, 1), // 49
+    c(7, 0), c(7, 1), c(7, 2), // 21
+  ];
+
+  it("opens when its melds reach the threshold without jokers, and keeps a card to throw", () => {
+    const plan = planTurn(view([...strong, c(2, 3), c(4, 2)]))!;
+    assert.strictEqual(plan.lay.flat().length, 13);
+    assert.ok([c(2, 3), c(4, 2)].includes(plan.discard));
+    assert.strictEqual(plan.finish, false);
+    assert.strictEqual(planTurn(view([...strong.slice(5), c(2, 3), c(4, 2)]))!.lay.length, 0); // 70: not enough
+  });
+
+  it("goes out with a joker as its last card when it can", () => {
+    const plan = planTurn(view([...strong, c(7, 3), J]))!;
+    assert.strictEqual(plan.finish, true);
+    assert.ok(isJoker(plan.discard));
+  });
+
+  it("takes the discard only when it can lay it down this turn", () => {
+    assert.ok(wantsDiscard(view([...strong.slice(0, 12), c(2, 3), c(4, 2)]), c(7, 2))); // completes the 7s: 119
+    assert.ok(!wantsDiscard(view([...strong.slice(0, 12), c(2, 3), c(4, 2)]), c(3, 3)));
+  });
+
+  it("a hard bot holds a card back for a joker finish when it's safe", () => {
+    const melds = [{ id: 1, owner: "x", kind: "run" as const, cards: [c(3, 2), c(4, 2), c(5, 2)] }];
+    const hand = [c(6, 2), c(9, 3), c(10, 3), c(11, 3), c(2, 1)];
+    const hold = planTurn(view(hand, { level: "hard", opened: true, melds, canWait: true }))!;
+    assert.ok(hold.waiting && !hold.finish && hold.adds.length === 0);
+    const go = planTurn(view(hand, { level: "normal", opened: true, melds }))!;
+    assert.ok(go.finish);
   });
 });

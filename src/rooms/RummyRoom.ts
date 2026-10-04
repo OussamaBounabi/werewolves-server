@@ -1,29 +1,54 @@
 import { Room, Client, ServerError } from "colyseus";
-import { accountFor, firebaseEnabled, setRoom, type Account } from "../firebase.js";
+import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import { isJoker, jokerFits, meldOf, shuffled, type MeldKind } from "../rummy.js";
+import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
+import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
 
 /**
- * Algerian rummy, 2–5 players, 14 cards each (the round's first player gets 15 and starts by
- * discarding). A turn: draw from the deck — or take the top discard, only to lay it down this
- * turn — then lay down / add to melds, then discard one card. The first lay-down must reach the
- * table's threshold (101 for 2–3 players, 91 for 4, 71 for 5) counting only melds without a joker.
+ * Algerian rummy, 2–5 players (bots included), 14 cards each (the round's first player gets 15 and
+ * starts by discarding). A turn: draw from the deck — or take the top discard, only to lay it down
+ * this turn — then lay down / add to melds, then discard one card. The first lay-down must reach the
+ * threshold (by default 101 for 2–3 players, 91 for 4, 71 for 5) counting only melds without a joker.
  * The first player to get rid of every card wins the round: the others take 10 points per card left,
- * 200 if they never laid down, doubled when the winner's last card is a joker. At 2000 the game ends.
+ * 200 if they never laid down, doubled when the winner's last card is a joker. The first to reach the
+ * score limit ends the game; the lowest total wins.
  *
- * No schema: each player gets his own "rummy" message (the table, plus his hand) after every change.
+ * No schema: each player gets his own "rummy" message (the table, plus his hand) after every change,
+ * and "rummy_fx" for what the apps animate (the deal, draws, discards).
  */
 type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type JoinOptions = { name?: string; playerId?: string; idToken?: string; maxPlayers?: number; turnSeconds?: number };
-type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; connected: boolean; score: number };
+type Settings = {
+  roomType?: string;
+  maxPlayers?: number;
+  turnSeconds?: number;
+  losingScore?: number;
+  openPoints?: number;
+};
+type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
+type Seat = {
+  id: string; // the session id (a bot's own id)
+  playerId: string;
+  name: string;
+  uid: string;
+  avatar: number;
+  connected: boolean;
+  score: number;
+  bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
+};
 type TableMeld = { id: number; owner: string; kind: MeldKind; cards: number[] };
 type Phase = "lobby" | "playing" | "round_end" | "gameover";
 type RoundResult = { winner: string; joker: boolean; penalties: Record<string, number> };
 
 const MAX_SEATS = 5;
+const ROOM_TYPES = ["public", "friends", "private"];
 const TURN_OPTIONS = [30, 45, 60, 90];
+const SCORE_OPTIONS = [500, 1000, 1500, 2000, 3000];
+const OPEN_OPTIONS = [0, 51, 71, 91, 101]; // 0: by the number of players
+const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
+const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
 const HAND = 14;
-const LOSING_SCORE = 2000;
 const NEVER_OPENED = 200, PER_CARD = 10;
+const DEAL_MS = 3_200; // the apps' deal animation, before the first turn
 const ROUND_PAUSE_MS = 10_000; // the round's results, before the next deal
 const RECONNECT_SECONDS = 600;
 const CLOSE_AFTER_GAME_MS = 60_000;
@@ -31,13 +56,20 @@ const CLOSE_AFTER_GAME_MS = 60_000;
 export const thresholdFor = (players: number) => (players >= 5 ? 71 : players === 4 ? 91 : 101);
 
 export class RummyRoom extends Room<{ metadata: Meta }> {
+  static botSpeed = 1; // tests: bots think faster
   maxClients = MAX_SEATS;
+  botFailures = 0; // tests: bot moves the room refused
 
   private phase: Phase = "lobby";
   private hostId = "";
+  private roomType = "public";
   private maxPlayers = 4;
   private turnSeconds = 60;
-  private seats: Seat[] = []; // seat order
+  private losingScore = 2000;
+  private openPoints = 0;
+  private seats: Seat[] = []; // seat order = turn order
+  private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
+  private invited = new Set<string>(); // account uids invited by someone at the table
   private hands = new Map<string, number[]>();
   private opened = new Set<string>(); // laid down this round
   private staged = new Map<string, number[][]>(); // melds being put together for the next lay-down (still in the hand)
@@ -45,6 +77,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private discard: number[] = [];
   private melds: TableMeld[] = [];
   private meldSeq = 0;
+  private botSeq = 0;
   private round = 0;
   private starter = -1; // seat index that started the round
   private turn = ""; // whose turn
@@ -53,7 +86,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private drawn: number | null = null;
   private turnEndsAt = 0;
   private lastRound: RoundResult | null = null;
+  private waited = new Map<string, number>(); // hard bots: turns spent waiting for a joker finish
   private timer: { clear(): void } | null = null;
+  private botTimer: { clear(): void } | null = null;
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -63,9 +98,11 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         if (error) client.send("rummy_error", { code: error });
         this.sync();
       });
-    on<JoinOptions>("settings", (c, m) => {
+    on<Settings>("settings", (c, m) => {
       if (this.phase === "lobby" && c.sessionId === this.hostId) this.applySettings(m);
     });
+    on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
+    on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on("start_game", (c) => this.handleStart(c));
     on("draw", (c) => this.handleDraw(c));
     on("take", (c) => this.handleTake(c));
@@ -76,6 +113,11 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on<{ meldId: number; cards: number[] }>("add", (c, m) => this.handleAdd(c, m.meldId, m.cards));
     on<{ meldId: number; card: number }>("swap", (c, m) => this.handleSwap(c, m.meldId, m.card));
     on<{ card: number }>("discard", (c, m) => this.handleDiscard(c, m.card));
+    this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    // Someone at the table invited a friend (the invite itself goes through the app's chat): let him in.
+    this.onMessage("invite", (client, msg: { uid: string }) => {
+      if (this.seat(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+    });
     this.updateListing();
   }
 
@@ -90,7 +132,17 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     }
     if (this.phase !== "lobby") throw new ServerError(4409, "started");
     if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+    await this.checkRoomType(account);
     return { account };
+  }
+
+  /** Friends rooms: invited players, or friends of someone at the table. Private: invited only. */
+  private async checkRoomType(account: Account | null) {
+    if (this.roomType === "public" || this.seats.every((s) => s.bot)) return; // the host creating it
+    if (account && this.invited.has(account.uid)) return;
+    const uids = [...new Set(this.members.values())];
+    if (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, uids))) return;
+    throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
@@ -107,8 +159,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       avatar: account?.avatar ?? 0,
       connected: true,
       score: 0,
+      bot: null,
     });
-    if (account) setRoom(account.uid, this.roomId).catch(() => {});
+    if (account) {
+      this.members.set(client.sessionId, account.uid);
+      setRoom(account.uid, this.roomId).catch(() => {});
+    }
     if (!this.hostId) this.hostId = client.sessionId;
     this.updateListing();
     this.sync();
@@ -128,23 +184,62 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   onLeave(client: Client) {
-    const seat = this.seat(client.sessionId);
-    if (seat?.uid) setRoom(seat.uid, "", this.roomId).catch(() => {});
-    this.removeSeat(client.sessionId);
+    const id = client.sessionId;
+    const uid = this.members.get(id);
+    this.members.delete(id);
+    if (uid) setRoom(uid, "", this.roomId).catch(() => {});
+    if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.phase === "lobby") this.removeSeat(id);
+    else if (this.phase !== "gameover") this.becomeBot(id);
+    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.clients.getById(s.id))?.id ?? "";
     this.updateListing();
     this.sync();
   }
 
   onDispose() {
     this.timer?.clear();
+    this.botTimer?.clear();
+    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
   }
 
-  // ---- lobby ----
+  private async handleVoiceJoin(client: Client) {
+    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    const name = this.seat(client.sessionId)?.name ?? "player";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: true, hear: true })) });
+  }
 
-  private applySettings(s: JoinOptions) {
+  // ---- the waiting room ----
+
+  private applySettings(s: Settings) {
     const n = Math.floor(Number(s.maxPlayers));
     if (n >= 2 && n <= MAX_SEATS) this.maxPlayers = Math.max(n, this.seats.length);
+    if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (TURN_OPTIONS.includes(Number(s.turnSeconds))) this.turnSeconds = Number(s.turnSeconds);
+    if (SCORE_OPTIONS.includes(Number(s.losingScore))) this.losingScore = Number(s.losingScore);
+    if (OPEN_OPTIONS.includes(Number(s.openPoints))) this.openPoints = Number(s.openPoints);
+    this.updateListing();
+  }
+
+  private handleAddBot(client: Client, level: string) {
+    if (this.phase !== "lobby" || client.sessionId !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    const taken = new Set(this.seats.map((s) => s.name));
+    const id = `bot-${++this.botSeq}`;
+    this.seats.push({
+      id,
+      playerId: id,
+      name: BOT_NAMES.find((n) => !taken.has(n)) ?? `Bot ${this.botSeq}`,
+      uid: "",
+      avatar: 0,
+      connected: true,
+      score: 0,
+      bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
+    });
+    this.updateListing();
+  }
+
+  private handleRemoveBot(client: Client, id: string) {
+    if (this.phase !== "lobby" || client.sessionId !== this.hostId || !this.seat(id)?.bot) return;
+    this.removeSeat(id);
     this.updateListing();
   }
 
@@ -155,22 +250,30 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.deal();
   }
 
-  /** A player gone for good: out of the game, his cards out of play. */
   private removeSeat(id: string) {
     const index = this.seats.findIndex((s) => s.id === id);
     if (index < 0) return;
-    const wasTurn = this.turn === id;
     this.seats.splice(index, 1);
-    this.hands.delete(id);
-    this.staged.delete(id);
-    if (this.starter >= index) this.starter--;
-    if (this.hostId === id) this.hostId = this.seats[0]?.id ?? "";
-    if (this.phase === "lobby" || this.phase === "gameover") return;
-    if (this.seats.length < 2) return this.endGame();
-    if (wasTurn && this.phase === "playing") this.startTurn(this.seats[index % this.seats.length].id, "draw");
+    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot)?.id ?? "";
+  }
+
+  /** Gone mid-game: a normal bot takes over his seat, his cards and his score. */
+  private becomeBot(id: string) {
+    const seat = this.seat(id);
+    if (!seat || seat.bot) return;
+    seat.bot = "normal";
+    seat.connected = true;
+    if (this.turn === id && this.phase === "playing") {
+      this.staged.delete(id);
+      this.botTurn(id);
+    }
   }
 
   // ---- the round ----
+
+  private threshold() {
+    return this.openPoints || thresholdFor(this.seats.length);
+  }
 
   private deal() {
     this.round++;
@@ -180,29 +283,36 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.melds = [];
     this.opened.clear();
     this.staged.clear();
+    this.waited.clear();
     this.starter = (this.starter + 1) % this.seats.length;
-    for (const s of this.seats) this.hands.set(s.id, this.deck.splice(0, HAND));
-    const first = this.seats[this.starter].id;
-    this.hands.get(first)!.push(this.deck.pop()!); // 15 cards: he starts by discarding
-    this.startTurn(first, "play");
+    // One card at a time around the table, from the first player (who gets the 15th).
+    const order = [...this.seats.slice(this.starter), ...this.seats.slice(0, this.starter)];
+    for (const s of this.seats) this.hands.set(s.id, []);
+    for (let i = 0; i < HAND; i++) for (const s of order) this.hands.get(s.id)!.push(this.deck.pop()!);
+    const first = order[0].id;
+    this.hands.get(first)!.push(this.deck.pop()!);
+    this.broadcast("rummy_fx", { type: "deal", order: order.map((s) => s.id) });
+    this.startTurn(first, "play", DEAL_MS);
   }
 
-  private startTurn(id: string, stage: "draw" | "play") {
+  private startTurn(id: string, stage: "draw" | "play", extraMs = 0) {
     this.turn = id;
     this.stage = stage;
     this.taken = null;
     this.drawn = null;
     this.staged.delete(id);
-    this.turnEndsAt = Date.now() + this.turnSeconds * 1000;
+    this.turnEndsAt = Date.now() + extraMs + this.turnSeconds * 1000;
     this.timer?.clear();
-    this.timer = this.clock.setTimeout(() => this.timeOut(), this.turnSeconds * 1000);
+    this.botTimer?.clear();
+    this.timer = this.clock.setTimeout(() => this.timeOut(), extraMs + this.turnSeconds * 1000);
+    if (this.seat(id)?.bot) this.botTurn(id, extraMs);
   }
 
   /** Out of time: back to a plain turn — draw if he hasn't, then throw what he drew. */
   private timeOut() {
     const id = this.turn;
     const hand = this.hands.get(id);
-    if (!hand) return;
+    if (!hand || this.phase !== "playing") return;
     this.staged.delete(id);
     if (this.taken !== null && hand.includes(this.taken)) this.handleUntake(this.clientOf(id));
     if (this.stage === "draw") this.drawCard(id);
@@ -230,6 +340,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.hands.get(id)!.push(card);
     this.drawn = card;
     this.stage = "play";
+    this.broadcast("rummy_fx", { type: "draw", who: id, from: "deck" });
   }
 
   private handleDraw(client: Client) {
@@ -243,6 +354,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.taken = this.discard.pop()!;
     this.hands.get(id)!.push(this.taken);
     this.stage = "play";
+    this.broadcast("rummy_fx", { type: "draw", who: id, from: "discard", card: this.taken });
   }
 
   private handleUntake(client: Client) {
@@ -252,6 +364,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.staged.set(id, (this.staged.get(id) ?? []).filter((m) => !m.includes(this.taken!)));
     hand.splice(hand.indexOf(this.taken), 1);
     this.discard.push(this.taken);
+    this.broadcast("rummy_fx", { type: "discard", who: id, card: this.taken });
     this.taken = null;
     this.stage = "draw";
   }
@@ -310,7 +423,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!this.opened.has(id)) {
       // The opening: melds without a joker must reach the threshold on their own.
       const points = staged.map((c) => meldOf(c)!).filter((m) => !m.cards.some(isJoker)).reduce((n, m) => n + m.points, 0);
-      if (points < thresholdFor(this.seats.length)) return "below_threshold";
+      if (points < this.threshold()) return "below_threshold";
       this.opened.add(id);
     }
     const hand = this.hands.get(id)!;
@@ -370,6 +483,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     hand.splice(hand.indexOf(card), 1);
     this.staged.delete(id);
     this.discard.push(card);
+    this.broadcast("rummy_fx", { type: "discard", who: id, card });
     if (hand.length === 0) return this.endRound(id, isJoker(card));
     const next = this.seats[(this.seats.findIndex((s) => s.id === id) + 1) % this.seats.length];
     this.startTurn(next.id, "draw");
@@ -377,6 +491,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private endRound(winner: string, joker: boolean) {
     this.timer?.clear();
+    this.botTimer?.clear();
     const penalties: Record<string, number> = {};
     for (const s of this.seats) {
       if (s.id === winner) continue;
@@ -386,7 +501,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     }
     this.lastRound = { winner, joker, penalties };
     this.turn = "";
-    if (this.seats.some((s) => s.score >= LOSING_SCORE)) return this.endGame();
+    if (this.seats.some((s) => s.score >= this.losingScore)) return this.endGame();
     this.phase = "round_end";
     this.turnEndsAt = Date.now() + ROUND_PAUSE_MS;
     this.timer = this.clock.setTimeout(() => (this.deal(), this.sync()), ROUND_PAUSE_MS);
@@ -394,10 +509,70 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private endGame() {
     this.timer?.clear();
+    this.botTimer?.clear();
     this.phase = "gameover";
     this.turn = "";
     this.turnEndsAt = 0;
     this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
+  }
+
+  // ---- bots ----
+
+  private botView(id: string): BotView {
+    const seat = this.seat(id)!;
+    const hand = this.hands.get(id)!;
+    const jokersSeen = [...this.melds.flatMap((m) => m.cards), ...this.discard, ...hand].filter(isJoker).length;
+    const others = this.seats.filter((s) => s.id !== id);
+    const next = this.seats[(this.seats.indexOf(seat) + 1) % this.seats.length];
+    return {
+      level: seat.bot ?? "normal",
+      hand: [...hand],
+      opened: this.opened.has(id),
+      threshold: this.threshold(),
+      melds: this.melds,
+      taken: this.taken,
+      canWait:
+        jokersSeen < 4 &&
+        this.deck.length > 8 &&
+        (this.waited.get(id) ?? 0) < 3 &&
+        others.every((s) => (this.hands.get(s.id)?.length ?? 0) >= 6),
+      nextOpened: this.opened.has(next.id),
+    };
+  }
+
+  /** A bot's turn, one move at a time like a person: think, draw, lay down, throw. */
+  private botTurn(id: string, delayMs = 0) {
+    const steps: (() => string | void)[] = [];
+    const me = this.clientOf(id);
+    const think = () => (700 + Math.random() * 900) * RummyRoom.botSpeed;
+    const run = (ms: number) => {
+      this.botTimer = this.clock.setTimeout(() => {
+        if (this.turn !== id || this.phase !== "playing") return;
+        const step = steps.shift();
+        if (!step) return;
+        if (step()) {
+          this.botFailures++;
+          return this.timeOut(); // a move the room refused: undo the half moves and throw a card
+        }
+        this.sync();
+        if (steps.length > 0) run((450 + Math.random() * 350) * RummyRoom.botSpeed);
+      }, ms);
+    };
+    steps.push(() => {
+      if (this.stage === "draw") {
+        const top = this.discard[this.discard.length - 1];
+        top !== undefined && wantsDiscard(this.botView(id), top) ? this.handleTake(me) : this.handleDraw(me);
+      }
+      const plan = planTurn(this.botView(id));
+      if (!plan) return "no_plan";
+      if (plan.waiting) this.waited.set(id, (this.waited.get(id) ?? 0) + 1);
+      for (const s of plan.swaps) steps.push(() => this.handleSwap(me, s.meldId, s.card));
+      for (const cards of plan.lay) steps.push(() => this.handleStage(me, cards));
+      if (plan.lay.length > 0) steps.push(() => this.handleLay(me));
+      for (const a of plan.adds) steps.push(() => this.handleAdd(me, a.meldId, a.cards));
+      steps.push(() => this.handleDiscard(me, plan.discard));
+    });
+    run(delayMs * RummyRoom.botSpeed + think());
   }
 
   // ---- sync ----
@@ -410,10 +585,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.setMatchmaking({
       metadata: {
         host: this.seat(this.hostId)?.name ?? "",
-      roomType: "public",
-      started: this.phase !== "lobby",
-      players: this.seats.length,
-      maxPlayers: this.maxPlayers,
+        roomType: this.roomType,
+        started: this.phase !== "lobby",
+        players: this.seats.length,
+        maxPlayers: this.maxPlayers,
         spectators: 0,
       },
     });
@@ -424,13 +599,15 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const table = {
       phase: this.phase,
       hostId: this.hostId,
+      roomType: this.roomType,
       maxPlayers: this.maxPlayers,
       turnSeconds: this.turnSeconds,
+      losingScore: this.losingScore,
+      openPoints: this.openPoints,
       round: this.round,
-      threshold: thresholdFor(this.seats.length),
-      losingScore: LOSING_SCORE,
+      threshold: this.threshold(),
       seats: this.seats.map((s) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, score: s.score,
+        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, score: s.score, bot: s.bot ?? "",
         opened: this.opened.has(s.id), cards: this.hands.get(s.id)?.length ?? 0,
       })),
       turn: this.turn,
@@ -438,7 +615,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       taken: this.taken ?? -1,
       turnEndsAt: this.turnEndsAt,
       deck: this.deck.length,
-      discardTop: this.discard[this.discard.length - 1] ?? -1,
+      discardTail: this.discard.slice(-6),
       discardCount: this.discard.length,
       melds: this.melds,
       lastRound: this.lastRound,
