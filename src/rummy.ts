@@ -10,8 +10,55 @@ export const rankOf = (c: number) => (c % 13) + 1;
 export const suitOf = (c: number) => Math.floor((c % 52) / 13);
 
 export type MeldKind = "set" | "run";
-/** A valid meld: its cards in table order (jokers in the place they stand for), its points without jokers. */
-export type Meld = { kind: MeldKind; cards: number[]; points: number };
+/**
+ * A valid meld: its cards in table order (jokers in the place they stand for), its points without
+ * the jokers, and [full]: with each joker worth the card it stands for.
+ */
+export type Meld = { kind: MeldKind; cards: number[]; points: number; full: number };
+
+/** The table's rules, set by the host in the waiting room. */
+export type Rules = {
+  needRun: boolean; // the opening needs a run without a joker (5-6-7), not only sets
+  raiseOpening: boolean; // each opening must beat the last one: 106 → the next needs 107
+  openWithDiscard: boolean; // the opening must use a card taken from the discard pile
+  jokerPoints: boolean; // jokers count toward the opening (worth the card they stand for)
+  oneJoker: boolean; // at most one joker in a meld
+  maxFive: boolean; // melds are laid down with 5 cards at most (adding to them later is free)
+  jokerDouble: boolean; // going out with a joker doubles the penalties
+  jokerSwap: boolean; // a real card can take a joker's place on the table
+  addToOthers: boolean; // cards can be added to other players' melds
+};
+export const DEFAULT_RULES: Rules = {
+  needRun: true,
+  raiseOpening: true,
+  openWithDiscard: false,
+  jokerPoints: false,
+  oneJoker: true,
+  maxFive: true,
+  jokerDouble: true,
+  jokerSwap: true,
+  addToOthers: true,
+};
+
+const jokersIn = (m: { cards: number[] }) => m.cards.filter(isJoker).length;
+
+/** Why this meld can't be laid down under [rules] ("" when it can). */
+export function layError(m: Meld, rules: Rules): string {
+  if (rules.oneJoker && jokersIn(m) > 1) return "two_jokers";
+  if (rules.maxFive && m.cards.length > 5) return "too_long";
+  return "";
+}
+
+/** The opening's points: melds without a joker, or every meld when jokers count. */
+export function openingPoints(melds: Meld[], rules: Rules): number {
+  return melds.reduce((n, m) => n + (rules.jokerPoints ? m.full : jokersIn(m) === 0 ? m.points : 0), 0);
+}
+
+/** Why these melds can't open ("" when they can): a real run when required, and enough points. */
+export function openingError(melds: Meld[], need: number, rules: Rules): string {
+  if (rules.needRun && !melds.some((m) => m.kind === "run" && jokersIn(m) === 0)) return "need_run";
+  return openingPoints(melds, rules) >= need ? "" : "below_threshold";
+}
 
 /** A run position's value: 1 is the low ace, 14 the high ace (Q-K-A). */
 const runPoints = (v: number) => (v === 1 ? 1 : v === 14 ? 11 : Math.min(v, 10));
@@ -39,7 +86,12 @@ function setOf(cards: number[]): Meld | null {
   if (real.some((c) => rankOf(c) !== rank)) return null;
   if (new Set(real.map(suitOf)).size !== real.length) return null;
   const sorted = [...real].sort((a, b) => suitOf(a) - suitOf(b));
-  return { kind: "set", cards: [...sorted, ...cards.filter(isJoker)], points: real.length * setPoints(rank) };
+  return {
+    kind: "set",
+    cards: [...sorted, ...cards.filter(isJoker)],
+    points: real.length * setPoints(rank),
+    full: cards.length * setPoints(rank),
+  };
 }
 
 function runOf(cards: number[]): Meld | null {
@@ -62,13 +114,14 @@ function runOf(cards: number[]): Meld | null {
     while (spare > 0 && start > 1) (start--, spare--);
     if (spare > 0) continue;
     const ordered: number[] = [];
-    let points = 0, j = 0;
+    let points = 0, full = 0, j = 0;
     for (let v = start; v <= end; v++) {
       const at = valued.find((x) => x.v === v);
       ordered.push(at ? at.c : jokers[j++]);
       if (at) points += runPoints(v);
+      full += runPoints(v);
     }
-    return { kind: "run", cards: ordered, points };
+    return { kind: "run", cards: ordered, points, full };
   }
   return null;
 }

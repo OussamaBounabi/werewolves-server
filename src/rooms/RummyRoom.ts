@@ -1,6 +1,8 @@
 import { Room, Client, ServerError } from "colyseus";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
-import { isJoker, jokerFits, meldOf, shuffled, type MeldKind } from "../rummy.js";
+import {
+  DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError, openingPoints, shuffled, type MeldKind, type Rules,
+} from "../rummy.js";
 import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
 
@@ -23,6 +25,7 @@ type Settings = {
   turnSeconds?: number;
   losingScore?: number;
   openPoints?: number;
+  rules?: Partial<Rules>;
 };
 type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
 type Seat = {
@@ -49,6 +52,7 @@ const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Wali
 const HAND = 14;
 const NEVER_OPENED = 200, PER_CARD = 10;
 const DEAL_MS = 3_200; // the apps' deal animation, before the first turn
+const LAY_MS = 350; // the apps' lay-down animation, per meld
 const ROUND_PAUSE_MS = 10_000; // the round's results, before the next deal
 const RECONNECT_SECONDS = 600;
 const CLOSE_AFTER_GAME_MS = 60_000;
@@ -67,6 +71,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private turnSeconds = 60;
   private losingScore = 2000;
   private openPoints = 0;
+  private rules: Rules = { ...DEFAULT_RULES };
+  private lastOpening = 0; // this round's highest opening (each opening must beat it, by the rules)
   private seats: Seat[] = []; // seat order = turn order
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>(); // account uids invited by someone at the table
@@ -217,6 +223,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (TURN_OPTIONS.includes(Number(s.turnSeconds))) this.turnSeconds = Number(s.turnSeconds);
     if (SCORE_OPTIONS.includes(Number(s.losingScore))) this.losingScore = Number(s.losingScore);
     if (OPEN_OPTIONS.includes(Number(s.openPoints))) this.openPoints = Number(s.openPoints);
+    for (const [key, value] of Object.entries(s.rules ?? {})) {
+      if (key in DEFAULT_RULES && typeof value === "boolean") this.rules[key as keyof Rules] = value;
+    }
     this.updateListing();
   }
 
@@ -271,8 +280,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   // ---- the round ----
 
+  /** The points an opening needs now: the table's threshold, or beating the round's best opening. */
   private threshold() {
-    return this.openPoints || thresholdFor(this.seats.length);
+    const base = this.openPoints || thresholdFor(this.seats.length);
+    return this.rules.raiseOpening && this.lastOpening >= base ? this.lastOpening + 1 : base;
   }
 
   private deal() {
@@ -284,6 +295,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.opened.clear();
     this.staged.clear();
     this.waited.clear();
+    this.lastOpening = 0;
     this.starter = (this.starter + 1) % this.seats.length;
     // One card at a time around the table, from the first player (who gets the 15th).
     const order = [...this.seats.slice(this.starter), ...this.seats.slice(0, this.starter)];
@@ -391,6 +403,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!picked) return "bad_cards";
     const meld = meldOf(picked);
     if (!meld) return "not_a_meld";
+    const broken = layError(meld, this.rules);
+    if (broken) return broken;
     const staged = this.staged.get(id) ?? [];
     if (!this.keepsOne(id, staged.flat().length + picked.length)) return "keep_one";
     this.staged.set(id, [...staged, meld.cards]);
@@ -421,17 +435,23 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!id || staged.length === 0) return;
     if (!this.takenUsed(staged.flat()) && !this.jokerFinish(id, staged.flat().length)) return "use_taken";
     if (!this.opened.has(id)) {
-      // The opening: melds without a joker must reach the threshold on their own.
-      const points = staged.map((c) => meldOf(c)!).filter((m) => !m.cards.some(isJoker)).reduce((n, m) => n + m.points, 0);
-      if (points < this.threshold()) return "below_threshold";
+      // The opening: enough points (by default without the jokers' melds), a real run, maybe a taken card.
+      const melds = staged.map((c) => meldOf(c)!);
+      if (this.rules.openWithDiscard && (this.taken === null || !this.takenUsed(staged.flat()))) return "open_with_discard";
+      const broken = openingError(melds, this.threshold(), this.rules);
+      if (broken) return broken;
       this.opened.add(id);
+      this.lastOpening = Math.max(this.lastOpening, openingPoints(melds, this.rules));
     }
     const hand = this.hands.get(id)!;
+    const laid: number[] = [];
     for (const cards of staged) {
       const meld = meldOf(cards)!;
       this.melds.push({ id: ++this.meldSeq, owner: id, kind: meld.kind, cards: meld.cards });
+      laid.push(this.meldSeq);
       for (const c of cards) hand.splice(hand.indexOf(c), 1);
     }
+    this.broadcast("rummy_fx", { type: "lay", who: id, melds: laid });
     if (this.takenUsed(staged.flat())) this.taken = null;
     this.staged.delete(id);
   }
@@ -443,13 +463,16 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const meld = this.melds.find((m) => m.id === Number(meldId));
     const picked = this.free(id, cards);
     if (!meld || !picked) return "bad_cards";
+    if (!this.rules.addToOthers && meld.owner !== id) return "not_yours";
     const grown = meldOf([...meld.cards, ...picked]);
     if (!grown || grown.kind !== meld.kind) return "not_a_meld";
+    if (this.rules.oneJoker && grown.cards.filter(isJoker).length > 1) return "two_jokers";
     if (!this.takenUsed(picked) && !this.jokerFinish(id, picked.length)) return "use_taken";
     if (!this.keepsOne(id, (this.staged.get(id) ?? []).flat().length + picked.length)) return "keep_one";
     meld.cards = grown.cards;
     const hand = this.hands.get(id)!;
     for (const c of picked) hand.splice(hand.indexOf(c), 1);
+    this.broadcast("rummy_fx", { type: "add", who: id, meldId: meld.id, cards: picked });
     if (this.takenUsed(picked)) this.taken = null;
   }
 
@@ -458,6 +481,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const id = this.actor(client, "play");
     if (!id) return;
     if (!this.opened.has(id)) return "not_opened";
+    if (!this.rules.jokerSwap) return "no_swap";
     const meld = this.melds.find((m) => m.id === Number(meldId));
     if (!meld || !this.free(id, [card])) return "bad_cards";
     const index = meld.cards.findIndex((_, i) => jokerFits(meld, i, Number(card)));
@@ -496,7 +520,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     for (const s of this.seats) {
       if (s.id === winner) continue;
       const base = this.opened.has(s.id) ? PER_CARD * this.hands.get(s.id)!.length : NEVER_OPENED;
-      penalties[s.id] = joker ? base * 2 : base;
+      penalties[s.id] = joker && this.rules.jokerDouble ? base * 2 : base;
       s.score += penalties[s.id];
     }
     this.lastRound = { winner, joker, penalties };
@@ -527,8 +551,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     return {
       level: seat.bot ?? "normal",
       hand: [...hand],
+      me: id,
       opened: this.opened.has(id),
       threshold: this.threshold(),
+      rules: this.rules,
       melds: this.melds,
       taken: this.taken,
       canWait:
@@ -545,6 +571,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const steps: (() => string | void)[] = [];
     const me = this.clientOf(id);
     const think = () => (700 + Math.random() * 900) * RummyRoom.botSpeed;
+    let pause = 0; // extra wait after a move, for its animation
     const run = (ms: number) => {
       this.botTimer = this.clock.setTimeout(() => {
         if (this.turn !== id || this.phase !== "playing") return;
@@ -555,7 +582,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
           return this.timeOut(); // a move the room refused: undo the half moves and throw a card
         }
         this.sync();
-        if (steps.length > 0) run((450 + Math.random() * 350) * RummyRoom.botSpeed);
+        if (steps.length > 0) run((450 + Math.random() * 350 + pause) * RummyRoom.botSpeed);
+        pause = 0;
       }, ms);
     };
     steps.push(() => {
@@ -568,7 +596,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       if (plan.waiting) this.waited.set(id, (this.waited.get(id) ?? 0) + 1);
       for (const s of plan.swaps) steps.push(() => this.handleSwap(me, s.meldId, s.card));
       for (const cards of plan.lay) steps.push(() => this.handleStage(me, cards));
-      if (plan.lay.length > 0) steps.push(() => this.handleLay(me));
+      if (plan.lay.length > 0) {
+        steps.push(() => {
+          pause = plan.lay.length * LAY_MS; // the apps show the melds coming down one by one
+          return this.handleLay(me);
+        });
+      }
       for (const a of plan.adds) steps.push(() => this.handleAdd(me, a.meldId, a.cards));
       steps.push(() => this.handleDiscard(me, plan.discard));
     });
@@ -604,6 +637,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       turnSeconds: this.turnSeconds,
       losingScore: this.losingScore,
       openPoints: this.openPoints,
+      rules: this.rules,
       round: this.round,
       threshold: this.threshold(),
       seats: this.seats.map((s) => ({
@@ -628,7 +662,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         ...table,
         me: id,
         hand: (this.hands.get(id) ?? []).filter((c) => !staged.flat().includes(c)),
-        staged: staged.map((cards) => ({ cards, points: meldOf(cards)!.points, joker: cards.some(isJoker) })),
+        staged: staged.map((cards) => {
+          const meld = meldOf(cards)!;
+          return { cards, points: meld.points, full: meld.full, joker: cards.some(isJoker), run: meld.kind === "run" };
+        }),
       });
     }
   }

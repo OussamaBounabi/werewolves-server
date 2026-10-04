@@ -1,4 +1,4 @@
-import { isJoker, jokerFits, meldOf, rankOf, suitOf, type MeldKind } from "./rummy.js";
+import { isJoker, jokerFits, layError, meldOf, openingError, rankOf, suitOf, type Meld, type MeldKind, type Rules } from "./rummy.js";
 
 /**
  * The rummy bot's brain: pure functions from what a seat sees to what it does this turn.
@@ -14,6 +14,8 @@ export type TableMeld = { id: number; owner: string; kind: MeldKind; cards: numb
 
 export type BotView = {
   level: BotLevel;
+  me: string; // its seat (whose melds are its own)
+  rules: Rules;
   hand: number[];
   opened: boolean;
   threshold: number;
@@ -36,15 +38,15 @@ const key = (c: number) => c % 52;
 const JOKERS = [104, 105, 106, 107];
 const cardPoints = (c: number) => (isJoker(c) ? 0 : rankOf(c) === 1 ? 11 : Math.min(rankOf(c), 10));
 
-/** A meld the hand can make: real cards by key, plus jokers. */
-type Cand = { keys: number[]; jokers: number; points: number };
-type Combo = { cands: Cand[]; used: number; free: number; jokers: number };
+/** A meld the hand can make (allowed by the table's rules): real cards by key, plus jokers. */
+type Cand = { keys: number[]; jokers: number; meld: Meld };
+type Combo = { cands: Cand[]; used: number; jokers: number };
 
-function candidates(counts: number[], jokers: number): Cand[] {
+function candidates(counts: number[], jokers: number, rules: Rules): Cand[] {
   const out: Cand[] = [];
   const add = (keys: number[], j: number) => {
     const meld = meldOf([...keys, ...JOKERS.slice(0, j)]);
-    if (meld) out.push({ keys, jokers: j, points: meld.points });
+    if (meld && !layError(meld, rules)) out.push({ keys, jokers: j, meld });
   };
   for (let r = 0; r < 13; r++) {
     const suits = [0, 1, 2, 3].filter((s) => counts[s * 13 + r] > 0);
@@ -70,15 +72,20 @@ function candidates(counts: number[], jokers: number): Cand[] {
     }
   }
   // Big melds first: the search meets good splits early (it gives up after a while).
-  return out.sort((x, y) => y.keys.length + y.jokers - (x.keys.length + x.jokers) || y.points - x.points);
+  return out.sort((x, y) => y.keys.length + y.jokers - (x.keys.length + x.jokers) || y.meld.points - x.meld.points);
 }
 
 /** Every way to put candidates together without using a card twice; [better] picks the best. */
-function bestCombo(hand: number[], better: (a: Combo, b: Combo) => boolean, valid: (c: Combo) => boolean): Combo | null {
+function bestCombo(
+  hand: number[],
+  rules: Rules,
+  better: (a: Combo, b: Combo) => boolean,
+  valid: (c: Combo) => boolean,
+): Combo | null {
   const counts = new Array(52).fill(0);
   for (const c of hand) if (!isJoker(c)) counts[key(c)]++;
   const jokers = hand.filter(isJoker).length;
-  const cands = candidates(counts, jokers);
+  const cands = candidates(counts, jokers, rules);
   let best: Combo | null = null;
   let nodes = 0;
   const chosen: Cand[] = [];
@@ -87,7 +94,6 @@ function bestCombo(hand: number[], better: (a: Combo, b: Combo) => boolean, vali
     const combo: Combo = {
       cands: [...chosen],
       used: chosen.reduce((n, c) => n + c.keys.length + c.jokers, 0),
-      free: chosen.filter((c) => c.jokers === 0).reduce((n, c) => n + c.points, 0),
       jokers: usedJokers,
     };
     if (valid(combo) && (!best || better(combo, best))) best = combo;
@@ -119,12 +125,17 @@ function cardsOf(combo: Combo, pool: number[], taken: number | null): number[][]
 }
 
 /** Greedy: each card of [pool] that fits a meld on the table goes there (jokers only if [jokersToo]). */
-function addsFor(pool: number[], table: TableMeld[], keep: number, jokersToo: boolean) {
+function addsFor(pool: number[], table: TableMeld[], keep: number, jokersToo: boolean, view: BotView) {
   const adds: { meldId: number; cards: number[] }[] = [];
+  const fits = (m: TableMeld, card: number) => {
+    if (!view.rules.addToOthers && m.owner !== view.me) return false;
+    const grown = meldOf([...m.cards, card]);
+    return grown?.kind === m.kind && !(view.rules.oneJoker && grown.cards.filter(isJoker).length > 1);
+  };
   for (const card of [...pool].sort((a, b) => Number(isJoker(a)) - Number(isJoker(b)))) {
     if (pool.length <= keep) break;
     if (isJoker(card) && !jokersToo) continue;
-    const meld = table.find((m) => meldOf([...m.cards, card])?.kind === m.kind);
+    const meld = table.find((m) => fits(m, card));
     if (!meld) continue;
     meld.cards = meldOf([...meld.cards, card])!.cards;
     pool.splice(pool.indexOf(card), 1);
@@ -143,7 +154,7 @@ export function planTurn(view: BotView): BotPlan | null {
   let hand = [...view.hand];
   const swaps: BotPlan["swaps"] = [];
   // Real cards from the hand take the jokers' places on the table: free jokers.
-  if (view.opened && !easy && view.taken === null) {
+  if (view.opened && !easy && view.taken === null && view.rules.jokerSwap) {
     for (const meld of table) {
       for (let i = 0; i < meld.cards.length; i++) {
         const card = hand.find((c) => jokerFits(meld, i, c));
@@ -154,7 +165,11 @@ export function planTurn(view: BotView): BotPlan | null {
       }
     }
   }
-  const opens = (c: Combo) => view.opened || c.free >= view.threshold;
+  // Opening: the table's rules (points, a real run), and maybe the taken card in it.
+  const opens = (c: Combo) =>
+    view.opened ||
+    (!openingError(c.cands.map((x) => x.meld), view.threshold, view.rules) &&
+      (!view.rules.openWithDiscard || (view.taken !== null && usesTaken(view.taken, comboCards(c, view.taken)))));
   const moreCards = (a: Combo, b: Combo) => a.used > b.used || (a.used === b.used && a.jokers < b.jokers);
 
   // Going out: everything but one card goes down. A joker as the last card doubles the penalties.
@@ -162,12 +177,12 @@ export function planTurn(view: BotView): BotPlan | null {
   for (const last of lastCards) {
     const rest = [...hand];
     rest.splice(rest.indexOf(last), 1);
-    const combo = bestCombo(rest, moreCards, opens);
+    const combo = bestCombo(rest, view.rules, moreCards, opens);
     if (!combo) continue;
     const pool = [...rest];
     const lay = cardsOf(combo, pool, view.taken);
     const tableAfter = table.map((m) => ({ ...m, cards: [...m.cards] }));
-    const adds = combo.used > 0 || view.opened ? addsFor(pool, tableAfter, 0, true) : [];
+    const adds = combo.used > 0 || view.opened ? addsFor(pool, tableAfter, 0, true, view) : [];
     if (pool.length > 0) continue;
     const down = [...lay.flat(), ...adds.flatMap((a) => a.cards)];
     if (!usesTaken(view.taken, down) && !(last === view.taken && isJoker(last))) continue;
@@ -184,14 +199,21 @@ export function planTurn(view: BotView): BotPlan | null {
 
   // Not out yet: lay what it can (opening needs the threshold without jokers), keep one card to throw.
   const keepOne = (c: Combo) => opens(c) && c.used <= hand.length - 1 && usesTaken(view.taken, comboCards(c, view.taken));
-  const combo = easy && !view.opened ? bestCombo(hand, moreCards, (c) => keepOne(c) && c.cands.length <= 3) : bestCombo(hand, moreCards, keepOne);
+  const combo = easy && !view.opened
+    ? bestCombo(hand, view.rules, moreCards, (c) => keepOne(c) && c.cands.length <= 3)
+    : bestCombo(hand, view.rules, moreCards, keepOne);
   const pool = [...hand];
   const lay = combo && combo.used > 0 ? cardsOf(combo, pool, view.taken) : [];
   const opened = view.opened || lay.length > 0;
-  const adds = opened && !easy ? addsFor(pool, table, 1, false) : [];
+  const adds = opened && !easy ? addsFor(pool, table, 1, false, view) : [];
   if (!usesTaken(view.taken, [...lay.flat(), ...adds.flatMap((a) => a.cards)])) {
     // The taken card fits a table meld: add it on its own.
-    const meld = opened && view.taken !== null ? table.find((m) => meldOf([...m.cards, view.taken!])?.kind === m.kind) : undefined;
+    const meld =
+      opened && view.taken !== null
+        ? table.find(
+            (m) => (view.rules.addToOthers || m.owner === view.me) && meldOf([...m.cards, view.taken!])?.kind === m.kind,
+          )
+        : undefined;
     if (!meld || pool.length < 2) return null;
     pool.splice(pool.indexOf(view.taken!), 1);
     adds.push({ meldId: meld.id, cards: [view.taken!] });

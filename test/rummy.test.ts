@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { isJoker, jokerFits, meldOf } from "../src/rummy.js";
+import { DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError } from "../src/rummy.js";
 import { planTurn, wantsDiscard, type BotView } from "../src/rummyBot.js";
 import { RummyRoom } from "../src/rooms/RummyRoom.js";
 
@@ -36,6 +36,26 @@ describe("rummy melds", () => {
     assert.ok(jokerFits(meldOf([c(12, 3), c(13, 3), J])!, 2, c(1, 3)));
     const set = meldOf([c(9, 0), c(9, 1), J])!;
     assert.ok(jokerFits(set, 2, c(9, 3)) && !jokerFits(set, 2, c(9, 0, 1)));
+  });
+});
+
+describe("rummy table rules", () => {
+  it("lays at most one joker per meld and 5 cards per meld; adds stay free", () => {
+    assert.strictEqual(layError(meldOf([c(5, 0), J, J + 1, c(8, 0)])!, DEFAULT_RULES), "two_jokers");
+    assert.strictEqual(layError(meldOf([3, 4, 5, 6, 7, 8].map((r) => c(r, 1)))!, DEFAULT_RULES), "too_long");
+    assert.strictEqual(layError(meldOf([3, 4, 5, 6, 7].map((r) => c(r, 1)))!, DEFAULT_RULES), "");
+    assert.strictEqual(layError(meldOf([c(5, 0), J, J + 1, c(8, 0)])!, { ...DEFAULT_RULES, oneJoker: false }), "");
+  });
+
+  it("opens only with a run without a joker, and jokers count only if the table says so", () => {
+    const sets = [meldOf([c(6, 0), c(6, 1), c(6, 2)])!, meldOf([c(10, 0), c(10, 1), c(10, 2), c(10, 3)])!];
+    assert.strictEqual(openingError(sets, 51, DEFAULT_RULES), "need_run"); // 18 + 40 but no run
+    assert.strictEqual(openingError(sets, 51, { ...DEFAULT_RULES, needRun: false }), "");
+    const jokerRun = meldOf([c(9, 2), J, c(11, 2)])!;
+    assert.strictEqual(openingError([...sets, jokerRun], 51, DEFAULT_RULES), "need_run");
+    const run = meldOf([c(5, 3), c(6, 3), c(7, 3)])!;
+    assert.strictEqual(openingError([run, jokerRun], 40, DEFAULT_RULES), "below_threshold"); // 18: the joker run doesn't count
+    assert.strictEqual(openingError([run, jokerRun], 40, { ...DEFAULT_RULES, jokerPoints: true }), ""); // 18 + 30
   });
 });
 
@@ -125,6 +145,20 @@ describe("RummyRoom", () => {
     assert.ok(room.hands.get(b.sessionId).includes(c(5, 3))); // the taken 5♣ stays in his hand
   });
 
+  it("raises the opening: after a 119 opening the next one needs 120", async () => {
+    const hand = [
+      c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0),
+      c(9, 1), c(10, 1), c(11, 1), c(12, 1), c(13, 1),
+      c(7, 0), c(7, 1), c(7, 2), c(2, 3),
+    ];
+    const { room, send } = await rigged(hand, c(4, 2), false);
+    await send("draw");
+    for (const m of [hand.slice(0, 5), hand.slice(5, 10), hand.slice(10, 13)]) await send("stage", { cards: m });
+    await send("lay");
+    assert.strictEqual(room.lastOpening, 119);
+    assert.strictEqual(room.threshold(), 120);
+  });
+
   it("takes a discarded joker to rummy: lays all 14 cards and throws the joker", async () => {
     const hand = [
       c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0),
@@ -169,7 +203,8 @@ describe("RummyRoom", () => {
 
 describe("rummy bot", () => {
   const view = (hand: number[], extra: Partial<BotView> = {}): BotView => ({
-    level: "normal", hand, opened: false, threshold: 101, melds: [], taken: null, canWait: false, nextOpened: false, ...extra,
+    level: "normal", me: "bot", rules: DEFAULT_RULES, hand, opened: false, threshold: 101, melds: [], taken: null,
+    canWait: false, nextOpened: false, ...extra,
   });
   const strong = [
     c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0), // 49
