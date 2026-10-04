@@ -49,7 +49,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private starter = -1; // seat index that started the round
   private turn = ""; // whose turn
   private stage: "draw" | "play" = "draw";
-  private taken: number | null = null; // the discard he took: it must be laid down before he discards
+  private taken: number | null = null; // the discard he took: nothing goes on the table without it
   private drawn: number | null = null;
   private turnEndsAt = 0;
   private lastRound: RoundResult | null = null;
@@ -288,10 +288,25 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (id) this.staged.get(id)?.splice(Number(index), 1);
   }
 
+  /**
+   * After taking the discard, his cards go on the table only with it — or with his own copy of it
+   * (two decks: his 5♣ stands for the 5♣ he took, which can stay in his hand).
+   */
+  private takenUsed(cards: number[]) {
+    const t = this.taken;
+    return t === null || cards.some((c) => c === t || (!isJoker(c) && !isJoker(t) && c % 52 === t % 52));
+  }
+
+  /** The exception: a discarded joker taken to finish — every other card goes down, the joker is his last throw. */
+  private jokerFinish(id: string, using: number) {
+    return this.taken !== null && isJoker(this.taken) && this.hands.get(id)!.length - using === 1;
+  }
+
   private handleLay(client: Client) {
     const id = this.actor(client, "play");
     const staged = id ? this.staged.get(id) ?? [] : [];
     if (!id || staged.length === 0) return;
+    if (!this.takenUsed(staged.flat()) && !this.jokerFinish(id, staged.flat().length)) return "use_taken";
     if (!this.opened.has(id)) {
       // The opening: melds without a joker must reach the threshold on their own.
       const points = staged.map((c) => meldOf(c)!).filter((m) => !m.cards.some(isJoker)).reduce((n, m) => n + m.points, 0);
@@ -303,8 +318,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       const meld = meldOf(cards)!;
       this.melds.push({ id: ++this.meldSeq, owner: id, kind: meld.kind, cards: meld.cards });
       for (const c of cards) hand.splice(hand.indexOf(c), 1);
-      if (cards.includes(this.taken!)) this.taken = null;
     }
+    if (this.takenUsed(staged.flat())) this.taken = null;
     this.staged.delete(id);
   }
 
@@ -317,11 +332,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!meld || !picked) return "bad_cards";
     const grown = meldOf([...meld.cards, ...picked]);
     if (!grown || grown.kind !== meld.kind) return "not_a_meld";
+    if (!this.takenUsed(picked) && !this.jokerFinish(id, picked.length)) return "use_taken";
     if (!this.keepsOne(id, (this.staged.get(id) ?? []).flat().length + picked.length)) return "keep_one";
     meld.cards = grown.cards;
     const hand = this.hands.get(id)!;
     for (const c of picked) hand.splice(hand.indexOf(c), 1);
-    if (picked.includes(this.taken!)) this.taken = null;
+    if (this.takenUsed(picked)) this.taken = null;
   }
 
   /** The real card a joker on the table stands for takes its place; the joker goes to his hand. */
@@ -333,17 +349,19 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (!meld || !this.free(id, [card])) return "bad_cards";
     const index = meld.cards.findIndex((_, i) => jokerFits(meld, i, Number(card)));
     if (index < 0) return "no_joker_fits";
+    if (!this.takenUsed([Number(card)])) return "use_taken";
     const hand = this.hands.get(id)!;
     hand.splice(hand.indexOf(Number(card)), 1, meld.cards[index]);
     meld.cards[index] = Number(card);
-    if (Number(card) === this.taken) this.taken = null;
+    this.taken = null;
   }
 
   private handleDiscard(client: Client, card: number) {
     const id = this.actor(client, "play");
     if (!id) return;
-    if (this.taken !== null) return "use_taken";
-    if (!this.hands.get(id)!.includes(Number(card))) return "bad_cards";
+    const hand = this.hands.get(id)!;
+    if (this.taken !== null && !(isJoker(this.taken) && hand.length === 1)) return "use_taken";
+    if (!hand.includes(Number(card))) return "bad_cards";
     this.throwCard(id, Number(card));
   }
 

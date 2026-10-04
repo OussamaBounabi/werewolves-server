@@ -87,4 +87,56 @@ describe("RummyRoom", () => {
     assert.strictEqual(back.stage, "draw");
     assert.strictEqual(back.hand.length, 14);
   });
+
+  // Sets up b's turn (draw stage) with this hand and this card on the discard pile.
+  async function rigged(hand: number[], top: number, opened: boolean) {
+    const room: any = await colyseus.createRoom("rummy", {});
+    const a = await colyseus.connectTo(room);
+    const b = await colyseus.connectTo(room);
+    const errors: string[] = [];
+    b.onMessage("rummy", () => {});
+    b.onMessage("rummy_error", (e: any) => errors.push(e.code));
+    a.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.hands.set(b.sessionId, [...hand]);
+    room.discard = [top];
+    room.turn = b.sessionId;
+    room.stage = "draw";
+    if (opened) room.opened.add(b.sessionId);
+    const send = async (type: string, msg?: object) => {
+      b.send(type, msg);
+      await new Promise((r) => setTimeout(r, 150));
+    };
+    return { room, b, errors, send };
+  }
+
+  it("lays nothing without the taken card — or the player's own copy of it", async () => {
+    const other = [c(9, 0), c(9, 1), c(9, 2)];
+    const { room, b, errors, send } = await rigged([c(5, 3, 1), c(5, 0), c(5, 1), ...other, c(2, 2)], c(5, 3), true);
+    await send("take");
+    await send("stage", { cards: other });
+    await send("lay");
+    assert.deepStrictEqual(errors, ["use_taken"]);
+    await send("stage", { cards: [c(5, 3, 1), c(5, 0), c(5, 1)] }); // his own 5♣
+    await send("lay");
+    assert.strictEqual(room.taken, null);
+    assert.ok(room.hands.get(b.sessionId).includes(c(5, 3))); // the taken 5♣ stays in his hand
+  });
+
+  it("takes a discarded joker to rummy: lays all 14 cards and throws the joker", async () => {
+    const hand = [
+      c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0),
+      c(9, 1), c(10, 1), c(11, 1), c(12, 1), c(13, 1),
+      c(7, 0), c(7, 1), c(7, 2), c(7, 3),
+    ];
+    const { room, b, errors, send } = await rigged(hand, J, false);
+    await send("take");
+    for (const m of [hand.slice(0, 5), hand.slice(5, 10), hand.slice(10)]) await send("stage", { cards: m });
+    await send("lay");
+    assert.deepStrictEqual(room.hands.get(b.sessionId), [J]);
+    await send("discard", { card: J });
+    assert.deepStrictEqual(errors, []);
+    assert.strictEqual(room.lastRound.joker, true);
+    assert.strictEqual(Object.values(room.lastRound.penalties)[0], 400); // never opened, doubled
+  });
 });
