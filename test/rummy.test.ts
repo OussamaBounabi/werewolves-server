@@ -78,7 +78,7 @@ describe("RummyRoom", () => {
   beforeEach(async () => await colyseus.cleanup());
 
   it("deals 15 to the first player, 14 to the other, and passes the turn on a discard", async () => {
-    const room = await colyseus.createRoom("rummy", {});
+    const room: any = await colyseus.createRoom("rummy", {});
     const a = await colyseus.connectTo(room);
     const b = await colyseus.connectTo(room);
     // The latest view each one got; next() waits for one that passes the check.
@@ -87,7 +87,7 @@ describe("RummyRoom", () => {
     for (const client of [a, b]) client.onMessage("rummy", (v: any) => views.set(client, v));
     b.onMessage("rummy_error", (e: any) => errors.push(e.code));
     const next = async (client: any, check: (v: any) => boolean) => {
-      const deadline = Date.now() + 3000;
+      const deadline = Date.now() + 6000;
       while (!(views.get(client) && check(views.get(client)))) {
         if (Date.now() > deadline) throw new Error("timed out");
         await new Promise((r) => setTimeout(r, 20));
@@ -95,9 +95,19 @@ describe("RummyRoom", () => {
       return views.get(client);
     };
     a.send("start_game");
+    // The seat draw: K and A face down, each picks one; the A sits first and plays first.
+    const seating = await next(a, (v) => v.phase === "seating");
+    assert.strictEqual(seating.seating.count, 2);
+    const aceAt = room.seating.cards.findIndex((c: number) => c % 13 === 0);
+    a.send("pick", { index: aceAt }); // a takes the A
+    b.send("pick", { index: aceAt }); // taken: refused
+    b.send("pick", { index: 1 - aceAt });
+    const shown = await next(a, (v) => v.seating?.cards.length === 2);
+    assert.strictEqual(shown.seating.picks[shown.me], aceAt);
     const sa = await next(a, (v) => v.phase === "playing");
     const sb = await next(b, (v) => v.phase === "playing");
     assert.strictEqual(sa.phase, "playing");
+    assert.strictEqual(sa.seats[0].id, sa.me); // the A's seat comes first
     assert.strictEqual(sa.hand.length, 15);
     assert.strictEqual(sb.hand.length, 14);
     assert.strictEqual(sa.threshold, 101);
@@ -131,6 +141,9 @@ describe("RummyRoom", () => {
     b.onMessage("rummy", () => {});
     b.onMessage("rummy_error", (e: any) => errors.push(e.code));
     a.send("start_game");
+    while (room.phase !== "seating") await new Promise((r) => setTimeout(r, 20));
+    room.handlePick(a.sessionId, 0);
+    room.handlePick(b.sessionId, 1);
     while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
     room.hands.set(b.sessionId, [...hand]);
     room.discard = [top];
@@ -197,7 +210,7 @@ describe("RummyRoom", () => {
     assert.strictEqual(room.discard.length, 0);
   });
 
-  it("a set's joker needs every missing card; a complete set goes under the discard pile", async () => {
+  it("a set's joker needs every missing card; complete sets wait on the table for the reshuffle", async () => {
     const { room, b, errors, send } = await rigged([c(9, 2), c(9, 3), c(4, 1), c(5, 1)], c(5, 0), true);
     room.melds = [
       { id: 1, owner: "x", kind: "set", cards: [c(9, 0), c(9, 1), J] },
@@ -210,9 +223,12 @@ describe("RummyRoom", () => {
     await send("swap", { meldId: 1, cards: [c(9, 2), c(9, 3)] });
     assert.ok(room.hands.get(b.sessionId).includes(J)); // the joker is his
     await send("add", { meldId: 2, cards: [c(4, 1)] }); // 4 4 4 + 4: complete too
-    assert.deepStrictEqual(room.melds, []); // both complete sets left the table…
-    assert.strictEqual(room.discard.length, 9); // …under the pile
-    assert.strictEqual(room.discard[room.discard.length - 1], c(13, 0)); // the top card didn't change
+    assert.strictEqual(room.melds.length, 2); // complete sets stay on the table…
+    room.deck = [];
+    room.stage = "draw";
+    await send("draw"); // …until the reshuffle: they go into the new deck with the discards
+    assert.deepStrictEqual(room.melds, []);
+    assert.strictEqual(room.deck.length + 1, 9); // 8 cards of the two sets + the discard, one drawn
   });
 
   it("raises the bar with everything laid: 104 + a joker meld worth 30 → the next needs 135", async () => {
@@ -310,8 +326,10 @@ describe("RummyRoom", () => {
     await new Promise((r) => setTimeout(r, 200));
     assert.strictEqual(room.seats.length, 4);
     host.send("start_game");
+    while (room.phase !== "seating" && room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.becomeBot(host.sessionId); // the host's seat plays itself too (a random card in the seat draw)
+    room.showPicks();
     while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
-    room.becomeBot(host.sessionId); // the host's seat plays itself too
     const deadline = Date.now() + 50_000;
     while (room.round < 2 && room.phase !== "gameover" && Date.now() < deadline) {
       // Every card is somewhere: deck, discard, hands or the table.
@@ -334,8 +352,10 @@ describe("RummyRoom", () => {
     await new Promise((r) => setTimeout(r, 200));
     assert.strictEqual(room.seats.length, 4);
     host.send("start_game");
+    while (room.phase !== "seating" && room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.becomeBot(host.sessionId); // the host's seat plays itself too (a random card in the seat draw)
+    room.showPicks();
     while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
-    room.becomeBot(host.sessionId); // the host's seat plays itself too
     const deadline = Date.now() + 50_000;
     while (room.round < 2 && !room.lastRound && room.phase !== "gameover" && Date.now() < deadline) {
       // Every card is somewhere: deck, discard, hands or the table.

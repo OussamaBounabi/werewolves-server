@@ -41,7 +41,7 @@ type Seat = {
   bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
 };
 type TableMeld = { id: number; owner: string; kind: MeldKind; cards: number[] };
-type Phase = "lobby" | "playing" | "round_end" | "gameover";
+type Phase = "lobby" | "seating" | "playing" | "round_end" | "gameover"; // seating: drawing for seats
 type RoundResult = { winner: string; joker: boolean; penalties: Record<string, number> };
 
 const MAX_SEATS = 5;
@@ -55,6 +55,8 @@ const HAND = 14;
 const NEVER_OPENED = 100, PER_CARD = 10; // a hand that never laid down / each card left; doubled by a joker finish
 const DEAL_MS = 3_200; // the apps' deal animation, before the first turn
 const LAY_MS = 350; // the apps' lay-down animation, per meld
+const PICK_MS = 10_000; // the seat draw: time to pick a card
+const PICKS_SHOWN_MS = 2_500; // the drawn cards face up, before the seats change and the deal
 const BOT_DRAW_TO_DISCARD_MS = 2_000; // a bot keeps the card it drew at least this long before throwing
 const READY_WAIT_MS = 30_000; // the round's results: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000; // everyone's ready: the next deal comes after this
@@ -81,6 +83,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private teamScores = [0, 0];
   private ready = new Set<string>(); // between rounds: who pressed "ready" (bots always are)
   private nextRoundAt = 0; // everyone's ready: when the next round is dealt
+  /** The seat draw: a straight face down in the middle (10 J Q K A at five), each player picks one. */
+  private seating: { cards: number[]; picks: Map<string, number>; shown: boolean } | null = null;
   private discardDown = false; // the round's last card went face down (a plain rummy)
   private seats: Seat[] = []; // seat order = turn order
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
@@ -132,6 +136,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on<{ card: number; faceUp?: boolean }>("discard", (c, m) => this.handleDiscard(c, m.card, m.faceUp));
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("ready", (c) => this.handleReady(c.sessionId));
+    on<{ index: number }>("pick", (c, m) => this.handlePick(c.sessionId, Number(m.index)));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     // Someone at the table invited a friend (the invite itself goes through the app's chat): let him in.
     this.onMessage("invite", (client, msg: { uid: string }) => {
@@ -302,7 +307,68 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
     this.lock();
-    this.deal();
+    if (this.teams) this.deal();
+    else this.startSeating();
+  }
+
+  /**
+   * Before the first deal, the seats are drawn: the top of a straight (10 J Q K A at five players,
+   * J Q K A at four, Q K A at three, K A at two) lies face down in the middle and everyone picks one —
+   * bots at once, anyone still thinking after 10 s gets a random one. Then the seats follow the cards:
+   * the A sits first and plays first, then the K, the Q…
+   */
+  private startSeating() {
+    const ranks = [10, 11, 12, 13, 1].slice(5 - this.seats.length);
+    const cards = shuffled()
+      .filter((c) => c < 52 && ranks.includes((c % 13) + 1))
+      .filter((c, i, all) => all.findIndex((x) => x % 13 === c % 13) === i); // one of each rank, any suit
+    this.seating = { cards, picks: new Map(), shown: false };
+    this.phase = "seating";
+    this.turnEndsAt = Date.now() + PICK_MS;
+    this.timer?.clear();
+    this.timer = this.clock.setTimeout(() => (this.showPicks(), this.sync()), PICK_MS);
+    for (const bot of this.seats.filter((x) => x.bot)) {
+      this.clock.setTimeout(() => {
+        const free = this.freePicks();
+        if (free.length > 0) this.handlePick(bot.id, free[Math.floor(Math.random() * free.length)]);
+        this.sync();
+      }, (600 + Math.random() * 1600) * RummyRoom.botSpeed);
+    }
+  }
+
+  private freePicks() {
+    const taken = new Set(this.seating?.picks.values());
+    return (this.seating?.cards ?? []).map((_, i) => i).filter((i) => !taken.has(i));
+  }
+
+  private handlePick(id: string, index: number) {
+    const seating = this.seating;
+    if (this.phase !== "seating" || !seating || seating.shown || seating.picks.has(id) || !this.seat(id)) return;
+    if (!this.freePicks().includes(index)) return;
+    seating.picks.set(id, index);
+    if (seating.picks.size === this.seats.length) this.showPicks();
+  }
+
+  /** Everyone has a card (random for the late): all face up, then the seats change and the deal starts. */
+  private showPicks() {
+    const seating = this.seating;
+    if (!seating || seating.shown) return;
+    this.timer?.clear();
+    for (const x of this.seats) {
+      if (!seating.picks.has(x.id)) seating.picks.set(x.id, this.freePicks()[0]);
+    }
+    seating.shown = true;
+    this.turnEndsAt = 0;
+    this.timer = this.clock.setTimeout(() => {
+      const value = (id: string) => {
+        const rank = (seating.cards[seating.picks.get(id)!] % 13) + 1;
+        return rank === 1 ? 14 : rank;
+      };
+      this.seats.sort((a, b) => value(b.id) - value(a.id)); // the A first: he plays first
+      this.seating = null;
+      this.deal();
+      this.sync();
+    }, PICKS_SHOWN_MS);
   }
 
   private removeSeat(id: string) {
@@ -402,6 +468,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
    */
   private drawCard(id: string) {
     if (this.deck.length === 0) {
+      this.retireFullSets(id); // complete sets on the table go back into the deck too
       this.deck = shuffled().filter((c) => this.discard.includes(c));
       this.broadcast("rummy_fx", { type: "refill", count: this.discard.length });
       this.discard = [];
@@ -519,7 +586,6 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       for (const c of cards) hand.splice(hand.indexOf(c), 1);
     }
     this.broadcast("rummy_fx", { type: "lay", who: id, melds: laid });
-    this.retireFullSets(id);
     if (this.takenUsed(staged.flat())) this.taken = null;
     this.staged.delete(id);
   }
@@ -541,7 +607,6 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const hand = this.hands.get(id)!;
     for (const c of picked) hand.splice(hand.indexOf(c), 1);
     this.broadcast("rummy_fx", { type: "add", who: id, meldId: meld.id, cards: picked });
-    this.retireFullSets(id);
     if (this.takenUsed(picked)) this.taken = null;
   }
 
@@ -579,10 +644,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     hand.push(joker);
     this.taken = null;
     this.broadcast("rummy_fx", { type: "add", who: id, meldId: meld.id, cards: picked });
-    this.retireFullSets(id);
   }
 
-  /** A complete set (the four suits) has nothing left to take: it leaves the table, under the discard pile. */
+  /** Complete sets (the four suits) have nothing left to take: at the reshuffle they leave the table, into the discards. */
   private retireFullSets(by: string) {
     for (const meld of [...this.melds]) {
       if (meld.kind !== "set" || meld.cards.length < 4 || meld.cards.some(isJoker)) continue;
@@ -774,6 +838,11 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private sync() {
     const table = {
       phase: this.phase,
+      seating: this.seating && {
+        count: this.seating.cards.length,
+        picks: Object.fromEntries(this.seating.picks),
+        cards: this.seating.shown ? this.seating.cards : [],
+      },
       hostId: this.hostId,
       roomType: this.roomType,
       maxPlayers: this.maxPlayers,
