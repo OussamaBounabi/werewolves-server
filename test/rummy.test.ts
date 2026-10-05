@@ -49,13 +49,25 @@ describe("rummy table rules", () => {
 
   it("opens only with a run without a joker, and jokers count only if the table says so", () => {
     const sets = [meldOf([c(6, 0), c(6, 1), c(6, 2)])!, meldOf([c(10, 0), c(10, 1), c(10, 2), c(10, 3)])!];
-    assert.strictEqual(openingError(sets, 51, DEFAULT_RULES), "need_run"); // 18 + 40 but no run
-    assert.strictEqual(openingError(sets, 51, { ...DEFAULT_RULES, needRun: false }), "");
+    assert.strictEqual(openingError(sets, 51, 51, DEFAULT_RULES), "need_run"); // 18 + 40 but no run
+    assert.strictEqual(openingError(sets, 51, 51, { ...DEFAULT_RULES, needRun: false }), "");
     const jokerRun = meldOf([c(9, 2), J, c(11, 2)])!;
-    assert.strictEqual(openingError([...sets, jokerRun], 51, DEFAULT_RULES), "need_run");
+    assert.strictEqual(openingError([...sets, jokerRun], 51, 51, DEFAULT_RULES), "need_run");
     const run = meldOf([c(5, 3), c(6, 3), c(7, 3)])!;
-    assert.strictEqual(openingError([run, jokerRun], 40, DEFAULT_RULES), "below_threshold"); // 18: the joker run doesn't count
-    assert.strictEqual(openingError([run, jokerRun], 40, { ...DEFAULT_RULES, jokerPoints: true }), ""); // 18 + 30
+    assert.strictEqual(openingError([run, jokerRun], 40, 40, DEFAULT_RULES), "below_threshold"); // 18: the joker run doesn't count
+    assert.strictEqual(openingError([run, jokerRun], 40, 40, { ...DEFAULT_RULES, jokerPoints: true }), ""); // 18 + 30
+  });
+
+  it("a raised bar: 91 clean is still enough, the joker melds make up the rest to 106", () => {
+    const clean = [
+      meldOf([9, 10, 11, 12, 13].map((r) => c(r, 0)))!, // 49
+      meldOf([9, 10, 11, 12].map((r) => c(r, 1)))!, // 39
+      meldOf([c(1, 2), c(2, 2), c(3, 2)])!, // 6 → 94 without jokers
+    ];
+    const jokerMeld = meldOf([c(10, 3), J, c(12, 3)])!; // 30 with the joker
+    assert.strictEqual(openingError(clean, 91, 106, DEFAULT_RULES), "below_bar"); // 94 < 106 in all
+    assert.strictEqual(openingError([...clean, jokerMeld], 91, 106, DEFAULT_RULES), ""); // 91+ clean, 124 in all
+    assert.strictEqual(openingError([clean[0], clean[1], jokerMeld], 91, 106, DEFAULT_RULES), "below_threshold"); // 88 clean
   });
 });
 
@@ -143,6 +155,16 @@ describe("RummyRoom", () => {
     await send("lay");
     assert.strictEqual(room.taken, null);
     assert.ok(room.hands.get(b.sessionId).includes(c(5, 3))); // the taken 5♣ stays in his hand
+  });
+
+  it("putting the taken card back keeps the other melds being put together", async () => {
+    const { room, b, send } = await rigged([c(5, 0), c(6, 0), c(7, 0), c(9, 1), c(9, 2), c(9, 3), c(2, 2)], c(8, 0), false);
+    await send("take");
+    await send("stage", { cards: [c(5, 0), c(6, 0), c(7, 0), c(8, 0)] }); // with the taken 8
+    await send("stage", { cards: [c(9, 1), c(9, 2), c(9, 3)] });
+    await send("untake");
+    assert.deepStrictEqual(room.staged.get(b.sessionId), [[c(9, 1), c(9, 2), c(9, 3)]]); // only the 8's meld came apart
+    assert.strictEqual(room.stage, "draw");
   });
 
   it("raises the opening: after a 119 opening the next one needs 120", async () => {
@@ -329,7 +351,7 @@ describe("RummyRoom", () => {
 describe("rummy bot", () => {
   const view = (hand: number[], extra: Partial<BotView> = {}): BotView => ({
     level: "normal", me: "bot", partner: null, partnerOpened: false, rules: DEFAULT_RULES, hand, opened: false,
-    threshold: 101, melds: [], taken: null,
+    threshold: 101, base: 101, melds: [], taken: null,
     canWait: false, nextOpened: false, ...extra,
   });
   const strong = [

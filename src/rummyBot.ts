@@ -22,7 +22,8 @@ export type BotView = {
   rules: Rules;
   hand: number[];
   opened: boolean;
-  threshold: number;
+  threshold: number; // the bar now (everything laid, jokers worth their card)
+  base: number; // the table's starting minimum (without jokers)
   melds: TableMeld[];
   taken: number | null; // the discard it just took: it must go down with its cards this turn
   canWait: boolean; // hard bots only: nobody is close to going out and jokers are still out there
@@ -185,7 +186,7 @@ export function planTurn(view: BotView): BotPlan | null {
   const opens = (c: Combo) =>
     view.opened ||
     (view.partnerOpened && (c.used === 0 || !teamLayError(c.cands.map((x) => x.meld), view.rules))) ||
-    (!openingError(c.cands.map((x) => x.meld), view.threshold, view.rules) &&
+    (!openingError(c.cands.map((x) => x.meld), view.base, view.threshold, view.rules) &&
       (!view.rules.openWithDiscard || (view.taken !== null && usesTaken(view.taken, comboCards(c, view.taken)))));
   const moreCards = (a: Combo, b: Combo) => a.used > b.used || (a.used === b.used && a.jokers < b.jokers);
 

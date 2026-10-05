@@ -329,8 +329,13 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   /** The points an opening needs now: the table's threshold, or beating the round's best opening. */
   private threshold() {
-    const base = this.openPoints || thresholdFor(this.seats.length);
+    const base = this.base();
     return this.rules.raiseOpening && this.lastOpening >= base ? this.lastOpening + 1 : base;
+  }
+
+  /** The table's starting minimum: what an opening always needs without jokers. */
+  private base() {
+    return this.openPoints || thresholdFor(this.seats.length);
   }
 
   private deal() {
@@ -466,7 +471,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleUnstage(client: Client, index: number) {
-    const id = this.actor(client, "play");
+    const id = this.phase === "playing" && client.sessionId === this.turn ? client.sessionId : null;
     if (id) this.staged.get(id)?.splice(Number(index), 1);
   }
 
@@ -499,7 +504,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       // The opening: enough points (by default without the jokers' melds), a real run, maybe a taken card.
       const melds = staged.map((c) => meldOf(c)!);
       if (this.rules.openWithDiscard && (this.taken === null || !this.takenUsed(staged.flat()))) return "open_with_discard";
-      const broken = openingError(melds, this.threshold(), this.rules);
+      const broken = openingError(melds, this.base(), this.threshold(), this.rules);
       if (broken) return broken;
       this.opened.add(id);
       // The next opening must beat everything laid here, joker melds included (a joker worth its card).
@@ -682,6 +687,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       opened: this.opened.has(id),
       partnerOpened: this.teamOpened(id) && !this.opened.has(id),
       threshold: this.threshold(),
+      base: this.base(),
       rules: this.rules,
       melds: this.melds,
       taken: this.taken,
@@ -781,6 +787,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       discardDown: this.discardDown,
       round: this.round,
       threshold: this.threshold(),
+      base: this.base(),
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, score: s.score, bot: s.bot ?? "",
         team: this.teams ? this.teamOf(s.id) : -1,

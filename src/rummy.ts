@@ -67,10 +67,16 @@ export function teamLayError(melds: Meld[], rules: Rules): string {
   return "";
 }
 
-/** Why these melds can't open ("" when they can): a real run when required, and enough points. */
-export function openingError(melds: Meld[], need: number, rules: Rules): string {
+/**
+ * Why these melds can't open ("" when they can). Without the jokers' melds they must reach the table's
+ * starting minimum ([base], 91 at four players); when an earlier opening raised the bar ([bar], 106),
+ * the joker melds make up the rest: everything laid, jokers worth their card, must reach it. A real
+ * run too, when required.
+ */
+export function openingError(melds: Meld[], base: number, bar: number, rules: Rules): string {
   if (rules.needRun && !melds.some((m) => m.kind === "run" && jokersIn(m) === 0)) return "need_run";
-  return openingPoints(melds, rules) >= need ? "" : "below_threshold";
+  if (openingPoints(melds, rules) < base) return "below_threshold";
+  return melds.reduce((n, m) => n + m.full, 0) >= bar ? "" : "below_bar";
 }
 
 /** A run position's value: 1 is the low ace, 14 the high ace (Q-K-A). */
