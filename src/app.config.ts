@@ -14,6 +14,7 @@ import {
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
+import { LudoRoom } from "./rooms/LudoRoom.js";
 import { claimMission, ClaimError, isAdmin } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -44,6 +45,7 @@ const server = defineServer({
     werewolf: defineRoom(WerewolfRoom),
     rummy: defineRoom(RummyRoom),
     domino: defineRoom(DominoRoom),
+    ludo: defineRoom(LudoRoom),
   },
 
   /**
@@ -58,6 +60,7 @@ const server = defineServer({
     api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => publicRooms("werewolf")),
     api_rummy_rooms: createEndpoint("/api/rummy/rooms", { method: "GET" }, async () => publicRooms("rummy")),
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
+    api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
