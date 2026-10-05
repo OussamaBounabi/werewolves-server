@@ -1,7 +1,7 @@
 import { Room, Client, ServerError } from "colyseus";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import {
-  DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
+  DEFAULT_RULES, isJoker, jokerFits, rankOf, suitOf, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
   type Rules,
 } from "../rummy.js";
 import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
@@ -55,6 +55,7 @@ const HAND = 14;
 const NEVER_OPENED = 100, PER_CARD = 10; // a hand that never laid down / each card left; doubled by a joker finish
 const DEAL_MS = 3_200; // the apps' deal animation, before the first turn
 const LAY_MS = 350; // the apps' lay-down animation, per meld
+const BOT_DRAW_TO_DISCARD_MS = 2_000; // a bot keeps the card it drew at least this long before throwing
 const READY_WAIT_MS = 30_000; // the round's results: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000; // everyone's ready: the next deal comes after this
 const RECONNECT_SECONDS = 600;
@@ -125,7 +126,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on<{ index: number }>("unstage", (c, m) => this.handleUnstage(c, m.index));
     on("lay", (c) => this.handleLay(c));
     on<{ meldId: number; cards: number[] }>("add", (c, m) => this.handleAdd(c, m.meldId, m.cards));
-    on<{ meldId: number; card: number }>("swap", (c, m) => this.handleSwap(c, m.meldId, m.card));
+    on<{ meldId: number; card?: number; cards?: number[] }>("swap", (c, m) =>
+      this.handleSwap(c, m.meldId, m.cards ?? (m.card === undefined ? [] : [m.card])),
+    );
     on<{ card: number; faceUp?: boolean }>("discard", (c, m) => this.handleDiscard(c, m.card, m.faceUp));
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("ready", (c) => this.handleReady(c.sessionId));
@@ -388,10 +391,14 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     return this.phase === "playing" && client.sessionId === this.turn && this.stage === stage ? client.sessionId : null;
   }
 
+  /**
+   * Drawing from an empty deck means "reshuffle": the deck ran out, and the next player chose not to
+   * take the discard — every discard (the top one too) becomes the new deck.
+   */
   private drawCard(id: string) {
     if (this.deck.length === 0) {
-      // Every discard goes back into the deck (the top one too: nobody took it to lay it down).
-      this.deck = this.discard.sort(() => Math.random() - 0.5);
+      this.deck = shuffled().filter((c) => this.discard.includes(c));
+      this.broadcast("rummy_fx", { type: "refill", count: this.discard.length });
       this.discard = [];
     }
     const card = this.deck.pop();
@@ -400,12 +407,6 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.drawn = card;
     this.stage = "play";
     this.broadcast("rummy_fx", { type: "draw", who: id, from: "deck" });
-    // The deck's last card: the discards become the new deck right away.
-    if (this.deck.length === 0 && this.discard.length > 0) {
-      this.deck = shuffled().filter((c) => this.discard.includes(c));
-      this.broadcast("rummy_fx", { type: "refill", count: this.discard.length });
-      this.discard = [];
-    }
   }
 
   private handleDraw(client: Client) {
@@ -501,7 +502,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       const broken = openingError(melds, this.threshold(), this.rules);
       if (broken) return broken;
       this.opened.add(id);
-      this.lastOpening = Math.max(this.lastOpening, openingPoints(melds, this.rules));
+      // The next opening must beat everything laid here, joker melds included (a joker worth its card).
+      this.lastOpening = Math.max(this.lastOpening, melds.reduce((n, m) => n + m.full, 0));
     }
     const hand = this.hands.get(id)!;
     const laid: number[] = [];
@@ -512,6 +514,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       for (const c of cards) hand.splice(hand.indexOf(c), 1);
     }
     this.broadcast("rummy_fx", { type: "lay", who: id, melds: laid });
+    this.retireFullSets(id);
     if (this.takenUsed(staged.flat())) this.taken = null;
     this.staged.delete(id);
   }
@@ -533,24 +536,55 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const hand = this.hands.get(id)!;
     for (const c of picked) hand.splice(hand.indexOf(c), 1);
     this.broadcast("rummy_fx", { type: "add", who: id, meldId: meld.id, cards: picked });
+    this.retireFullSets(id);
     if (this.takenUsed(picked)) this.taken = null;
   }
 
-  /** The real card a joker on the table stands for takes its place; the joker goes to his hand. */
-  private handleSwap(client: Client, meldId: number, card: number) {
+  /**
+   * Taking a joker from the table. In a run, the real card it stands for takes its place. In a set
+   * (9 9 joker), every missing card is needed — the two other 9s — and the set becomes complete.
+   */
+  private handleSwap(client: Client, meldId: number, cards: number[]) {
     const id = this.actor(client, "play");
     if (!id) return;
     if (!this.teamOpened(id)) return "not_opened";
     if (!this.rules.jokerSwap) return "no_swap";
     const meld = this.melds.find((m) => m.id === Number(meldId));
-    if (!meld || !this.free(id, [card])) return "bad_cards";
-    const index = meld.cards.findIndex((_, i) => jokerFits(meld, i, Number(card)));
+    const picked = this.free(id, cards);
+    if (!meld || !picked) return "bad_cards";
+    const index = meld.cards.findIndex(isJoker);
     if (index < 0) return "no_joker_fits";
-    if (!this.takenUsed([Number(card)])) return "use_taken";
+    if (!this.takenUsed(picked)) return "use_taken";
     const hand = this.hands.get(id)!;
-    hand.splice(hand.indexOf(Number(card)), 1, meld.cards[index]);
-    meld.cards[index] = Number(card);
+    const joker = meld.cards[index];
+    if (meld.kind === "set") {
+      const real = meld.cards.filter((c) => !isJoker(c));
+      const missing = [0, 1, 2, 3].filter((suit) => !real.some((c) => suitOf(c) === suit));
+      const fits =
+        picked.length === missing.length &&
+        picked.every((c) => !isJoker(c) && rankOf(c) === rankOf(real[0])) &&
+        missing.every((suit) => picked.some((c) => suitOf(c) === suit));
+      if (!fits) return picked.length < missing.length ? "joker_needs_all" : "no_joker_fits";
+      meld.cards = meldOf([...real, ...picked])!.cards;
+    } else {
+      if (picked.length !== 1 || !jokerFits(meld, index, picked[0])) return "no_joker_fits";
+      meld.cards[index] = picked[0];
+    }
+    for (const c of picked) hand.splice(hand.indexOf(c), 1);
+    hand.push(joker);
     this.taken = null;
+    this.broadcast("rummy_fx", { type: "add", who: id, meldId: meld.id, cards: picked });
+    this.retireFullSets(id);
+  }
+
+  /** A complete set (the four suits) has nothing left to take: it leaves the table, under the discard pile. */
+  private retireFullSets(by: string) {
+    for (const meld of [...this.melds]) {
+      if (meld.kind !== "set" || meld.cards.length < 4 || meld.cards.some(isJoker)) continue;
+      this.melds.splice(this.melds.indexOf(meld), 1);
+      this.discard.unshift(...meld.cards); // under the pile: the top card doesn't change
+      this.broadcast("rummy_fx", { type: "retire", who: by, meldId: meld.id, cards: meld.cards });
+    }
   }
 
   private handleDiscard(client: Client, card: number, faceUp?: boolean) {
@@ -666,6 +700,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const me = this.clientOf(id);
     const think = () => (700 + Math.random() * 900) * RummyRoom.botSpeed;
     let pause = 0; // extra wait after a move, for its animation
+    let drewAt = 0;
+    let throwIt = () => undefined as string | void; // set once the plan is known
     const run = (ms: number) => {
       this.botTimer = this.clock.setTimeout(() => {
         if (this.turn !== id || this.phase !== "playing") return;
@@ -676,7 +712,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
           return this.timeOut(); // a move the room refused: undo the half moves and throw a card
         }
         this.sync();
-        if (steps.length > 0) run((450 + Math.random() * 350 + pause) * RummyRoom.botSpeed);
+        if (steps.length > 0) {
+          let wait = 450 + Math.random() * 350 + pause;
+          // It holds the card it drew a moment before throwing one.
+          if (steps[0] === throwIt) wait = Math.max(wait, BOT_DRAW_TO_DISCARD_MS - (Date.now() - drewAt));
+          run(wait * RummyRoom.botSpeed);
+        }
         pause = 0;
       }, ms);
     };
@@ -685,10 +726,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         const top = this.discard[this.discard.length - 1];
         top !== undefined && wantsDiscard(this.botView(id), top) ? this.handleTake(me) : this.handleDraw(me);
       }
+      drewAt = Date.now();
       const plan = planTurn(this.botView(id));
       if (!plan) return "no_plan";
+      throwIt = () => this.handleDiscard(me, plan.discard, true); // a joker rummy is shown face up
       if (plan.waiting) this.waited.set(id, (this.waited.get(id) ?? 0) + 1);
-      for (const s of plan.swaps) steps.push(() => this.handleSwap(me, s.meldId, s.card));
+      for (const s of plan.swaps) steps.push(() => this.handleSwap(me, s.meldId, s.cards));
       for (const cards of plan.lay) steps.push(() => this.handleStage(me, cards));
       if (plan.lay.length > 0) {
         steps.push(() => {
@@ -697,7 +740,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         });
       }
       for (const a of plan.adds) steps.push(() => this.handleAdd(me, a.meldId, a.cards));
-      steps.push(() => this.handleDiscard(me, plan.discard, true)); // a joker rummy is shown face up
+      steps.push(throwIt);
     });
     run(delayMs * RummyRoom.botSpeed + think());
   }

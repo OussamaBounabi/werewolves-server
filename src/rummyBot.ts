@@ -30,7 +30,7 @@ export type BotView = {
 };
 
 export type BotPlan = {
-  swaps: { meldId: number; card: number }[];
+  swaps: { meldId: number; cards: number[] }[];
   lay: number[][];
   adds: { meldId: number; cards: number[] }[];
   discard: number;
@@ -160,12 +160,24 @@ export function planTurn(view: BotView): BotPlan | null {
   // Real cards from the hand take the jokers' places on the table: free jokers.
   if ((view.opened || view.partnerOpened) && !easy && view.taken === null && view.rules.jokerSwap) {
     for (const meld of table) {
-      for (let i = 0; i < meld.cards.length; i++) {
-        const card = hand.find((c) => jokerFits(meld, i, c));
+      const j = meld.cards.findIndex(isJoker);
+      if (j < 0) continue;
+      if (meld.kind === "set") {
+        // A set's joker takes every missing card (9 9 joker: the two other 9s).
+        const real = meld.cards.filter((c) => !isJoker(c));
+        const missing = [0, 1, 2, 3].filter((suit) => !real.some((c) => suitOf(c) === suit));
+        const picks = missing.map((suit) => hand.find((c) => !isJoker(c) && rankOf(c) === rankOf(real[0]) && suitOf(c) === suit));
+        if (picks.some((c) => c === undefined)) continue;
+        for (const c of picks) hand.splice(hand.indexOf(c!), 1);
+        hand.push(meld.cards[j]);
+        meld.cards = [...real, ...(picks as number[])];
+        swaps.push({ meldId: meld.id, cards: picks as number[] });
+      } else {
+        const card = hand.find((c) => jokerFits(meld, j, c));
         if (card === undefined) continue;
-        hand.splice(hand.indexOf(card), 1, meld.cards[i]);
-        meld.cards[i] = card;
-        swaps.push({ meldId: meld.id, card });
+        hand.splice(hand.indexOf(card), 1, meld.cards[j]);
+        meld.cards[j] = card;
+        swaps.push({ meldId: meld.id, cards: [card] });
       }
     }
   }

@@ -159,16 +159,56 @@ describe("RummyRoom", () => {
     assert.strictEqual(room.threshold(), 120);
   });
 
-  it("can't take the discard with one card left, and refills the deck from the discards at once", async () => {
+  it("can't take the discard with one card left; an empty deck reshuffles the discards when drawn", async () => {
     const { room, b, errors, send } = await rigged([c(2, 3)], c(5, 0), true);
     await send("take");
     assert.deepStrictEqual(errors, ["last_card_take"]);
     room.deck = [c(9, 1)];
     room.discard = [c(5, 0), c(6, 0), c(7, 0)];
-    await send("draw");
-    assert.strictEqual(room.deck.length, 3); // the discards became the deck right away
-    assert.strictEqual(room.discard.length, 0);
+    await send("draw"); // the deck's last card: the discards stay (the next player may take the top one)
+    assert.strictEqual(room.deck.length, 0);
+    assert.strictEqual(room.discard.length, 3);
     assert.ok(room.hands.get(b.sessionId).includes(c(9, 1)));
+    room.stage = "draw"; // the next turn: he doesn't take it, he reshuffles
+    await send("draw");
+    assert.strictEqual(room.deck.length, 2);
+    assert.strictEqual(room.discard.length, 0);
+  });
+
+  it("a set's joker needs every missing card; a complete set goes under the discard pile", async () => {
+    const { room, b, errors, send } = await rigged([c(9, 2), c(9, 3), c(4, 1), c(5, 1)], c(5, 0), true);
+    room.melds = [
+      { id: 1, owner: "x", kind: "set", cards: [c(9, 0), c(9, 1), J] },
+      { id: 2, owner: "x", kind: "set", cards: [c(4, 0), c(4, 2), c(4, 3)] },
+    ];
+    room.discard = [c(13, 0)];
+    room.stage = "play";
+    await send("swap", { meldId: 1, cards: [c(9, 2)] });
+    assert.deepStrictEqual(errors, ["joker_needs_all"]);
+    await send("swap", { meldId: 1, cards: [c(9, 2), c(9, 3)] });
+    assert.ok(room.hands.get(b.sessionId).includes(J)); // the joker is his
+    await send("add", { meldId: 2, cards: [c(4, 1)] }); // 4 4 4 + 4: complete too
+    assert.deepStrictEqual(room.melds, []); // both complete sets left the table…
+    assert.strictEqual(room.discard.length, 9); // …under the pile
+    assert.strictEqual(room.discard[room.discard.length - 1], c(13, 0)); // the top card didn't change
+  });
+
+  it("raises the bar with everything laid: 104 + a joker meld worth 30 → the next needs 135", async () => {
+    const hand = [
+      c(9, 0), c(10, 0), c(11, 0), c(12, 0), c(13, 0), // 49
+      c(9, 1), c(10, 1), c(11, 1), c(12, 1), c(13, 1), // 49
+      c(2, 2), c(2, 3), c(2, 0), // 6 → 104 without the joker meld
+      c(10, 2), J, c(12, 2), // 10 ♦ joker Q ♦: 30
+      c(3, 3), // kept to throw
+    ];
+    const { room, send } = await rigged(hand, c(4, 2), false);
+    room.stage = "play";
+    for (const m of [hand.slice(0, 5), hand.slice(5, 10), hand.slice(10, 13), hand.slice(13, 16)]) {
+      await send("stage", { cards: m });
+    }
+    await send("lay");
+    assert.strictEqual(room.lastOpening, 134);
+    assert.strictEqual(room.threshold(), 135);
   });
 
   it("lays the last card face down — a joker shown face up doubles, face down it's a plain rummy", async () => {
