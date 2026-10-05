@@ -13,6 +13,7 @@ import {
  */
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
+import { DominoRoom } from "./rooms/DominoRoom.js";
 import { claimMission, ClaimError, isAdmin } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -42,6 +43,7 @@ const server = defineServer({
   rooms: {
     werewolf: defineRoom(WerewolfRoom),
     rummy: defineRoom(RummyRoom),
+    domino: defineRoom(DominoRoom),
   },
 
   /**
@@ -55,6 +57,7 @@ const server = defineServer({
     // The room list: public rooms only (friends/private rooms are reached by invite or through a friend).
     api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => publicRooms("werewolf")),
     api_rummy_rooms: createEndpoint("/api/rummy/rooms", { method: "GET" }, async () => publicRooms("rummy")),
+    api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
