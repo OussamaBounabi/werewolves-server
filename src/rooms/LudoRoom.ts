@@ -346,7 +346,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     const { x, y } = this.die;
     if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx!, dy!) < 1e-3) {
       const angle = Math.atan2(7.5 - y, 7.5 - x) + (Math.random() - 0.5) * 2.2;
-      return throwDie(x, y, Math.cos(angle), Math.sin(angle), 0.35 + Math.random() * 0.45);
+      return throwDie(x, y, Math.cos(angle), Math.sin(angle), 0.2 + Math.random() * 0.35);
     }
     return throwDie(x, y, dx!, dy!, Number.isFinite(power) ? power! : 0.5);
   }
