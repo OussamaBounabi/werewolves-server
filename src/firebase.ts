@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { cert, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { AVATARS, avatarIds, PRICES } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
@@ -103,6 +104,54 @@ export async function recordResults(results: GameResult[]) {
 }
 
 export class ClaimError extends Error {}
+
+export class StoreError extends Error {}
+
+/** A first avatar for an account that owns none: one of the collection at random, free, and worn. */
+export async function grantStarter(idToken: string) {
+  if (!app) throw new StoreError("accounts disabled");
+  const { uid } = await getAuth(app).verifyIdToken(idToken);
+  const db = getFirestore(app);
+  const ref = db.doc(`users/${uid}`);
+  return db.runTransaction(async (tx) => {
+    const user = await tx.get(ref);
+    if (!user.exists) throw new StoreError("no profile");
+    const owned: number[] = user.get("avatars") ?? [];
+    if (owned.length) return { avatar: Number(user.get("avatar")) || 0, avatars: owned };
+    const id = avatarIds[Math.floor(Math.random() * avatarIds.length)];
+    tx.update(ref, { avatars: [id], avatar: id });
+    return { avatar: id, avatars: [id] };
+  });
+}
+
+/** Buys an avatar: its price (by rarity) in coins or diamonds is taken if the player has it; then it's worn. */
+export async function buyAvatar(idToken: string, id: number) {
+  if (!app) throw new StoreError("accounts disabled");
+  const rarity = AVATARS[id];
+  if (!rarity) throw new StoreError("unknown");
+  const { amount, currency } = PRICES[rarity];
+  const { uid } = await getAuth(app).verifyIdToken(idToken);
+  const db = getFirestore(app);
+  const ref = db.doc(`users/${uid}`);
+  return db.runTransaction(async (tx) => {
+    const user = await tx.get(ref);
+    if (!user.exists) throw new StoreError("no profile");
+    const owned: number[] = user.get("avatars") ?? [];
+    if (owned.includes(id)) throw new StoreError("owned");
+    const have = Number(user.get(currency)) || 0;
+    if (have < amount) throw new StoreError("funds");
+    tx.update(ref, { [currency]: FieldValue.increment(-amount), avatars: FieldValue.arrayUnion(id), avatar: id });
+    return { avatar: id, [currency]: have - amount };
+  });
+}
+
+/** Admin tool (scripts/grant-avatars.ts): every avatar of the collection to the account with this email. */
+export async function grantAllAvatars(email: string) {
+  if (!app) throw new Error("no service account");
+  const { uid } = await getAuth(app).getUserByEmail(email);
+  await getFirestore(app).doc(`users/${uid}`).update({ avatars: FieldValue.arrayUnion(...avatarIds) });
+  return { uid, count: avatarIds.length };
+}
 
 /**
  * Hands out a mission's reward once: checks the player's progress for the current period, marks it

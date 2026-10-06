@@ -15,7 +15,7 @@ import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
-import { claimMission, ClaimError, isAdmin } from "./firebase.js";
+import { buyAvatar, claimMission, ClaimError, grantStarter, isAdmin, StoreError } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -80,6 +80,27 @@ const server = defineServer({
         return { ok: true, reward: await claimMission(token, id) };
       } catch (e) {
         throw ctx.error(e instanceof ClaimError ? 409 : 401, { error: (e as Error).message });
+      }
+    }),
+    // A first avatar, free and at random, for an account that owns none (Authorization: Bearer <ID token>).
+    api_avatar_starter: createEndpoint("/api/avatars/starter", { method: "POST" }, async (ctx) => {
+      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      if (!token) throw ctx.error(400, { error: "missing token" });
+      try {
+        return await grantStarter(token);
+      } catch (e) {
+        throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
+      }
+    }),
+    // Buy an avatar (Authorization: Bearer <ID token>, body { id }): the server takes the price and the player wears it.
+    api_avatar_buy: createEndpoint("/api/avatars/buy", { method: "POST" }, async (ctx) => {
+      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const id = Number((ctx.body as { id?: unknown } | undefined)?.id);
+      if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
+      try {
+        return await buyAvatar(token, id);
+      } catch (e) {
+        throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
       }
     }),
     // Admins only (Authorization: Bearer <ID token>): every room, private ones included.
