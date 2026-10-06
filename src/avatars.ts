@@ -2,13 +2,14 @@
  * The avatar collection (the apps have the pictures): id → rarity, which sets the price.
  * 0 is the paw everyone has (old profiles' 1–4 show it too); 100 is the robot the bots wear, not for sale.
  */
-export type Rarity = "common" | "rare" | "epic" | "legendary";
+export type Rarity = "common" | "rare" | "epic" | "legendary" | "animated";
 
 export const PRICES: Record<Rarity, { amount: number; currency: "coins" | "diamonds" }> = {
   common: { amount: 500, currency: "coins" }, // the hoodie friends
   rare: { amount: 1500, currency: "coins" }, // heroes, animals
   epic: { amount: 50, currency: "diamonds" }, // werewolves, the village's roles
   legendary: { amount: 120, currency: "diamonds" }, // dragons, the unicorn, the wizard, the knight
+  animated: { amount: 300, currency: "diamonds" }, // characters that move (201+)
 };
 
 const run = (from: number, to: number, rarity: Rarity) =>
@@ -19,13 +20,18 @@ export const AVATARS: Record<number, Rarity> = {
   ...run(109, 126, "rare"),
   ...run(127, 142, "epic"),
   ...run(143, 147, "legendary"),
+  201: "animated", // the red werewolf, alive
 };
 
 export const ROBOT = 100;
 export const avatarIds = Object.keys(AVATARS).map(Number);
 
-/** A character at random: a new account's first one, and what players without an account wear (test clients). */
+/** A character at random, what players without an account wear (test clients): animated ones too, to see them. */
 export const randomAvatar = () => avatarIds[Math.floor(Math.random() * avatarIds.length)];
+
+/** A new account's free first character: one at random, never an animated one. */
+const starterIds = avatarIds.filter((id) => AVATARS[id] !== "animated");
+export const starterAvatar = () => starterIds[Math.floor(Math.random() * starterIds.length)];
 
 /** Animated frames around the avatar, sold separately (the apps draw them); 0 is none. */
 export const FRAMES: Record<number, { amount: number; currency: "coins" | "diamonds" }> = {
