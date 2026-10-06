@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
-import { botMove, HOME, movable, target, victims, type Board, type BotLevel } from "../ludo.js";
+import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
 
 /**
@@ -16,6 +16,7 @@ import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js
 type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; capture?: string; pawns?: number; teams?: boolean };
 type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
+type Aim = { dx?: number; dy?: number; power?: number }; // a swipe on the board: direction (board cells) and strength
 type Seat = {
   id: string;
   playerId: string;
@@ -37,7 +38,7 @@ const CAPTURE_OPTIONS = ["auto", "ask"];
 const PAWN_OPTIONS = [2, 4];
 const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
-const ROLL_MS = 700; // the apps' dice tumble
+const LANDED_MS = 250; // the die has stopped: its number shows a moment
 const HOP_MS = 160; // a pawn's hop from square to square
 const NO_MOVE_MS = 1_200; // nothing to move: the roll is shown, then the turn moves on
 const START_MS = 1_500;
@@ -66,6 +67,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private step: "roll" | "move" | "wait" = "roll";
   private dice = 0;
   private sixes = 0;
+  private die = { x: 7.5, y: 7.5, value: 6 }; // it stays where it lands; the next throw starts there
   private turnEndsAt = 0;
   private places: string[] = []; // who finished, in order
   private botSeq = 0;
@@ -87,7 +89,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("start_game", (c) => this.handleStart(c));
-    on("roll", (c) => this.handleRoll(c.sessionId));
+    on<Aim>("roll", (c, m) => this.handleRoll(c.sessionId, m));
     on<{ pawn: number; capture?: boolean }>("move", (c, m) => this.handleMove(c.sessionId, Number(m.pawn), m.capture !== false));
     on<{ on: boolean }>("auto", (c, m) => this.handleAuto(c.sessionId, m.on === true));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
@@ -313,24 +315,40 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (seat?.bot || seat?.auto) this.botAct(this.turn, extraMs);
   }
 
-  private handleRoll(id: string) {
+  private handleRoll(id: string, aim: Aim = {}) {
     if (this.phase !== "playing" || this.turn !== id || this.step !== "roll") return;
     const seat = this.seat(id)!;
     const roll = 1 + Math.floor(Math.random() * 6);
     this.dice = roll;
     const lost = roll === 6 && ++this.sixes === 3; // three 6s: the turn is lost
     const options = lost ? [] : movable(this.mover(seat).pawns, roll);
-    this.broadcast("ludo_fx", { type: "roll", who: id, value: roll, lost, stuck: !lost && options.length === 0 });
-    if (lost) return this.wait(ROLL_MS + NO_MOVE_MS, () => this.nextTurn());
+    const thrown = this.throwFrom(aim);
+    this.die = { x: thrown.x, y: thrown.y, value: roll };
+    this.broadcast("ludo_fx", {
+      type: "roll", who: id, value: roll, lost, stuck: !lost && options.length === 0,
+      path: thrown.path, spin: Math.floor(Math.random() * 1e9),
+    });
+    const shown = thrown.ms + LANDED_MS;
+    if (lost) return this.wait(shown + NO_MOVE_MS, () => this.nextTurn());
     if (options.length === 0) {
-      return this.wait(ROLL_MS + NO_MOVE_MS, () => (roll === 6 ? this.awaitRoll() : this.nextTurn()));
+      return this.wait(shown + NO_MOVE_MS, () => (roll === 6 ? this.awaitRoll() : this.nextTurn()));
     }
     this.step = "move";
     // One way to go, nobody to catch or spare: it goes by itself.
     if (options.length === 1 && (this.capture === "auto" || this.caught(seat, options[0]).length === 0)) {
-      return this.wait(ROLL_MS + 250, () => this.move(seat, options[0], true));
+      return this.wait(shown, () => this.move(seat, options[0], true));
     }
-    this.arm(ROLL_MS);
+    this.arm(shown);
+  }
+
+  /** The die flies from where it lies: along the player's swipe, or (a tap, a bot) more or less toward the middle. */
+  private throwFrom({ dx, dy, power }: Aim) {
+    const { x, y } = this.die;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx!, dy!) < 1e-3) {
+      const angle = Math.atan2(7.5 - y, 7.5 - x) + (Math.random() - 0.5) * 2.2;
+      return throwDie(x, y, Math.cos(angle), Math.sin(angle), 0.35 + Math.random() * 0.45);
+    }
+    return throwDie(x, y, dx!, dy!, Number.isFinite(power) ? power! : 0.5);
   }
 
   private caught(seat: Seat, pawn: number) {
@@ -465,6 +483,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       turn: this.turn,
       step: this.step,
       dice: this.dice,
+      die: [this.die.x, this.die.y, this.die.value],
       moveColor: turnSeat ? this.mover(turnSeat).color : -1,
       turnEndsAt: this.turnEndsAt,
       places: this.places,

@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { botMove, HOME, movable, square, target, victims, type Board } from "../src/ludo.js";
+import { botMove, DIE_SAMPLE_MS, HOME, movable, square, target, throwDie, victims, type Board } from "../src/ludo.js";
 import { LudoRoom } from "../src/rooms/LudoRoom.js";
 
 const nobody = () => false;
@@ -32,6 +32,23 @@ describe("ludo", () => {
   });
 });
 
+describe("the die", () => {
+  it("flies, bounces off the frame, lands and stops on the board", () => {
+    for (const [x, y, dx, dy, power] of [[7.5, 7.5, 1, 0, 1], [1, 1, -1, -1, 0.2], [14, 7, 0.3, -1, 0.7], [5, 12, 0, 0, 0.5]]) {
+      const t = throwDie(x, y, dx, dy, power);
+      const n = t.path.length / 3;
+      assert.ok(n >= 10 && t.ms >= 300 && t.ms <= 3000, `${n} samples, ${t.ms} ms`);
+      assert.strictEqual(t.ms, Math.round((n - 1) * DIE_SAMPLE_MS));
+      assert.ok(t.path.some((v, i) => i % 3 === 2 && v > 0.4), "it flies");
+      for (let i = 0; i < n; i++) {
+        const [px, py, pz] = t.path.slice(i * 3, i * 3 + 3);
+        assert.ok(px >= 0.79 && px <= 14.21 && py >= 0.79 && py <= 14.21 && pz >= 0, `sample ${i}: ${px}, ${py}, ${pz}`);
+      }
+      assert.deepStrictEqual(t.path.slice(-3), [t.x, t.y, 0]);
+    }
+  });
+});
+
 describe("LudoRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
   before(async () => {
@@ -46,6 +63,7 @@ describe("LudoRoom", () => {
   for (const [teams, capture, pawns] of [[false, "auto", 2], [true, "ask", 2]] as const) {
     it(`bots race to the end${teams ? " in 2 vs 2" : " (3 players)"}, capture ${capture}`, async () => {
       const room: any = await colyseus.createRoom("ludo", { teams, capture, pawns, turnSeconds: 10 });
+      room.setSimulationInterval(() => {}, 5); // the room's clock ticks faster: the bots' timers fire sooner
       const host = await colyseus.connectTo(room);
       host.onMessage("ludo", () => {});
       host.onMessage("ludo_fx", () => {});
