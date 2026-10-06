@@ -1,4 +1,5 @@
 import { Room, Client, ServerError } from "colyseus";
+import { randomAvatar } from "../avatars.js";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import {
   DEFAULT_RULES, isJoker, jokerFits, rankOf, suitOf, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
@@ -180,7 +181,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       playerId,
       name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
       uid: account?.uid ?? "",
-      avatar: account?.avatar ?? 0,
+      avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       connected: true,
       score: 0,
       bot: null,

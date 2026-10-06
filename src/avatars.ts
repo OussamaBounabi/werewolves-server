@@ -23,3 +23,6 @@ export const AVATARS: Record<number, Rarity> = {
 
 export const ROBOT = 100;
 export const avatarIds = Object.keys(AVATARS).map(Number);
+
+/** A character at random: a new account's first one, and what players without an account wear (test clients). */
+export const randomAvatar = () => avatarIds[Math.floor(Math.random() * avatarIds.length)];

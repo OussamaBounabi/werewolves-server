@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { cert, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import { AVATARS, avatarIds, PRICES } from "./avatars.js";
+import { AVATARS, avatarIds, PRICES, randomAvatar } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
@@ -118,7 +118,7 @@ export async function grantStarter(idToken: string) {
     if (!user.exists) throw new StoreError("no profile");
     const owned: number[] = user.get("avatars") ?? [];
     if (owned.length) return { avatar: Number(user.get("avatar")) || 0, avatars: owned };
-    const id = avatarIds[Math.floor(Math.random() * avatarIds.length)];
+    const id = randomAvatar();
     tx.update(ref, { avatars: [id], avatar: id });
     return { avatar: id, avatars: [id] };
   });

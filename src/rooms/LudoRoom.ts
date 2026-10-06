@@ -1,4 +1,5 @@
 import { Room, Client, ServerError } from "colyseus";
+import { randomAvatar } from "../avatars.js";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
@@ -131,7 +132,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       playerId,
       name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
       uid: account?.uid ?? "",
-      avatar: account?.avatar ?? 0,
+      avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       connected: true,
       bot: null,
       auto: false,
