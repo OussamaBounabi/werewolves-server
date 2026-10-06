@@ -15,7 +15,7 @@ import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
-import { buyAvatar, claimMission, ClaimError, grantStarter, isAdmin, StoreError } from "./firebase.js";
+import { buyAvatar, buyFrame, claimMission, ClaimError, grantStarter, isAdmin, StoreError } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -99,6 +99,17 @@ const server = defineServer({
       if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
       try {
         return await buyAvatar(token, id);
+      } catch (e) {
+        throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
+      }
+    }),
+    // Buy an animated frame (Authorization: Bearer <ID token>, body { id }): price taken, the frame worn.
+    api_frame_buy: createEndpoint("/api/frames/buy", { method: "POST" }, async (ctx) => {
+      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const id = Number((ctx.body as { id?: unknown } | undefined)?.id);
+      if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
+      try {
+        return await buyFrame(token, id);
       } catch (e) {
         throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
       }

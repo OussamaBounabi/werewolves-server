@@ -1,5 +1,5 @@
 import { Room, Client, ServerError } from "colyseus";
-import { randomAvatar } from "../avatars.js";
+import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import {
   DEFAULT_RULES, isJoker, jokerFits, rankOf, suitOf, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
@@ -37,6 +37,7 @@ type Seat = {
   name: string;
   uid: string;
   avatar: number;
+  frame: number; // the animated frame he wears, 0 none
   connected: boolean;
   score: number;
   bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
@@ -182,6 +183,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
+      frame: account?.frame ?? randomFrame(),
       connected: true,
       score: 0,
       bot: null,
@@ -290,6 +292,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       name: BOT_NAMES.find((n) => !taken.has(n)) ?? `Bot ${this.botSeq}`,
       uid: "",
       avatar: 0,
+      frame: 0,
       connected: true,
       score: 0,
       bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
@@ -859,7 +862,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       threshold: this.threshold(),
       base: this.base(),
       seats: this.seats.map((s) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, score: s.score, bot: s.bot ?? "",
+        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, connected: s.connected, score: s.score, bot: s.bot ?? "",
         team: this.teams ? this.teamOf(s.id) : -1,
         opened: this.opened.has(s.id), cards: this.hands.get(s.id)?.length ?? 0,
       })),

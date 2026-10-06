@@ -26,3 +26,15 @@ export const avatarIds = Object.keys(AVATARS).map(Number);
 
 /** A character at random: a new account's first one, and what players without an account wear (test clients). */
 export const randomAvatar = () => avatarIds[Math.floor(Math.random() * avatarIds.length)];
+
+/** Animated frames around the avatar, sold separately (the apps draw them); 0 is none. */
+export const FRAMES: Record<number, { amount: number; currency: "coins" | "diamonds" }> = {
+  1: { amount: 5000, currency: "coins" }, // neon pulse
+  2: { amount: 150, currency: "diamonds" }, // rainbow
+  3: { amount: 200, currency: "diamonds" }, // golden shine
+  4: { amount: 250, currency: "diamonds" }, // lightning
+};
+export const frameIds = Object.keys(FRAMES).map(Number);
+
+/** A frame at random, or none: what players without an account wear (test clients). */
+export const randomFrame = () => Math.floor(Math.random() * (frameIds.length + 1));

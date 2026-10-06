@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
-import { randomAvatar } from "../avatars.js";
+import { randomAvatar, randomFrame } from "../avatars.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
 import { accountFor, firebaseEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
 
@@ -303,6 +303,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       name,
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
+      frame: account?.frame ?? randomFrame(),
     }));
     if (ghost === undefined) this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId || wasHost) this.setHost(client.sessionId);

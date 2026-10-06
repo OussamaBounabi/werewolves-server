@@ -1,5 +1,5 @@
 /**
- * Gives an account every avatar of the collection (the owner's, to try them all):
+ * Gives an account every avatar and frame for sale (the owner's, to try them all):
  *   npx tsx scripts/grant-avatars.ts <email>
  * Needs the service account (service-account.json next to package.json).
  */
@@ -11,5 +11,5 @@ if (!email) {
   process.exit(1);
 }
 const { count } = await grantAllAvatars(email);
-console.log(`${count} avatars given`);
+console.log(`${count} avatars and frames given`);
 process.exit(0);

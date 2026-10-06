@@ -1,5 +1,5 @@
 import { Room, Client, ServerError } from "colyseus";
-import { randomAvatar } from "../avatars.js";
+import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
@@ -24,6 +24,7 @@ type Seat = {
   name: string;
   uid: string;
   avatar: number;
+  frame: number; // the animated frame he wears, 0 none
   connected: boolean;
   bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
   auto: boolean; // "auto play": the bot plays for him
@@ -133,6 +134,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
+      frame: account?.frame ?? randomFrame(),
       connected: true,
       bot: null,
       auto: false,
@@ -210,6 +212,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       name: BOT_NAMES.find((n) => !taken.has(n)) ?? `Bot ${this.botSeq}`,
       uid: "",
       avatar: 0,
+      frame: 0,
       connected: true,
       bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
       auto: false,
@@ -478,7 +481,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       pawns: this.pawnCount,
       teams: this.teams,
       seats: this.seats.map((s, i) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, connected: s.connected, bot: s.bot ?? "", auto: s.auto,
+        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, connected: s.connected, bot: s.bot ?? "", auto: s.auto,
         color: this.phase === "lobby" ? lobbyColors[i] ?? i : s.color, pawns: s.pawns, team: this.teams ? i % 2 : -1,
       })),
       turn: this.turn,

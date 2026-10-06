@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { cert, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import { AVATARS, avatarIds, PRICES, randomAvatar } from "./avatars.js";
+import { AVATARS, avatarIds, FRAMES, frameIds, PRICES, randomAvatar } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
@@ -22,7 +22,7 @@ function init(): App | null {
 const app = init();
 export const firebaseEnabled = app !== null;
 
-export type Account = { uid: string; name: string; avatar: number };
+export type Account = { uid: string; name: string; avatar: number; frame: number };
 
 /** The account behind an app's login token, with its display name and avatar. Throws if invalid. */
 export async function accountFor(idToken: string): Promise<Account> {
@@ -30,7 +30,12 @@ export async function accountFor(idToken: string): Promise<Account> {
   const { uid } = await getAuth(app).verifyIdToken(idToken);
   const profile = (await getFirestore(app).doc(`users/${uid}`).get()).data();
   if (!profile) throw new Error("no profile");
-  return { uid, name: String(profile.name ?? profile.username), avatar: Number(profile.avatar) || 0 };
+  return {
+    uid,
+    name: String(profile.name ?? profile.username),
+    avatar: Number(profile.avatar) || 0,
+    frame: Number(profile.frame) || 0,
+  };
 }
 
 /** Whether this login token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
@@ -126,31 +131,48 @@ export async function grantStarter(idToken: string) {
 
 /** Buys an avatar: its price (by rarity) in coins or diamonds is taken if the player has it; then it's worn. */
 export async function buyAvatar(idToken: string, id: number) {
-  if (!app) throw new StoreError("accounts disabled");
   const rarity = AVATARS[id];
   if (!rarity) throw new StoreError("unknown");
-  const { amount, currency } = PRICES[rarity];
+  return sell(idToken, id, PRICES[rarity], "avatars", "avatar");
+}
+
+/** Buys an animated frame, the same way: price taken, frame owned and worn. */
+export async function buyFrame(idToken: string, id: number) {
+  if (!FRAMES[id]) throw new StoreError("unknown");
+  return sell(idToken, id, FRAMES[id], "frames", "frame");
+}
+
+async function sell(
+  idToken: string,
+  id: number,
+  { amount, currency }: { amount: number; currency: "coins" | "diamonds" },
+  ownedField: "avatars" | "frames",
+  wornField: "avatar" | "frame",
+) {
+  if (!app) throw new StoreError("accounts disabled");
   const { uid } = await getAuth(app).verifyIdToken(idToken);
   const db = getFirestore(app);
   const ref = db.doc(`users/${uid}`);
   return db.runTransaction(async (tx) => {
     const user = await tx.get(ref);
     if (!user.exists) throw new StoreError("no profile");
-    const owned: number[] = user.get("avatars") ?? [];
+    const owned: number[] = user.get(ownedField) ?? [];
     if (owned.includes(id)) throw new StoreError("owned");
     const have = Number(user.get(currency)) || 0;
     if (have < amount) throw new StoreError("funds");
-    tx.update(ref, { [currency]: FieldValue.increment(-amount), avatars: FieldValue.arrayUnion(id), avatar: id });
-    return { avatar: id, [currency]: have - amount };
+    tx.update(ref, { [currency]: FieldValue.increment(-amount), [ownedField]: FieldValue.arrayUnion(id), [wornField]: id });
+    return { [wornField]: id, [currency]: have - amount };
   });
 }
 
-/** Admin tool (scripts/grant-avatars.ts): every avatar of the collection to the account with this email. */
+/** Admin tool (scripts/grant-avatars.ts): every avatar and frame for sale to the account with this email. */
 export async function grantAllAvatars(email: string) {
   if (!app) throw new Error("no service account");
   const { uid } = await getAuth(app).getUserByEmail(email);
-  await getFirestore(app).doc(`users/${uid}`).update({ avatars: FieldValue.arrayUnion(...avatarIds) });
-  return { uid, count: avatarIds.length };
+  await getFirestore(app)
+    .doc(`users/${uid}`)
+    .update({ avatars: FieldValue.arrayUnion(...avatarIds), frames: FieldValue.arrayUnion(...frameIds) });
+  return { uid, count: avatarIds.length + frameIds.length };
 }
 
 /**
