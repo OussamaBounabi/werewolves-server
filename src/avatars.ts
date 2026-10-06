@@ -12,6 +12,9 @@ export const PRICES: Record<Rarity, { amount: number; currency: "coins" | "diamo
   animated: { amount: 300, currency: "diamonds" }, // characters that move (201+)
 };
 
+/** Characters that move (animated WebP in the apps): the red werewolf, the straw-hat boy… */
+export const ANIMATED = [201, 202];
+
 const run = (from: number, to: number, rarity: Rarity) =>
   Object.fromEntries(Array.from({ length: to - from + 1 }, (_, i) => [from + i, rarity]));
 
@@ -20,7 +23,7 @@ export const AVATARS: Record<number, Rarity> = {
   ...run(109, 126, "rare"),
   ...run(127, 142, "epic"),
   ...run(143, 147, "legendary"),
-  201: "animated", // the red werewolf, alive
+  ...Object.fromEntries(ANIMATED.map((id) => [id, "animated"])),
 };
 
 export const ROBOT = 100;

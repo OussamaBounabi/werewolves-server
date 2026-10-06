@@ -4,7 +4,7 @@ import { AVATARS, avatarIds, FRAMES, frameIds, PRICES, randomFrame, ROBOT, start
 
 describe("avatars", () => {
   it("sells 47 characters, 101–147, and animated ones from 201, priced by rarity; the bots' robot isn't for sale", () => {
-    assert.deepStrictEqual(avatarIds, [...Array.from({ length: 47 }, (_, i) => 101 + i), 201]);
+    assert.deepStrictEqual(avatarIds, [...Array.from({ length: 47 }, (_, i) => 101 + i), 201, 202]);
     assert.strictEqual(AVATARS[ROBOT], undefined);
     assert.strictEqual(AVATARS[0], undefined); // the paw everyone has
     const count = (r: string) => avatarIds.filter((id) => AVATARS[id] === r).length;
