@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /**
  * Guess Who, football edition: the catalogue (data/guess/catalog.json, built by scripts/guess-data.ts) and
@@ -24,6 +24,8 @@ export const CATEGORIES: Category[] = ["pos", "nation", "club", "num"];
 export const POSITIONS = ["GK", "DEF", "MID", "ATT"];
 
 export const catalog: Catalog = JSON.parse(readFileSync(new URL("../data/guess/catalog.json", import.meta.url), "utf8"));
+// Who has his 3D portrait (data/guess/img/<id>.webp): dropped in, they show after a restart.
+for (const p of catalog.players) p.photo = existsSync(new URL(`../data/guess/img/${p.id}.webp`, import.meta.url));
 const byId = new Map(catalog.players.map((p) => [p.id, p]));
 export const player = (id: string) => byId.get(id);
 
