@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { cert, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
-import { AVATARS, avatarIds, FRAMES, frameIds, PRICES, starterAvatar } from "./avatars.js";
+import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS, PRICES } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
@@ -61,6 +61,7 @@ export type GameResult = {
   survived: boolean; // alive at the end
   name: string; // for the leaderboard
   avatar: number;
+  frame: number;
 };
 
 /** Winners: 3 XP + 3 coins per minute. Losers: 1 XP per minute. */
@@ -101,7 +102,7 @@ export async function recordResults(results: GameResult[]) {
     batch.set(db.doc(`users/${r.uid}/missions/${weekKey()}`), inc, { merge: true });
     batch.set(
       db.doc(`leaderboard/${weekKey()}/players/${r.uid}`),
-      { xp: FieldValue.increment(xp), name: r.name, avatar: r.avatar },
+      { xp: FieldValue.increment(xp), name: r.name, avatar: r.avatar, frame: r.frame },
       { merge: true },
     );
   }
@@ -112,27 +113,11 @@ export class ClaimError extends Error {}
 
 export class StoreError extends Error {}
 
-/** A first avatar for an account that owns none: one of the collection at random, free, and worn. */
-export async function grantStarter(idToken: string) {
-  if (!app) throw new StoreError("accounts disabled");
-  const { uid } = await getAuth(app).verifyIdToken(idToken);
-  const db = getFirestore(app);
-  const ref = db.doc(`users/${uid}`);
-  return db.runTransaction(async (tx) => {
-    const user = await tx.get(ref);
-    if (!user.exists) throw new StoreError("no profile");
-    const owned: number[] = user.get("avatars") ?? [];
-    if (owned.length) return { avatar: Number(user.get("avatar")) || 0, avatars: owned };
-    const id = starterAvatar();
-    tx.update(ref, { avatars: [id], avatar: id });
-    return { avatar: id, avatars: [id] };
-  });
-}
-
 /** Buys an avatar: its price (by rarity) in coins or diamonds is taken if the player has it; then it's worn. */
 export async function buyAvatar(idToken: string, id: number) {
   const rarity = AVATARS[id];
   if (!rarity) throw new StoreError("unknown");
+  if (FREE_AVATARS.includes(id)) throw new StoreError("free"); // everyone has them
   return sell(idToken, id, PRICES[rarity], "avatars", "avatar");
 }
 
@@ -199,7 +184,7 @@ export async function claimMission(idToken: string, id: string) {
     });
     tx.set(
       db.doc(`leaderboard/${weekKey()}/players/${uid}`),
-      { xp: FieldValue.increment(reward.xp), name: user.get("name") ?? "?", avatar: user.get("avatar") ?? 1 },
+      { xp: FieldValue.increment(reward.xp), name: user.get("name") ?? "?", avatar: user.get("avatar") ?? 0, frame: user.get("frame") ?? 0 },
       { merge: true },
     );
   });

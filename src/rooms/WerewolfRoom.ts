@@ -13,7 +13,8 @@ const SPECIALS = [
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
 type Meta = {
-  host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number;
+  host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean; players: number; maxPlayers: number;
+  spectators: number;
   phase: string; day: number;
 };
 type JoinOptions = { name?: string; playerId?: string; spectator?: boolean; idToken?: string; admin?: boolean };
@@ -559,11 +560,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** What the lobby screen lists for this room. */
   private updateListing() {
-    const host = this.state.players.get(this.state.hostId)?.name ?? "";
+    const host = this.state.players.get(this.state.hostId);
     this.setMatchmaking({
       maxClients: MAX_CONNECTIONS,
       metadata: {
-        host,
+        host: host?.name ?? "",
+        hostAvatar: host?.avatar ?? 0,
+        hostFrame: host?.frame ?? 0,
         roomType: this.state.roomType,
         started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,
@@ -2036,7 +2039,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const p = this.state.players.get(id);
       const side = team === "wolves" ? "wolf" : team === "village" ? "village" : "solo";
       const result: GameResult = {
-        uid, role, side, won, minutes, survived: p?.alive === true, name: p?.name ?? "?", avatar: p?.avatar ?? 0,
+        uid, role, side, won, minutes, survived: p?.alive === true, name: p?.name ?? "?", avatar: p?.avatar ?? 0, frame: p?.frame ?? 0,
       };
       results.push(result);
       const { xp, coins } = rewardFor(result);

@@ -20,7 +20,7 @@ import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js
  * No schema: each player gets his own "rummy" message (the table, plus his hand) after every change,
  * and "rummy_fx" for what the apps animate (the deal, draws, discards).
  */
-type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type Settings = {
   roomType?: string;
   maxPlayers?: number;
@@ -829,6 +829,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.setMatchmaking({
       metadata: {
         host: this.seat(this.hostId)?.name ?? "",
+        hostAvatar: this.seat(this.hostId)?.avatar ?? 0,
+        hostFrame: this.seat(this.hostId)?.frame ?? 0,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,

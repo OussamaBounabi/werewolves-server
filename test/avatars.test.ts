@@ -1,6 +1,6 @@
 import assert from "assert";
 
-import { AVATARS, avatarIds, FRAMES, frameIds, PRICES, randomFrame, ROBOT, starterAvatar } from "../src/avatars.js";
+import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS, PRICES, randomFrame, ROBOT } from "../src/avatars.js";
 
 describe("avatars", () => {
   it("sells 47 characters, 101–147, and animated ones from 201, priced by rarity; the bots' robot isn't for sale", () => {
@@ -12,8 +12,9 @@ describe("avatars", () => {
     assert.deepStrictEqual(PRICES[AVATARS[101]], { amount: 500, currency: "coins" });
     assert.deepStrictEqual(PRICES[AVATARS[147]], { amount: 120, currency: "diamonds" });
     assert.deepStrictEqual(PRICES[AVATARS[201]], { amount: 300, currency: "diamonds" });
-    // A new account's free one is never animated.
-    for (let i = 0; i < 300; i++) assert.notStrictEqual(AVATARS[starterAvatar()], "animated");
+    // Two of the hoodie friends are everyone's, free.
+    assert.deepStrictEqual(FREE_AVATARS, [103, 104]);
+    assert.ok(FREE_AVATARS.every((id) => AVATARS[id] === "common"));
   });
 
   it("sells 4 animated frames on their own; a test client wears one of them or none", () => {

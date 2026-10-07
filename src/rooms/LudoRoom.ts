@@ -14,7 +14,7 @@ import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js
  *
  * No schema: everyone gets the "ludo" message after every change, and "ludo_fx" (rolls, moves) to animate.
  */
-type Meta = { host: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; capture?: string; pawns?: number; teams?: boolean };
 type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
 type Aim = { dx?: number; dy?: number; power?: number }; // a swipe on the board: direction (board cells) and strength
@@ -459,6 +459,8 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     this.setMatchmaking({
       metadata: {
         host: this.seat(this.hostId)?.name ?? "",
+        hostAvatar: this.seat(this.hostId)?.avatar ?? 0,
+        hostFrame: this.seat(this.hostId)?.frame ?? 0,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,

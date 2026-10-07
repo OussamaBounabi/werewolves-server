@@ -1,6 +1,6 @@
 /**
- * The avatar collection (the apps have the pictures): id → rarity, which sets the price.
- * 0 is the paw everyone has (old profiles' 1–4 show it too); 100 is the robot the bots wear, not for sale.
+ * The avatar collection (the apps have the pictures): id → rarity, which sets the price. Two of them are free,
+ * everyone has them (new accounts pick one; old profiles' 0–4 show the first); 100 is the bots' robot.
  */
 export type Rarity = "common" | "rare" | "epic" | "legendary" | "animated";
 
@@ -27,14 +27,11 @@ export const AVATARS: Record<number, Rarity> = {
 };
 
 export const ROBOT = 100;
+export const FREE_AVATARS = [103, 104];
 export const avatarIds = Object.keys(AVATARS).map(Number);
 
 /** A character at random, what players without an account wear (test clients): animated ones too, to see them. */
 export const randomAvatar = () => avatarIds[Math.floor(Math.random() * avatarIds.length)];
-
-/** A new account's free first character: one at random, never an animated one. */
-const starterIds = avatarIds.filter((id) => AVATARS[id] !== "animated");
-export const starterAvatar = () => starterIds[Math.floor(Math.random() * starterIds.length)];
 
 /** Animated frames around the avatar, sold separately (the apps draw them); 0 is none. */
 export const FRAMES: Record<number, { amount: number; currency: "coins" | "diamonds" }> = {
