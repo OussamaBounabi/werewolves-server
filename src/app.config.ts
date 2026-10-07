@@ -70,8 +70,6 @@ const server = defineServer({
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
-    // Guess Who's footballers, clubs, leagues and nations (the portraits: /guess/img/<id>.webp).
-    api_guess_catalog: createEndpoint("/api/guess/catalog", { method: "GET" }, async () => catalog),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
@@ -138,6 +136,11 @@ const server = defineServer({
    */
   express: (app) => {
 
+    // Guess Who's footballers, clubs, leagues and nations, and their portraits (/guess/img/<id>.webp). Through
+    // express: the router above never ends a response this big (80 KB) — clients wait forever.
+    app.get("/api/guess/catalog", (_req, res) => {
+      res.json(catalog);
+    });
     app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/img", import.meta.url)), { maxAge: "7d" }));
 
     app.get("/hi", (req, res) => {
