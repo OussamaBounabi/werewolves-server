@@ -1,0 +1,311 @@
+{
+ "about": "The 3D portrait sheets (3x3, reading order) and the players in each: sheet-01.png is the first list.",
+ "sheets": [
+  [
+   "Q21621995 Kylian Mbappé",
+   "Q483837 Luka Modrić",
+   "Q28967995 Erling Haaland",
+   "Q107365 Manuel Neuer",
+   "Q113704154 Lamine Yamal",
+   "Q969725 Harry Kane",
+   "Q357984 Kevin De Bruyne",
+   "Q1911 Olivier Giroud",
+   "Q73360 Thibaut Courtois"
+  ],
+  [
+   "Q22951255 Marcus Rashford",
+   "Q20851003 Ousmane Dembélé",
+   "Q28973866 Vinícius Júnior",
+   "Q150268 David de Gea",
+   "Q66241169 Jude Bellingham",
+   "Q166317 Paulo Dybala",
+   "Q273715 Jordan Henderson",
+   "Q104454 Mario Götze",
+   "Q18237361 Alisson Becker"
+  ],
+  [
+   "Q133903 Virgil van Dijk",
+   "Q20994118 Rodri",
+   "Q196219 Henrikh Mkhitaryan",
+   "Q26932598 Achraf Hakimi",
+   "Q44977 Pierre-Emerick Aubameyang",
+   "Q59306386 Bukayo Saka",
+   "Q165772 Harry Maguire",
+   "Q188997 Wojciech Szczęsny",
+   "Q13865408 Joshua Kimmich"
+  ],
+  [
+   "Q66606355 Pedri",
+   "Q4979316 Bruno Fernandes",
+   "Q153786 Edin Džeko",
+   "Q31981 David Alaba",
+   "Q44297797 Ferran Torres",
+   "Q13014035 Jordan Pickford",
+   "Q108111889 Gavi",
+   "Q776878 Takumi Minamino",
+   "Q27310755 Kai Havertz"
+  ],
+  [
+   "Q10526787 Wataru Endo",
+   "Q93563 Luke Shaw",
+   "Q80892 Isco",
+   "Q19509544 Federico Valverde",
+   "Q96755 Antonio Rüdiger",
+   "Q61780902 Khvicha Kvaratskhelia",
+   "Q30007142 Declan Rice",
+   "Q99760796 Cole Palmer",
+   "Q20830808 Gianluigi Donnarumma"
+  ],
+  [
+   "Q30729096 Phil Foden",
+   "Q108159340 Arda Güler",
+   "Q21484126 Lautaro Martínez",
+   "Q66743376 Ansu Fati",
+   "Q16902219 Martin Ødegaard",
+   "Q188457 Danny Welbeck",
+   "Q701297 Mateo Kovačić",
+   "Q59381180 Julián Alvarez",
+   "Q27569376 Trent Alexander-Arnold"
+  ],
+  [
+   "Q3275904 Emiliano Martínez",
+   "Q276091 Koke",
+   "Q15521306 Bernardo Silva",
+   "Q28801927 Cody Gakpo",
+   "Q514427 Granit Xhaka",
+   "Q19599124 Benjamin Pavard",
+   "Q5981954 Lucas Vázquez",
+   "Q151838 Axel Witsel",
+   "Q3195361 Kepa Arrizabalaga"
+  ],
+  [
+   "Q23759917 Alexander Isak",
+   "Q20806743 Richarlison",
+   "Q19560313 Dani Olmo",
+   "Q2025900 John Stones",
+   "Q18962 Adrien Rabiot",
+   "Q27694 Emre Can",
+   "Q96072055 Jamal Musiala",
+   "Q62050484 Michael Olise",
+   "Q26704703 Federico Chiesa"
+  ],
+  [
+   "Q28861547 Raphinha",
+   "Q19898898 Frenkie de Jong",
+   "Q42728914 Rodrygo",
+   "Q28531111 Luis Díaz",
+   "Q16056053 Jack Grealish",
+   "Q96105248 Enzo Fernández",
+   "Q104414736 Nico Williams",
+   "Q2058682 Jan Oblak",
+   "Q6298063 João Cancelo"
+  ],
+  [
+   "Q19708656 Gabriel Jesus",
+   "Q62960177 Eduardo Camavinga",
+   "Q22082505 Marc Cucurella",
+   "Q12984 Stephan El Shaarawy",
+   "Q763465 Hakan Çalhanoğlu",
+   "Q22279773 Christian Pulisic",
+   "Q47075606 Viktor Gyökeres",
+   "Q26259982 Matthijs de Ligt",
+   "Q47170176 Jules Koundé"
+  ],
+  [
+   "Q46951844 Aurélien Tchouaméni",
+   "Q27067753 Takefusa Kubo",
+   "Q59490 Serge Gnabry",
+   "Q1439915 Eric Dier",
+   "Q72648 Lucas Digne",
+   "Q18924954 Lucas Hernandez",
+   "Q17612631 Mikel Merino",
+   "Q520721 Leon Goretzka",
+   "Q94699949 Florian Wirtz"
+  ],
+  [
+   "Q33297140 Alexis Mac Allister",
+   "Q38000669 Mason Mount",
+   "Q16063229 Andreas Christensen",
+   "Q30301454 Ibrahima Konaté",
+   "Q39076401 Reece James",
+   "Q14327453 Youri Tielemans",
+   "Q14947422 Héctor Bellerín",
+   "Q21195147 Mikel Oyarzabal",
+   "Q137231 Arkadiusz Milik"
+  ],
+  [
+   "Q297603 Nemanja Matić",
+   "Q39230 Marquinhos",
+   "Q112170256 Désiré Doué",
+   "Q326240 Ross Barkley",
+   "Q30134278 Dominik Szoboszlai",
+   "Q2036160 Thomas Meunier",
+   "Q15915040 Andy Robertson",
+   "Q23908113 Unai Simón",
+   "Q26380 Iago Aspas"
+  ],
+  [
+   "Q29950055 Éder Militão",
+   "Q26973015 Brahim Díaz",
+   "Q20630956 Ritsu Dōan",
+   "Q23540953 Alphonso Davies",
+   "Q18637930 Fabián Ruiz",
+   "Q309966 Bernd Leno",
+   "Q99670930 Bradley Barcola",
+   "Q3855340 Aymeric Laporte",
+   "Q118473161 Pau Cubarsí"
+  ],
+  [
+   "Q62657 Neto",
+   "Q129109 Matthias Ginter",
+   "Q502898 Andrej Kramarić",
+   "Q96396963 Nuno Mendes",
+   "Q19665907 David Raya",
+   "Q21286402 Takehiro Tomiyasu",
+   "Q20039495 Daichi Kamada",
+   "Q27920148 Ao Tanaka",
+   "Q21621168 Rúben Dias"
+  ],
+  [
+   "Q30881092 Lisandro Martínez",
+   "Q18817134 Rodrigo Bentancur",
+   "Q21130285 Marcos Llorente",
+   "Q13634114 José María Giménez",
+   "Q19882816 Denzel Dumfries",
+   "Q19948076 Álvaro Odriozola",
+   "Q18044401 Franck Kessié",
+   "Q127914 Sead Kolašinac",
+   "Q20090225 Nicolò Barella"
+  ],
+  [
+   "Q19938984 Manuel Akanji",
+   "Q23899393 Manuel Locatelli",
+   "Q29624459 Scott McTominay",
+   "Q666506 Ricardo Rodriguez",
+   "Q14640027 Jonathan Tah",
+   "Q21066260 Denis Zakaria",
+   "Q118207 Kevin Trapp",
+   "Q56868118 William Saliba",
+   "Q21621029 Ben Chilwell"
+  ],
+  [
+   "Q21091691 Alex Iwobi",
+   "Q56332606 Ronald Araújo",
+   "Q673691 Fabian Schär",
+   "Q21484766 Ademola Lookman",
+   "Q45179405 Anthony Gordon",
+   "Q310625 Marc Bartra",
+   "Q16972254 Dani Ceballos",
+   "Q14625183 Mario Pašalić",
+   "Q15220993 Federico Bernardeschi"
+  ],
+  [
+   "Q16648816 Yerry Mina",
+   "Q326159 Niclas Füllkrug",
+   "Q20723878 Dayot Upamecano",
+   "Q62085431 Ayase Ueda",
+   "Q66818509 Vitinha",
+   "Q4125587 Victor Lindelöf",
+   "Q27990906 Daizen Maeda",
+   "Q56257870 Ryan Gravenberch",
+   "Q114703020 Kobbie Mainoo"
+  ],
+  [
+   "Q15081905 Thomas Lemar",
+   "Q23884186 Ferland Mendy",
+   "Q7197034 Piotr Zieliński",
+   "Q19903718 Marcus Thuram",
+   "Q17274709 Mike Maignan",
+   "Q16910257 Patrik Schick",
+   "Q339252 Loris Karius",
+   "Q714116 Thorgan Hazard",
+   "Q15406583 Corentin Tolisso"
+  ],
+  [
+   "Q56254739 Hidemasa Morita",
+   "Q17505113 Joe Gomez",
+   "Q64736321 Rayan Cherki",
+   "Q73400656 Joško Gvardiol",
+   "Q26266244 Noussair Mazraoui",
+   "Q35831063 Matheus Cunha",
+   "Q2092171 Denis Suárez",
+   "Q13784739 Alexander Sørloth",
+   "Q59938996 Eric Garcia"
+  ],
+  [
+   "Q442838 Marcos Alonso",
+   "Q6526099 Leonardo Spinazzola",
+   "Q15644548 Robin Gosens",
+   "Q15065431 Aleksandr Golovin",
+   "Q28445512 Eberechi Eze",
+   "Q58323172 Bruno Guimarães",
+   "Q26934107 Justin Kluivert",
+   "Q59209505 Jérémy Doku",
+   "Q5879014 Gerónimo Rulli"
+  ],
+  [
+   "Q26255506 Diogo Dalot",
+   "Q65925174 Xavi Simons",
+   "Q56424307 Karim Adeyemi",
+   "Q15221199 Adama Traoré",
+   "Q68607008 Charles De Ketelaere",
+   "Q27889974 Moise Kean",
+   "Q59655998 Randal Kolo Muani",
+   "Q22082590 Nahuel Molina",
+   "Q21693199 Christopher Nkunku"
+  ],
+  [
+   "Q20038711 Kō Itakura",
+   "Q55955918 Deniz Undav",
+   "Q3876530 Nicolás Tagliafico",
+   "Q66801705 Noni Madueke",
+   "Q63384759 Martín Zubimendi",
+   "Q87715532 Moisés Caicedo",
+   "Q78752401 Malo Gusto",
+   "Q19345715 Exequiel Palacios",
+   "Q19956709 Dominic Calvert-Lewin"
+  ],
+  [
+   "Q44737396 Marc Guéhi",
+   "Q65950315 Benjamin Šeško",
+   "Q28058687 Cristian Romero",
+   "Q105681392 Alejandro Balde",
+   "Q117312887 Fermín López",
+   "Q59205608 Antony",
+   "Q110644260 Endrick",
+   "Q20641306 Nicolas Pépé",
+   "Q14831282 Giovanni Di Lorenzo"
+  ],
+  [
+   "Q17501875 Nikola Vlašić",
+   "Q472300 Marcel Sabitzer",
+   "Q27476 Florian Thauvin",
+   "Q113551733 João Neves",
+   "Q74548 Chris Wood",
+   "Q58494476 Mykhailo Mudryk",
+   "Q18207229 Dominik Livaković",
+   "Q19422 Sergio Canales",
+   "Q20743436 Giovanni Lo Celso"
+  ],
+  [
+   "Q26707913 Carlos Soler",
+   "Q15396247 José Gayà",
+   "Q60621615 Gonçalo Ramos",
+   "Q759710 Yussuf Poulsen",
+   "Q155049 Ron-Robert Zieler",
+   "Q66737676 Djibril Sidibé",
+   "Q26924482 Ismaïla Sarr",
+   "Q20641319 Kalvin Phillips",
+   "Q72603655 Amad Diallo"
+  ],
+  [
+   "Q28065104 Omar Marmoush",
+   "Q93555 Ben Davies",
+   "Q27469970 Robin Le Normand",
+   "Q27342447 Andriy Lunin",
+   "Q5550103 Gerard Moreno",
+   "Q99617367 Francisco Conceição",
+   "Q24084301 Donyell Malen"
+  ]
+ ]
+}
