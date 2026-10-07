@@ -91,6 +91,9 @@ const nations = MEMBERS.trim()
   });
 const nationIds = new Set(nations.map((n) => n.id));
 
+/** A name without the encyclopedia's note in brackets: "Nuno Mendes (footballer, born 2002)" → "Nuno Mendes". */
+const plain = (name: string) => name.replace(/\s*\(.*\)\s*$/, "").trim() || name;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function get(url: string, init: RequestInit = {}): Promise<Response> {
@@ -325,7 +328,7 @@ async function main() {
     const d = data.get(q)!;
     return {
       id: q,
-      name: { en: r.name, fr: d.fr ?? r.name, ar: d.ar ?? r.name },
+      name: { en: plain(r.name), fr: plain(d.fr ?? r.name), ar: plain(d.ar ?? r.name) },
       pos: r.pos,
       nation: r.nation,
       club: r.club,
@@ -338,7 +341,7 @@ async function main() {
   const outClubs = clubs.map((c) => {
     const d = data.get(pageInfo.get(c.title)?.item ?? "");
     const ar = d?.ar?.replace(/^نادي\s+/, "") || c.en; // "نادي" (club) in front of most
-    return { id: c.id, league: c.league, short: c.short, colors: c.colors, name: { en: c.en, fr: d?.fr ?? c.en, ar } };
+    return { id: c.id, league: c.league, short: c.short, colors: c.colors, name: { en: plain(c.en), fr: plain(d?.fr ?? c.en), ar: plain(ar) } };
   });
   const names = await nationNames();
   const outNations = nations.map((n) => {

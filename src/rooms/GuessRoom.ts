@@ -2,7 +2,7 @@ import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
 import {
-  botMove, bracket, covers, found, nextSlot, player, randomPlayer, validQuestion, valueOf,
+  botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
 } from "../guess.js";
 import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
@@ -25,7 +25,9 @@ type Meta = {
   host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean;
   players: number; maxPlayers: number; spectators: number; mode: Mode;
 };
-type Settings = { roomType?: string; rounds?: number; random?: boolean; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean };
+type Settings = {
+  roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean;
+};
 type JoinOptions = Settings & { mode?: string; name?: string; playerId?: string; idToken?: string };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; connected: boolean; bot: boolean; quit: boolean };
 /** One of the match's two players: a (blue) or b (red). */
@@ -60,6 +62,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private roomType = "public";
   private rounds = 3;
   private random = true; // the footballers are drawn; off: each player picks his own
+  private level = "easy"; // drawn among the 50 best known (easy), the next 50 (medium), the rest (hard)
   private trust = false;
   private time = 180;
   private cupSize = 8;
@@ -203,6 +206,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (ROUNDS.includes(Number(s.rounds))) this.rounds = Number(s.rounds);
     if (typeof s.random === "boolean") this.random = s.random;
+    if (typeof s.level === "string" && Object.hasOwn(LEVELS, s.level)) this.level = s.level;
     if (typeof s.trust === "boolean") {
       this.trust = s.trust;
       if (this.trust) this.seats = this.seats.filter((x) => !x.bot); // bots can't talk
@@ -283,16 +287,16 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.turn = "";
     for (const s of this.sides) Object.assign(s, { secret: "", answers: [], wrong: [], clockMs: this.time * 1000 });
     if (this.random) {
-      this.sides[0].secret = randomPlayer().id;
-      do this.sides[1].secret = randomPlayer().id;
+      this.sides[0].secret = randomPlayer(this.level).id;
+      do this.sides[1].secret = randomPlayer(this.level).id;
       while (this.sides[1].secret === this.sides[0].secret);
       return this.play();
     }
     this.phase = "pick";
     this.endsAt = Date.now() + PICK_MS * GuessRoom.pace;
-    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = randomPlayer().id;
+    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = randomPlayer(this.level).id;
     this.later(PICK_MS, () => {
-      for (const s of this.sides) s.secret ||= randomPlayer().id; // too slow: one at random
+      for (const s of this.sides) s.secret ||= randomPlayer(this.level).id; // too slow: one at random
       this.play();
     });
   }
@@ -469,6 +473,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       roomType: this.roomType,
       rounds: this.rounds,
       random: this.random,
+      level: this.level,
       trust: this.trust,
       time: this.time,
       cupSize: this.cupSize,

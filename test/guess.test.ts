@@ -49,6 +49,16 @@ describe("guess who", () => {
     assert.ok(!candidates([], [secret.id]).some((p) => p.id === secret.id), "a wrong guess is out");
   });
 
+  it("draws by difficulty: the 50 best known, the next 50, the rest", () => {
+    const rank = new Map(catalog.players.map((p, i) => [p.id, i]));
+    for (let i = 0; i < 300; i++) {
+      assert.ok(rank.get(randomPlayer("easy").id)! < 50);
+      const m = rank.get(randomPlayer("medium").id)!;
+      assert.ok(m >= 50 && m < 100, `medium ${m}`);
+      assert.ok(rank.get(randomPlayer("hard").id)! >= 100);
+    }
+  });
+
   it("bots find the footballer", () => {
     for (let game = 0; game < 30; game++) {
       const secret = randomPlayer();

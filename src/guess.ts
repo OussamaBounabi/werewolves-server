@@ -94,7 +94,17 @@ export function candidates(answers: Answer[], wrong: string[] = []): Player[] {
 }
 
 const pick = <T>(list: T[], random: () => number) => list[Math.floor(random() * list.length)];
-export const randomPlayer = (random = Math.random) => pick(catalog.players, random);
+
+/** How hard a drawn footballer is: how well known (the catalogue is in order of fame). */
+export const LEVELS: Record<string, [number, number]> = { easy: [0, 50], medium: [50, 100], hard: [100, 250] };
+
+/** A footballer at random: among all of them, or a difficulty's — easy: the 50 best known, medium: the next
+ * 50, hard: the rest. */
+export function randomPlayer(level?: string, random = Math.random) {
+  const [from, to] = LEVELS[level ?? ""] ?? [0, catalog.players.length];
+  const list = catalog.players.slice(from, to);
+  return pick(list.length ? list : catalog.players, random);
+}
 
 /**
  * A bot's move: with few footballers left, a guess now and then; otherwise a question — half the time one
@@ -102,7 +112,7 @@ export const randomPlayer = (random = Math.random) => pick(catalog.players, rand
  */
 export function botMove(answers: Answer[], wrong: string[], random = Math.random): Question | { guess: string } {
   const left = candidates(answers, wrong);
-  if (left.length === 0) return { guess: randomPlayer(random).id };
+  if (left.length === 0) return { guess: randomPlayer(undefined, random).id };
   if (left.length === 1 || (left.length <= 3 && random() < 0.5)) return { guess: pick(left, random).id };
   const open = CATEGORIES.filter((c) => c !== "num" && !found(answers, c));
   if (open.length === 0 || random() < 0.1) {
