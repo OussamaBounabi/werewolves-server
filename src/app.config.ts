@@ -15,6 +15,10 @@ import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
+import { GuessRoom } from "./rooms/GuessRoom.js";
+import express from "express";
+import { fileURLToPath } from "node:url";
+import { catalog } from "./guess.js";
 import { buyAvatar, buyFrame, claimMission, ClaimError, isAdmin, StoreError } from "./firebase.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -29,6 +33,7 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     maxPlayers: r.metadata?.maxPlayers ?? 0,
     spectators: r.metadata?.spectators ?? 0,
     started: r.metadata?.started === true,
+    mode: r.metadata?.mode ?? "", // guess who: duel | cup
   };
 }
 
@@ -48,6 +53,7 @@ const server = defineServer({
     rummy: defineRoom(RummyRoom),
     domino: defineRoom(DominoRoom),
     ludo: defineRoom(LudoRoom),
+    guess: defineRoom(GuessRoom),
   },
 
   /**
@@ -63,6 +69,9 @@ const server = defineServer({
     api_rummy_rooms: createEndpoint("/api/rummy/rooms", { method: "GET" }, async () => publicRooms("rummy")),
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
+    api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
+    // Guess Who's footballers, clubs, leagues and nations (the portraits: /guess/img/<id>.webp).
+    api_guess_catalog: createEndpoint("/api/guess/catalog", { method: "GET" }, async () => catalog),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
@@ -128,6 +137,8 @@ const server = defineServer({
    * Read more: https://expressjs.com/en/starter/basic-routing.html
    */
   express: (app) => {
+
+    app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/img", import.meta.url)), { maxAge: "7d" }));
 
     app.get("/hi", (req, res) => {
       res.send("It's time to kick ass and chew bubblegum!");
