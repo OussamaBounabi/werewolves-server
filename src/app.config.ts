@@ -16,6 +16,7 @@ import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
 import { GuessRoom } from "./rooms/GuessRoom.js";
+import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
@@ -54,6 +55,7 @@ const server = defineServer({
     domino: defineRoom(DominoRoom),
     ludo: defineRoom(LudoRoom),
     guess: defineRoom(GuessRoom),
+    imposter: defineRoom(ImposterRoom),
   },
 
   /**
@@ -70,6 +72,7 @@ const server = defineServer({
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
+    api_imposter_rooms: createEndpoint("/api/imposter/rooms", { method: "GET" }, async () => publicRooms("imposter")),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
