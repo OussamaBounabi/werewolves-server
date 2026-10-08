@@ -148,11 +148,13 @@ const server = defineServer({
     app.get("/api/guess/catalog", (_req, res) => {
       res.json(catalog);
     });
-    // Mimic Party's recordings: a player sends his (?room&session&token&round, a WAV), everyone plays them.
+    // Mimic Party's takes: a player sends his (?room&session&token&round&score, a WAV), everyone hears them.
     app.post("/api/mimic/clip", express.raw({ type: "*/*", limit: "450kb" }), (req, res) => {
       const room = matchMaker.getLocalRoomById(String(req.query.room ?? ""));
       const q = (k: string) => String(req.query[k] ?? "");
-      const ok = room instanceof MimicRoom && Buffer.isBuffer(req.body) && room.addClip(q("session"), q("token"), Number(q("round")), req.body);
+      const ok =
+        room instanceof MimicRoom && Buffer.isBuffer(req.body) &&
+        room.addTake(q("session"), q("token"), Number(q("round")), Number(q("score")), req.body);
       res.status(ok ? 200 : 403).json({ ok });
     });
     app.get("/api/mimic/clip/:room/:round/:session", (req, res) => {
@@ -178,8 +180,8 @@ const server = defineServer({
 
     /**
      * Use @colyseus/playground
-     * In production, only through an SSH tunnel to the server — `ssh -L 2568:127.0.0.1:2567 <server>`, then
-     * http://localhost:2568/playground/ — since everything from the internet comes through the HTTPS proxy,
+     * In production, only through an SSH tunnel to the server — `ssh -L 2580:127.0.0.1:2567 <server>`, then
+     * http://localhost:2580/playground/ — since everything from the internet comes through the HTTPS proxy,
      * which adds X-Forwarded-For (and the game port itself is firewalled).
      */
     if (process.env.NODE_ENV !== "production") {

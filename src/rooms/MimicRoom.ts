@@ -6,22 +6,20 @@ import { MIMIC_SOUNDS } from "../mimicSounds.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 
 /**
- * Mimic Party: each round everyone hears a well-known sound (a cow, a siren, a sneeze…) and imitates it; each
- * phone scores its own imitation out of 100 (the shape of the sound: its rhythm, its melody, its brightness)
- * and sends the score, and the recording over HTTP (/api/mimic/clip). The best of a player's attempts counts.
- * All together: everyone records at once, then the round's scores, the best and the worst imitations played;
- * one at a time: each plays in turn while the others watch his waveform, then everyone hears him.
- * The next round when everyone taps "next", or after a minute; the winner has the best average.
+ * Mimic Party: each round everyone hears a well-known sound (a cow, a siren, a sneeze…) at the same moment, then
+ * imitates it — as many takes as they like until the shared timer runs out (or everyone is done); each phone
+ * scores its own take out of 100 (the shape of the sound: its rhythm, its melody, its brightness) and sends it
+ * with its score over HTTP (/api/mimic/clip): the last one counts. Then the results: every take is played to
+ * everyone and its score shown, one after the other, lowest first; then a moment to hear them again, and the
+ * next sound when everyone taps "next" (or after it). The winner has the best average.
  *
- * No schema: everyone gets the "mimic" message after every change; "mimic_level" carries the live waveform of
- * whoever is imitating (one at a time).
+ * No schema: everyone gets the "mimic" message after every change.
  */
-type Mode = "together" | "turns";
 type Meta = {
   host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean;
   players: number; maxPlayers: number; spectators: number;
 };
-type Settings = { roomType?: string; rounds?: number; category?: string; mode?: string; attempts?: number };
+type Settings = { roomType?: string; rounds?: number; category?: string };
 type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
 type Seat = {
   id: string;
@@ -32,15 +30,15 @@ type Seat = {
   frame: number;
   connected: boolean;
   left: boolean;
-  token: string; // for his recordings' uploads
+  token: string; // for his takes' uploads
   scores: number[]; // each round's
-  best: number; // this round's best attempt (-1 none yet)
-  tries: number;
-  done: boolean; // no more attempts this round
-  ready: boolean; // tapped "next round"
-  clip: number; // his recording's version this round (0: none)
+  score: number; // this round's take's (-1 none)
+  ms: number; // its length
+  takes: number; // takes received this round
+  done: boolean; // finished imitating this round
+  ready: boolean; // tapped "next sound"
 };
-type Phase = "lobby" | "listen" | "record" | "perform" | "replay" | "reveal" | "result";
+type Phase = "lobby" | "listen" | "record" | "judge" | "after" | "result";
 
 const ROOM_TYPES = ["public", "friends", "private"];
 const ROUNDS = [5, 10, 15];
@@ -48,10 +46,12 @@ const CATEGORIES = [...new Set(MIMIC_SOUNDS.map((s) => s.cat))];
 const MAX_SEATS = 12;
 const LEAD_MS = 800; // the sound starts this long after the phase, everywhere at once
 const AFTER_SOUND_MS = 1_500;
-const ATTEMPT_MS = 7_000; // per attempt, besides the sound's length: the countdown, the score
-const REVEAL_MS = 60_000; // then the next round anyway
-const REPLAY_MS = 3_500; // besides the recording's length
+const RECORD_MS = 30_000; // everyone's time to imitate, besides the sound's length
+const TAKE_LEAD_MS = 1_200; // in the results, before each take plays
+const SCORE_MS = 2_800; // its score shown, before the next one
+const AFTER_MS = 30_000; // to hear the takes again; then the next sound anyway
 const MAX_CLIP_BYTES = 400_000;
+const PCM_BYTES_PER_MS = 32; // 16 kHz, 16-bit mono
 const RECONNECT_SECONDS = 600;
 
 export class MimicRoom extends Room<{ metadata: Meta }> {
@@ -63,8 +63,6 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private roomType = "public";
   private rounds = 10;
   private category = "random";
-  private mode: Mode = "together";
-  private attempts = 1;
   private seats: Seat[] = [];
   private members = new Map<string, string>();
   private invited = new Set<string>();
@@ -73,33 +71,27 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private sound = "";
   private playAt = 0; // when the sound plays, server time
   private endsAt = 0;
-  private order: string[] = []; // one at a time: who imitates, in turn
-  private performer = "";
-  private clips = new Map<string, Buffer>(); // "<round>/<seat>" → WAV
+  private order: string[] = []; // the results: whose take plays, lowest score first
+  private judged = -1; // the take playing now (index in order)
+  private takeAt = 0; // when it plays
+  private scoreAt = 0; // when its score shows
+  private clips = new Map<string, Buffer>(); // this round's takes, by seat
   private timer: { clear(): void } | null = null;
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
-    const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
+    const on = <T>(type: string, handler: (client: Client, msg: T) => void) =>
       this.onMessage(type, (client, msg: T) => {
-        const error = handler(client, msg ?? ({} as T));
-        if (error) client.send("mimic_error", { code: error });
+        handler(client, msg ?? ({} as T));
         this.sync();
       });
     on<Settings>("settings", (c, m) => {
       if (this.phase === "lobby" && c.sessionId === this.hostId) this.applySettings(m);
     });
     on("start_game", (c) => this.handleStart(c));
-    on<{ score?: number }>("score", (c, m) => this.handleScore(c.sessionId, Number(m.score)));
-    on("keep", (c) => this.handleKeep(c.sessionId));
+    on("done", (c) => this.handleDone(c.sessionId));
     on("next", (c) => this.handleNext(c.sessionId));
     on("play_again", (c) => this.handlePlayAgain(c));
-    this.onMessage("level", (client, msg: { v?: unknown }) => {
-      // One at a time: the live waveform of whoever imitates, to the others.
-      if (this.phase !== "perform" || client.sessionId !== this.performer || !Array.isArray(msg?.v)) return;
-      const v = msg.v.slice(0, 50).map((x) => Math.max(0, Math.min(1, Number(x) || 0)));
-      this.broadcast("mimic_level", { v }, { except: client });
-    });
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.seat(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
@@ -145,11 +137,11 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       left: false,
       token: randomBytes(12).toString("hex"),
       scores: [],
-      best: -1,
-      tries: 0,
+      score: -1,
+      ms: 0,
+      takes: 0,
       done: false,
       ready: false,
-      clip: 0,
     });
     if (account) {
       this.members.set(client.sessionId, account.uid);
@@ -164,6 +156,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     const seat = this.seat(client.sessionId);
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
+    this.checkAllDone();
     this.sync();
   }
 
@@ -183,8 +176,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
     else if (seat) {
       Object.assign(seat, { left: true, connected: false, done: true, ready: true });
-      if (this.performer === id && this.phase === "perform") this.finishPerformer();
-      else this.checkAllDone();
+      this.checkAllDone();
     }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.left && this.clients.getById(s.id))?.id ?? "";
     this.updateListing();
@@ -203,7 +195,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: this.talking, hear: true })) });
   }
 
-  /** Mics off while the sound plays and while players imitate (the recordings stay clean, the mic free). */
+  /** Mics off from the sound until the results are over (the takes stay clean and are heard clearly). */
   private talking = true;
   private talk(on: boolean) {
     if (this.talking === on) return;
@@ -218,9 +210,6 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (ROUNDS.includes(Number(s.rounds))) this.rounds = Number(s.rounds);
     if (s.category === "random" || CATEGORIES.includes(s.category as string)) this.category = s.category as string;
-    if (s.mode === "together" || s.mode === "turns") this.mode = s.mode;
-    const a = Number(s.attempts);
-    if (a === 1 || a === 2 || a === 3) this.attempts = a;
     this.updateListing();
   }
 
@@ -242,10 +231,6 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
 
   // ---- a round ----
 
-  private playing() {
-    return this.seats.filter((s) => !s.left);
-  }
-
   private seconds() {
     return MIMIC_SOUNDS.find((s) => s.id === this.sound)?.seconds ?? 3;
   }
@@ -259,92 +244,71 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
         .sort(() => Math.random() - 0.5);
     }
     this.sound = this.deck.pop()!;
-    for (const s of this.seats) Object.assign(s, { best: -1, tries: 0, done: s.left, ready: s.left, clip: 0 });
-    this.clips.clear(); // only this round's recordings are kept
+    for (const s of this.seats) Object.assign(s, { score: -1, ms: 0, takes: 0, done: s.left, ready: s.left });
+    this.clips.clear(); // only this round's takes are kept
+    this.order = [];
+    this.judged = -1;
     this.phase = "listen";
     this.talk(false);
-    this.playAt = Date.now() + LEAD_MS;
-    this.endsAt = this.playAt + this.seconds() * 1000 + AFTER_SOUND_MS;
-    this.later(LEAD_MS + this.seconds() * 1000 + AFTER_SOUND_MS, () => {
-      if (this.mode === "together") return this.record();
-      this.order = this.playing().map((s) => s.id);
-      this.nextPerformer(0);
-    });
+    this.playAt = Date.now() + LEAD_MS * MimicRoom.pace;
+    this.endsAt = this.playAt + (this.seconds() * 1000 + AFTER_SOUND_MS) * MimicRoom.pace;
+    this.later(LEAD_MS + this.seconds() * 1000 + AFTER_SOUND_MS, () => this.record());
   }
 
-  private attemptsMs() {
-    return this.attempts * (this.seconds() * 1000 + ATTEMPT_MS) + 10_000;
-  }
-
-  /** All together: everyone imitates, as many times as allowed. */
+  /** Everyone imitates, as many takes as they like, until the timer (or until everyone is done). */
   private record() {
+    const ms = RECORD_MS + this.seconds() * 1000;
     this.phase = "record";
-    this.endsAt = Date.now() + this.attemptsMs() * MimicRoom.pace;
-    this.later(this.attemptsMs(), () => this.reveal());
+    this.endsAt = Date.now() + ms * MimicRoom.pace;
+    this.later(ms, () => this.judge());
   }
 
-  /** One at a time: [k]'s turn (who left is skipped). */
-  private nextPerformer(k: number) {
-    const id = this.order.slice(k).find((x) => !this.seat(x)?.left);
-    if (!id) return this.reveal();
-    this.performer = id;
-    this.phase = "perform";
-    this.talk(false);
-    this.endsAt = Date.now() + this.attemptsMs() * MimicRoom.pace;
-    this.later(this.attemptsMs(), () => this.finishPerformer());
-  }
-
-  /** His turn is over: everyone hears him (if he imitated at all), then the next one. */
-  private finishPerformer() {
-    const seat = this.seat(this.performer);
-    const k = this.order.indexOf(this.performer);
-    if (seat) seat.done = true;
-    if (!seat || seat.tries === 0) return this.nextPerformer(k + 1);
-    this.phase = "replay";
-    this.talk(true);
-    this.endsAt = Date.now() + (this.seconds() * 1000 + REPLAY_MS) * MimicRoom.pace;
-    this.later(this.seconds() * 1000 + REPLAY_MS, () => this.nextPerformer(k + 1));
-  }
-
-  /** An attempt's score (his phone's ear): the best one counts. */
-  private handleScore(id: string, score: number) {
+  private handleDone(id: string) {
     const seat = this.seat(id);
-    const mine = this.phase === "record" || (this.phase === "perform" && id === this.performer);
-    if (!seat || !mine || seat.done || !Number.isFinite(score)) return;
-    // ponytail: the phone's score is trusted (a party game); score the uploaded clip here if cheating shows up
-    seat.best = Math.max(seat.best, Math.round(Math.max(0, Math.min(100, score))));
-    seat.tries++;
-    if (seat.tries >= this.attempts) this.handleKeep(id);
-  }
-
-  /** Happy with it (or out of attempts). */
-  private handleKeep(id: string) {
-    const seat = this.seat(id);
-    const mine = this.phase === "record" || (this.phase === "perform" && id === this.performer);
-    if (!seat || !mine || seat.tries === 0) return;
+    if (this.phase !== "record" || !seat || seat.takes === 0) return;
     seat.done = true;
-    if (this.phase === "perform") this.finishPerformer();
-    else this.checkAllDone();
+    this.checkAllDone();
   }
 
   private checkAllDone() {
-    if (this.phase === "record" && this.seats.every((s) => s.done || !s.connected)) this.reveal();
-    if (this.phase === "reveal" && this.seats.every((s) => s.ready || !s.connected)) this.nextOrEnd();
+    const present = this.seats.filter((s) => !s.left && s.connected);
+    if (this.phase === "record" && present.every((s) => s.done)) this.judge();
+    if (this.phase === "after" && present.every((s) => s.ready)) this.nextOrEnd();
   }
 
-  /** The round's scores (the best and the worst imitations play), "next" when ready. */
-  private reveal() {
-    for (const s of this.seats) s.scores[this.round - 1] = Math.max(0, s.best);
-    this.phase = "reveal";
+  /** The results: every take played to everyone, then its score — the lowest first, the round's best last. */
+  private judge() {
+    this.order = this.seats
+      .filter((s) => this.clips.has(s.id))
+      .sort((a, b) => a.score - b.score || Math.random() - 0.5)
+      .map((s) => s.id);
+    this.phase = "judge";
+    this.judged = -1;
+    this.nextTake();
+  }
+
+  private nextTake() {
+    this.judged++;
+    const seat = this.seat(this.order[this.judged] ?? "");
+    if (!seat) return this.after();
+    this.takeAt = Date.now() + TAKE_LEAD_MS * MimicRoom.pace;
+    this.scoreAt = this.takeAt + seat.ms * MimicRoom.pace;
+    this.endsAt = this.scoreAt + SCORE_MS * MimicRoom.pace;
+    this.later(TAKE_LEAD_MS + seat.ms + SCORE_MS, () => this.nextTake());
+  }
+
+  /** All heard: a moment to hear them again; "next" when ready. */
+  private after() {
+    for (const s of this.seats) s.scores[this.round - 1] = Math.max(0, s.score);
+    this.phase = "after";
     this.talk(true);
-    this.performer = "";
-    this.endsAt = Date.now() + REVEAL_MS * MimicRoom.pace;
-    this.later(REVEAL_MS, () => this.nextOrEnd());
+    this.endsAt = Date.now() + AFTER_MS * MimicRoom.pace;
+    this.later(AFTER_MS, () => this.nextOrEnd());
   }
 
   private handleNext(id: string) {
     const seat = this.seat(id);
-    if (this.phase !== "reveal" || !seat) return;
+    if (this.phase !== "after" || !seat) return;
     seat.ready = true;
     this.checkAllDone();
   }
@@ -366,29 +330,35 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private handlePlayAgain(client: Client) {
     if (this.phase !== "result" || client.sessionId !== this.hostId) return;
     this.seats = this.seats.filter((s) => !s.left);
-    for (const s of this.seats) Object.assign(s, { scores: [], best: -1, tries: 0, done: false, ready: false, clip: 0 });
+    for (const s of this.seats) Object.assign(s, { scores: [], score: -1, ms: 0, takes: 0, done: false, ready: false });
     this.round = 0;
     this.sound = "";
+    this.order = [];
     this.phase = "lobby";
     this.unlock();
     this.updateListing();
   }
 
-  // ---- recordings (HTTP, see app.config) ----
+  // ---- the takes (HTTP, see app.config) ----
 
-  /** A player's recording of this round (his best attempt so far). False when it isn't his to send. */
-  addClip(session: string, token: string, round: number, wav: Buffer) {
+  /** A player's take of this round (16 kHz mono WAV) and its score: the last one counts. False when refused. */
+  addTake(session: string, token: string, round: number, score: number, wav: Buffer) {
     const seat = this.seat(session);
-    if (!seat || seat.token !== token || round !== this.round || wav.length > MAX_CLIP_BYTES) return false;
-    if (!["record", "perform", "replay", "reveal"].includes(this.phase)) return false;
-    this.clips.set(`${round}/${session}`, wav);
-    seat.clip++;
+    if (!seat || seat.token !== token || round !== this.round || this.phase !== "record" || seat.done) return false;
+    if (wav.length <= 44 || wav.length > MAX_CLIP_BYTES || !Number.isFinite(score)) return false;
+    // ponytail: the phone's score is trusted (a party game); score the take here if cheating shows up
+    this.clips.set(session, wav);
+    seat.score = Math.round(Math.max(0, Math.min(100, score)));
+    seat.ms = Math.round((wav.length - 44) / PCM_BYTES_PER_MS);
+    seat.takes++;
     this.sync();
     return true;
   }
 
+  /** A take, once the results have started. */
   clip(round: number, session: string) {
-    return this.clips.get(`${round}/${session}`);
+    if (round !== this.round || (this.phase !== "judge" && this.phase !== "after")) return undefined;
+    return this.clips.get(session);
   }
 
   // ---- sync ----
@@ -418,33 +388,33 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
-    // The round's scores show at its end (one at a time: each one's after his turn).
+    // A score shows once its take is being played (the phones hold it back until the take has been heard).
     const shown = (s: Seat) =>
-      this.phase === "reveal" || this.phase === "result" || (this.mode === "turns" && s.done && s.id !== this.performer) ||
-      (this.phase === "replay" && s.id === this.performer);
+      this.phase === "after" || this.phase === "result" ||
+      (this.phase === "judge" && this.order.indexOf(s.id) >= 0 && this.order.indexOf(s.id) <= this.judged);
     const table = {
       phase: this.phase,
       hostId: this.hostId,
       roomType: this.roomType,
       rounds: this.rounds,
       category: this.category,
-      mode: this.mode,
-      attempts: this.attempts,
       round: this.round,
       sound: this.sound,
       playAt: this.playAt,
       endsAt: this.endsAt,
-      performer: this.performer,
+      order: this.order,
+      judged: this.judged,
+      takeAt: this.takeAt,
+      scoreAt: this.scoreAt,
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, connected: s.connected, bot: "",
-        left: s.left, tries: s.tries, done: s.done, ready: s.ready, clip: s.clip,
-        best: shown(s) ? s.best : -1, scores: s.scores,
+        left: s.left, takes: s.takes, done: s.done, ready: s.ready, ms: s.ms,
+        score: shown(s) ? s.score : -1, scores: s.scores,
       })),
       serverNow: Date.now(),
     };
     for (const client of this.clients) {
-      const me = this.seat(client.sessionId);
-      client.send("mimic", { ...table, me: client.sessionId, token: me?.token ?? "", myBest: me?.best ?? -1 });
+      client.send("mimic", { ...table, me: client.sessionId, token: this.seat(client.sessionId)?.token ?? "" });
     }
   }
 }
