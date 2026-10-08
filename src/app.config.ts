@@ -17,6 +17,7 @@ import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
 import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
+import { MimicRoom } from "./rooms/MimicRoom.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
@@ -56,6 +57,7 @@ const server = defineServer({
     ludo: defineRoom(LudoRoom),
     guess: defineRoom(GuessRoom),
     imposter: defineRoom(ImposterRoom),
+    mimic: defineRoom(MimicRoom),
   },
 
   /**
@@ -73,6 +75,7 @@ const server = defineServer({
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
     api_imposter_rooms: createEndpoint("/api/imposter/rooms", { method: "GET" }, async () => publicRooms("imposter")),
+    api_mimic_rooms: createEndpoint("/api/mimic/rooms", { method: "GET" }, async () => publicRooms("mimic")),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).
@@ -143,6 +146,19 @@ const server = defineServer({
     // express: the router above never ends a response this big (80 KB) — clients wait forever.
     app.get("/api/guess/catalog", (_req, res) => {
       res.json(catalog);
+    });
+    // Mimic Party's recordings: a player sends his (?room&session&token&round, a WAV), everyone plays them.
+    app.post("/api/mimic/clip", express.raw({ type: "*/*", limit: "450kb" }), (req, res) => {
+      const room = matchMaker.getLocalRoomById(String(req.query.room ?? ""));
+      const q = (k: string) => String(req.query[k] ?? "");
+      const ok = room instanceof MimicRoom && Buffer.isBuffer(req.body) && room.addClip(q("session"), q("token"), Number(q("round")), req.body);
+      res.status(ok ? 200 : 403).json({ ok });
+    });
+    app.get("/api/mimic/clip/:room/:round/:session", (req, res) => {
+      const room = matchMaker.getLocalRoomById(req.params.room);
+      const wav = room instanceof MimicRoom ? room.clip(Number(req.params.round), req.params.session.replace(/\.wav$/, "")) : undefined;
+      if (!wav) return void res.status(404).end();
+      res.type("audio/wav").send(wav);
     });
     app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/img", import.meta.url)), { maxAge: "7d" }));
 
