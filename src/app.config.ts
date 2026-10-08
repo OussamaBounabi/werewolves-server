@@ -5,6 +5,7 @@ import {
   playground,
   createRouter,
   createEndpoint,
+  createMiddleware,
   matchMaker,
 } from "colyseus";
 
@@ -177,10 +178,17 @@ const server = defineServer({
 
     /**
      * Use @colyseus/playground
-     * (It is not recommended to expose this route in a production environment)
+     * In production, only through an SSH tunnel to the server — `ssh -L 2568:127.0.0.1:2567 <server>`, then
+     * http://localhost:2568/playground/ — since everything from the internet comes through the HTTPS proxy,
+     * which adds X-Forwarded-For (and the game port itself is firewalled).
      */
     if (process.env.NODE_ENV !== "production") {
       app.use("/", playground());
+    } else {
+      const tunnelOnly = createMiddleware(async (ctx) => {
+        if (ctx.getHeader("x-forwarded-for")) throw ctx.error(404, { message: "Not found" });
+      });
+      app.use("/playground", playground({ use: [tunnelOnly] }));
     }
   }
 });
