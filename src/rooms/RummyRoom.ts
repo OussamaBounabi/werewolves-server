@@ -44,7 +44,7 @@ type Seat = {
 };
 type TableMeld = { id: number; owner: string; kind: MeldKind; cards: number[] };
 type Phase = "lobby" | "seating" | "playing" | "round_end" | "gameover"; // seating: drawing for seats
-type RoundResult = { winner: string; joker: boolean; penalties: Record<string, number> };
+type RoundResult = { winner: string; joker: boolean; penalties: Record<string, number>; cards: Record<string, number[]> }; // cards: each hand at the end
 
 const MAX_SEATS = 5;
 const ROOM_TYPES = ["public", "friends", "private"];
@@ -700,7 +700,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       else s.score += penalties[s.id];
     }
     if (this.teams) for (const s of this.seats) s.score = this.teamScores[this.teamOf(s.id)]; // one score per team
-    this.lastRound = { winner, joker, penalties };
+    const cards = Object.fromEntries(this.seats.map((s) => [s.id, [...(this.hands.get(s.id) ?? [])]]));
+    this.lastRound = { winner, joker, penalties, cards };
     this.turn = "";
     if (this.seats.some((s) => s.score >= this.losingScore)) return this.endGame();
     // Results: everyone presses "ready" (bots are), or is ready anyway after a while.

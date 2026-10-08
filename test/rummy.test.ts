@@ -1,5 +1,5 @@
 import assert from "assert";
-import { ColyseusTestServer, boot } from "@colyseus/testing";
+import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import { DEFAULT_RULES, isJoker, jokerFits, layError, meldOf, openingError } from "../src/rummy.js";
@@ -73,7 +73,11 @@ describe("rummy table rules", () => {
 
 describe("RummyRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
-  before(async () => (colyseus = await boot(appConfig)));
+  // As boot() does, but not on its 2568: a playground tunnel there would take these connections.
+  before(async () => {
+    await appConfig.listen(2570);
+    colyseus = new ColyseusTestServer(appConfig);
+  });
   after(async () => colyseus.shutdown());
   beforeEach(async () => await colyseus.cleanup());
 
@@ -260,6 +264,9 @@ describe("RummyRoom", () => {
     up.room.handleDiscard({ sessionId: up.b.sessionId }, J, true);
     assert.strictEqual(up.room.lastRound.joker, true);
     assert.strictEqual(Object.values(up.room.lastRound.penalties)[0], 200); // never laid down: 100, doubled
+    // Everyone's hand at the end, for the results: the winner's empty.
+    assert.deepStrictEqual(up.room.lastRound.cards[up.b.sessionId], []);
+    assert.ok(Object.values(up.room.lastRound.cards).some((cards: any) => cards.length > 0));
   });
 
   it("2 vs 2: partners face to face, the partner lays without points, one score per team", async () => {
