@@ -78,6 +78,7 @@ export const WerewolfState = schema({
   dealt: t.string().default(""), // JSON {role: count} of the roles actually dealt, for "remaining roles"
   spectators: t.number().default(0),
   hostId: t.string().default(""),
+  nextRoomId: t.string().default(""), // after the game: the room the host recreated, where "Play again" goes
   players: t.map(PlayerState),
 });
 export type WerewolfState = SchemaType<typeof WerewolfState>;

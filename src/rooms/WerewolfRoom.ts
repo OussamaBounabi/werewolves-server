@@ -1,4 +1,4 @@
-import { Room, Client, ServerError } from "colyseus";
+import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
@@ -95,6 +95,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private accounts = new Map<string, string>(); // sessionId → account uid, for players signed in
   private members = new Map<string, string>(); // sessionId → account uid, players and spectators
   private invited = new Set<string>(); // account uids invited by someone in the room (friends/private rooms)
+  private welcomed = new Set<string>(); // player ids from the room this one replaces (its host recreated it)
   private voiceRights = new Map<string, string>(); // in the voice room → last rights sent ("talk,hear")
   private gameStartedAt = 0;
   private quitAlive = new Map<string, number>(); // left the game while alive → counted as a loss (and when)
@@ -224,6 +225,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.members.has(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
     });
+    this.onMessage("recreated", (client, msg: { roomId: string }) => this.handleRecreated(client, msg));
   }
 
   /**
@@ -248,7 +250,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const playerId = account?.uid ?? options.playerId;
     if (playerId && this.banned.has(String(playerId))) throw new ServerError(4403, "banned");
     if (options.spectator && this.state.phase === "lobby") throw new ServerError(4409, "lobby"); // join it instead
-    await this.checkRoomType(account);
+    await this.checkRoomType(account, playerId);
     if (playerId && this.deadSeatOf(String(playerId))) return { account }; // back to his seat, among the dead
     if (!options.spectator) {
       if (this.state.phase !== "lobby") throw new ServerError(4409, "started");
@@ -262,10 +264,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    * Public rooms are open. Friends rooms: invited players, or friends of someone already in the room.
    * Private rooms: invited players only. The first player (the host creating it) always gets in.
    */
-  private async checkRoomType(account: Account | null) {
+  private async checkRoomType(account: Account | null, playerId?: unknown) {
     const type = this.state.roomType;
     if (type === "public" || this.members.size === 0 && this.state.players.size === 0) return;
     if (account && this.invited.has(account.uid)) return;
+    if (playerId && this.welcomed.has(String(playerId))) return; // played the last game with the host
     if (type === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) return;
     throw new ServerError(4410, type === "private" ? "private" : "friends");
   }
@@ -508,6 +511,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.removeFromGame(id, timedOut ? "timeout" : "quit");
     } else {
       player.connected = false;
+      this.passHostIfGone();
     }
     this.updateListing();
   }
@@ -596,6 +600,43 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (st.villagers === 0) st.bluewolf = false; // he hides behind a simple villager
     if (s.testRole !== undefined) this.testHostRole = ROLES.includes(s.testRole as Role) ? (s.testRole as Role) : null;
     this.updateListing();
+  }
+
+  /** After the game, recreating the room is the host's: if he's gone for good, the first player still here. */
+  private passHostIfGone() {
+    const host = this.state.hostId;
+    if (this.state.players.get(host)?.connected || this.dropped.has(host)) return; // a dropped host may come back
+    const next = [...this.state.players.values()].find((p) => p.connected)?.sessionId;
+    if (!next) return;
+    this.setHost(next);
+    this.logEvent("new_host", { name: this.nameOf(next) });
+  }
+
+  /**
+   * The host made a new room for the next game (the app creates it with this one's settings, then tells us):
+   * "Play again" then takes everyone there. The new room must confirm he's its host, and lets this table in.
+   */
+  private async handleRecreated(client: Client, msg: { roomId: string }) {
+    const roomId = typeof msg?.roomId === "string" ? msg.roomId : "";
+    if (this.state.phase !== "gameover" || client.sessionId !== this.state.hostId || this.state.nextRoomId) return;
+    if (!roomId || roomId === this.roomId) return;
+    const table = [...this.state.players.keys()].map((id) => this.playerIds.get(id) ?? "").filter((id) => id);
+    try {
+      const host = this.playerIds.get(client.sessionId) ?? "";
+      if ((await matchMaker.remoteRoomCall<WerewolfRoom>(roomId, "welcome", [host, table])) !== true) return;
+    } catch {
+      return; // no such room, or not a werewolf one
+    }
+    if (this.state.phase === "gameover") this.state.nextRoomId = roomId;
+  }
+
+  /** Called by the room this one replaces (see handleRecreated): its players may come in, even if private. */
+  welcome(hostPlayerId: string, playerIds: string[]) {
+    if (this.state.phase !== "lobby" || !hostPlayerId || this.playerIds.get(this.state.hostId) !== hostPlayerId) {
+      return false;
+    }
+    for (const id of playerIds) if (typeof id === "string" && id) this.welcomed.add(id);
+    return true;
   }
 
   private setHost(sessionId: string) {
@@ -2005,6 +2046,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** A null winner means the room ran out of time: nobody wins. The room then closes after a visible 60s. */
   private endGame(winner: Winner | null) {
     this.state.phase = "gameover";
+    this.passHostIfGone(); // a host who quit mid-game can't recreate the room
     this.state.nightStep = "";
     this.state.nightRoles = "";
     this.state.winner = winner ?? "none";

@@ -1,5 +1,5 @@
 import assert from "assert";
-import { ColyseusTestServer, boot } from "@colyseus/testing";
+import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import { WerewolfState } from "../src/rooms/schema/WerewolfState.js";
@@ -19,7 +19,11 @@ const STEP = 15_000; // a night step lasts 10s (night 1's first one 13.5s: it co
 describe("WerewolfRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
-  before(async () => (colyseus = await boot(appConfig)));
+  before(async () => {
+    // As boot() does, but not on its 2568: a playground tunnel there would take these connections.
+    await appConfig.listen(2571);
+    colyseus = new ColyseusTestServer(appConfig);
+  });
   after(async () => colyseus.shutdown());
   beforeEach(async () => await colyseus.cleanup());
 
@@ -188,7 +192,7 @@ describe("WerewolfRoom", () => {
     await witchTurn;
 
     const reveals: any[] = [];
-    seer.onMessage("death_reveal", (d) => reveals.push(d));
+    seer.onMessage("death_reveal", (d: any) => reveals.push(d));
     seer.send("seer_peek", { targetId: wolf.sessionId });
     witch.send("witch_poison", { targetId: seer.sessionId });
     witch.send("witch_pass");
@@ -895,5 +899,33 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.players.get(b.sessionId)?.votedFor === a.sessionId);
     r.resolveMayor();
     assert.strictEqual(room.state.mayorId, ""); // 1–1: no mayor
+  });
+
+  it("after the game, the host's new room takes the table: Play again gets in, even a private one", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room, { playerId: "host-device" });
+    const other = await colyseus.connectTo(room, { playerId: "other-device" });
+    (room as any).endGame(null);
+    await waitFor(() => room.state.phase === "gameover");
+
+    // His new room: private this time. A room someone else hosts doesn't count, nor a guest's word.
+    const next = await colyseus.createRoom<WerewolfState>("werewolf", { roomType: "private" });
+    await colyseus.connectTo(next, { playerId: "host-device" });
+    const foreign = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    await colyseus.connectTo(foreign, { playerId: "someone-else" });
+    host.send("recreated", { roomId: foreign.roomId });
+    other.send("recreated", { roomId: next.roomId });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(room.state.nextRoomId, "");
+
+    host.send("recreated", { roomId: next.roomId });
+    await waitFor(() => room.state.nextRoomId === next.roomId);
+    await assert.rejects(colyseus.connectTo(next, { playerId: "stranger" }), /private/);
+    await colyseus.connectTo(next, { playerId: "other-device" }); // "Play again"
+    assert.strictEqual(next.state.players.size, 2);
+
+    // The old room: its host gone for good, the next player still there takes it.
+    await host.leave();
+    await waitFor(() => room.state.hostId === other.sessionId);
   });
 });
