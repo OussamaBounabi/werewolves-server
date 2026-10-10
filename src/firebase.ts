@@ -160,6 +160,18 @@ export async function grantAllAvatars(email: string) {
   return { uid, count: avatarIds.length + frameIds.length };
 }
 
+/** Admin tool (scripts/grant-coins.ts): adds coins and diamonds to the account with this username. */
+export async function grantCurrency(username: string, coins: number, diamonds: number) {
+  if (!app) throw new Error("no service account");
+  const db = getFirestore(app);
+  const uid = (await db.doc(`usernames/${username.toLowerCase()}`).get()).data()?.uid;
+  if (!uid) throw new Error(`no player with the username ${username}`);
+  const user = db.doc(`users/${uid}`);
+  await user.update({ coins: FieldValue.increment(coins), diamonds: FieldValue.increment(diamonds) });
+  const profile = (await user.get()).data()!;
+  return { name: String(profile.name ?? profile.username), coins: Number(profile.coins), diamonds: Number(profile.diamonds) };
+}
+
 /**
  * Hands out a mission's reward once: checks the player's progress for the current period, marks it
  * claimed, adds coins/XP/diamonds (the XP counts for this week's leaderboard too).
