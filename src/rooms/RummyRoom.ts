@@ -6,7 +6,7 @@ import {
   type Rules,
 } from "../rummy.js";
 import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
-import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
+import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 
 /**
  * Algerian rummy, 2–5 players (bots included), 14 cards each (the round's first player gets 15 and
@@ -30,7 +30,7 @@ type Settings = {
   rules?: Partial<Rules>;
   teams?: boolean; // 2 vs 2 (4 players): partners sit face to face, one score per team
 };
-type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
+type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string; // the session id (a bot's own id)
   playerId: string;
@@ -67,9 +67,11 @@ const CLOSE_AFTER_GAME_MS = 60_000;
 
 export const thresholdFor = (players: number) => (players >= 5 ? 71 : players === 4 ? 91 : 101);
 
+const MAX_SPECTATORS = 20;
+
 export class RummyRoom extends Room<{ metadata: Meta }> {
   static botSpeed = 1; // tests: bots think faster
-  maxClients = MAX_SEATS;
+  maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
   botFailures = 0; // tests: bot moves the room refused
 
   private phase: Phase = "lobby";
@@ -91,6 +93,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = []; // seat order = turn order
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>(); // account uids invited by someone at the table
+  private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private hands = new Map<string, number[]>();
   private opened = new Set<string>(); // laid down this round
   private staged = new Map<string, number[][]>(); // melds being put together for the next lay-down (still in the hand)
@@ -125,6 +128,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on("start_game", (c) => this.handleStart(c));
+    on("sit", (c) => this.handleSit(c));
     on("draw", (c) => this.handleDraw(c));
     on("take", (c) => this.handleTake(c));
     on("untake", (c) => this.handleUntake(c));
@@ -156,8 +160,13 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
-    if (this.phase !== "lobby") throw new ServerError(4409, "started");
-    if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+    if (options.spectator) {
+      if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
+      if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
+    } else {
+      if (this.phase !== "lobby") throw new ServerError(4409, "started");
+      if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+    }
     await this.checkRoomType(account);
     return { account };
   }
@@ -172,6 +181,18 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    const account: Account | null = client.auth?.account ?? null;
+    if (account) {
+      this.members.set(client.sessionId, account.uid);
+      setRoom(account.uid, this.roomId).catch(() => {});
+    }
+    if (options.spectator) this.spectators.set(client.sessionId, options);
+    else this.addSeat(client, options);
+    this.updateListing();
+    this.sync();
+  }
+
+  private addSeat(client: Client, options: JoinOptions) {
     const account: Account | null = client.auth?.account ?? null;
     const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
     // Same account (or device) already seated: a join its app gave up on. That seat goes.
@@ -188,16 +209,22 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       score: 0,
       bot: null,
     });
-    if (account) {
-      this.members.set(client.sessionId, account.uid);
-      setRoom(account.uid, this.roomId).catch(() => {});
-    }
     if (!this.hostId) this.hostId = client.sessionId;
+  }
+
+  /** Back in the waiting room, a spectator takes a seat. */
+  private handleSit(client: Client) {
+    const options = this.spectators.get(client.sessionId);
+    if (this.phase !== "lobby" || !options) return;
+    if (this.seats.length >= this.maxPlayers) return "full";
+    this.spectators.delete(client.sessionId);
+    this.addSeat(client, options);
+    if (voiceEnabled) setVoiceRights(this.roomId, client.sessionId, { talk: true, hear: true }).catch(() => {});
     this.updateListing();
-    this.sync();
   }
 
   onDrop(client: Client) {
+    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
     const seat = this.seat(client.sessionId);
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -216,6 +243,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
     if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.spectators.delete(id)) {
+      this.updateListing();
+      return this.sync();
+    }
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.becomeBot(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.clients.getById(s.id))?.id ?? "";
@@ -231,8 +262,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
-    const name = this.seat(client.sessionId)?.name ?? "player";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: true, hear: true })) });
+    const name = this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: !!this.seat(client.sessionId), hear: true })) });
   }
 
   // ---- the waiting room ----
@@ -310,7 +341,6 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
-    this.lock();
     if (this.teams) this.deal();
     else this.startSeating();
   }
@@ -836,7 +866,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: this.maxPlayers,
-        spectators: 0,
+        spectators: this.spectators.size,
       },
     });
   }
@@ -878,6 +908,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       discardCount: this.discard.length,
       melds: this.melds,
       lastRound: this.lastRound,
+      spectators: this.spectators.size,
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

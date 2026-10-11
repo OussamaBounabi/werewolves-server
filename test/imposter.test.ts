@@ -158,4 +158,43 @@ describe("ImposterRoom", () => {
     assert.strictEqual(room.phase, "lobby");
     room.disconnect();
   });
+
+  it("lets people watch a running game without a seat or a card, then sit down in the waiting room", async () => {
+    const lobby: any = await colyseus.createRoom("imposter", {});
+    await colyseus.connectTo(lobby, { name: "A" });
+    await assert.rejects(colyseus.connectTo(lobby, { spectator: true }), /lobby/); // a waiting room is joined, not watched
+    lobby.disconnect();
+
+    const { room, players } = await game(4, { mode: "single" });
+    await assert.rejects(colyseus.connectTo(room, { name: "late" }), /started/);
+    const watcher: any = await colyseus.connectTo(room, { spectator: true, name: "W" });
+    let seen: any = null;
+    watcher.onMessage("imposter", (s: any) => (seen = s));
+    watcher.onMessage("imposter_error", () => {});
+    watcher.send("sit"); // not in a game: ignored (and everyone is told the table again)
+    await until(() => seen?.phase === "talk");
+    assert.strictEqual(seen.seats.length, 4);
+    assert.ok(!seen.seats.some((s: any) => s.id === seen.me), "no seat");
+    assert.strictEqual(seen.card, null, "no card");
+    assert.strictEqual(seen.spectators, 1);
+    assert.strictEqual(room.metadata.spectators, 1);
+
+    for (const p of players.slice(0, 3)) p.client.send("vote_now");
+    await until(() => room.phase === "vote");
+    watcher.send("vote", { target: players[0].state.me }); // not his to do
+    for (const p of players) p.client.send("vote", { target: "" });
+    await until(() => room.phase === "result");
+    players[0].client.send("play_again");
+    await until(() => seen?.phase === "lobby");
+    // The waiting room's log: who came, who left.
+    assert.deepStrictEqual(seen.log.map((l: any) => `${l.type} ${l.name}`), ["joined P0", "joined P1", "joined P2", "joined P3"]);
+    watcher.send("sit");
+    await until(() => seen?.seats.length === 5);
+    assert.ok(seen.seats.some((s: any) => s.id === seen.me && s.name === "W"));
+    assert.strictEqual(seen.spectators, 0);
+    await players[3].client.leave();
+    await until(() => seen?.seats.length === 4);
+    assert.deepStrictEqual(seen.log.slice(-2).map((l: any) => `${l.type} ${l.name}`), ["joined W", "left P3"]);
+    room.disconnect();
+  });
 });

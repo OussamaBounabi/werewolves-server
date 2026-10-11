@@ -19,7 +19,7 @@ type Meta = {
   players: number; maxPlayers: number; spectators: number;
 };
 type Settings = { roomType?: string; imposters?: number; category?: string; talk?: number; mode?: string };
-type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
+type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
   playerId: string;
@@ -42,6 +42,8 @@ type Phase = "lobby" | "reveal" | "talk" | "vote" | "verdict" | "guess" | "resul
 const ROOM_TYPES = ["public", "friends", "private"];
 const TALK_OPTIONS = [60, 120, 180, 240, 300];
 const MAX_SEATS = 12;
+const MAX_SPECTATORS = 20;
+const LOG_LINES = 30;
 const MIN_PLAYERS = 3;
 const REVEAL_MS = 20_000; // looking at one's card
 const VOTE_MS = 30_000;
@@ -51,7 +53,7 @@ const RECONNECT_SECONDS = 600;
 
 export class ImposterRoom extends Room<{ metadata: Meta }> {
   static pace = 1; // tests: every timer shorter
-  maxClients = MAX_SEATS;
+  maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
   private phase: Phase = "lobby";
   private hostId = "";
@@ -63,6 +65,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = [];
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
+  private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private log: { type: "joined" | "left"; name: string; at: number }[] = []; // the waiting room's comings and goings
   private word: Word | null = null;
   private round = 0;
   private endsAt = 0;
@@ -88,6 +92,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     on<{ target?: string }>("vote", (c, m) => this.handleVote(c.sessionId, String(m.target ?? "")));
     on<{ word?: string }>("guess", (c, m) => this.handleGuess(c.sessionId, String(m.word ?? "")));
     on("play_again", (c) => this.handlePlayAgain(c));
+    on("sit", (c) => this.handleSit(c));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.seat(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
@@ -106,8 +111,13 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
-    if (this.phase !== "lobby") throw new ServerError(4409, "started");
-    if (this.seats.length >= MAX_SEATS) throw new ServerError(4409, "full");
+    if (options.spectator) {
+      if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
+      if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
+    } else {
+      if (this.phase !== "lobby") throw new ServerError(4409, "started");
+      if (this.seats.length >= MAX_SEATS) throw new ServerError(4409, "full");
+    }
     if (this.roomType !== "public" && this.seats.length > 0) {
       const ok =
         (account && this.invited.has(account.uid)) ||
@@ -119,13 +129,27 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   onJoin(client: Client, options: JoinOptions = {}) {
     const account: Account | null = client.auth?.account ?? null;
+    if (account) {
+      this.members.set(client.sessionId, account.uid);
+      setRoom(account.uid, this.roomId).catch(() => {});
+    }
+    if (options.spectator) this.spectators.set(client.sessionId, options);
+    else this.addSeat(client, options);
+    this.updateListing();
+    this.sync();
+  }
+
+  private addSeat(client: Client, options: JoinOptions) {
+    const account: Account | null = client.auth?.account ?? null;
     const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
     const ghost = this.seats.find((s) => s.playerId === playerId);
     if (ghost) this.removeSeat(ghost.id);
+    const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`);
+    this.note("joined", name);
     this.seats.push({
       id: client.sessionId,
       playerId,
-      name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
+      name,
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       frame: account?.frame ?? randomFrame(),
@@ -139,16 +163,26 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       score: ghost?.score ?? 0,
       gained: 0,
     });
-    if (account) {
-      this.members.set(client.sessionId, account.uid);
-      setRoom(account.uid, this.roomId).catch(() => {});
-    }
     if (!this.hostId) this.hostId = client.sessionId;
+  }
+
+  /** Back in the waiting room, a spectator takes a seat. */
+  private handleSit(client: Client) {
+    const options = this.spectators.get(client.sessionId);
+    if (this.phase !== "lobby" || !options) return;
+    if (this.seats.length >= MAX_SEATS) return "full";
+    this.spectators.delete(client.sessionId);
+    this.addSeat(client, options);
+    this.voice(this.seat(client.sessionId)!, true);
     this.updateListing();
-    this.sync();
+  }
+
+  private note(type: "joined" | "left", name: string) {
+    this.log = [...this.log, { type, name, at: Date.now() }].slice(-LOG_LINES);
   }
 
   onDrop(client: Client) {
+    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
     const seat = this.seat(client.sessionId);
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -167,6 +201,12 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
     if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.spectators.delete(id)) {
+      this.updateListing();
+      return this.sync();
+    }
+    const leaving = this.seat(id);
+    if (leaving && this.phase === "lobby") this.note("left", leaving.name);
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
     else this.leaveGame(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.left && this.clients.getById(s.id))?.id ?? "";
@@ -182,13 +222,32 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
     const seat = this.seat(client.sessionId);
-    const talk = !seat?.out;
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, seat?.name ?? "player", { talk, hear: true })) });
+    const talk = !!seat && !seat.out; // a spectator listens
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, this.voiceName(client), { talk, hear: true })) });
+    if (this.inGraveyard(client.sessionId)) this.sendGrave(client);
   }
 
-  /** Who's out of the game hears but doesn't talk; back in the waiting room, everyone talks again. */
+  /** Who's out of the game hears the table but doesn't talk to it; back in the waiting room, everyone talks again. */
   private voice(seat: Seat, talk: boolean) {
     if (voiceEnabled && !seat.left) setVoiceRights(this.roomId, seat.id, { talk, hear: true }).catch(() => {});
+  }
+
+  private voiceName(client: Client) {
+    return this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
+  }
+
+  /** Out of a running game, or watching it: with the others like him, in the graveyard's voice. */
+  private inGraveyard(id: string) {
+    if (this.phase === "lobby" || this.phase === "result") return false;
+    const seat = this.seat(id);
+    return seat ? seat.out && !seat.left : this.spectators.has(id);
+  }
+
+  /** The graveyard's voice: they talk there among themselves, the table never hears them. */
+  private async sendGrave(client: Client | undefined) {
+    if (!voiceEnabled || !client) return;
+    const access = await voiceToken(this.roomId, client.sessionId, this.voiceName(client), { talk: true, hear: true }, true);
+    client.send("voice_grave", access);
   }
 
   // ---- the waiting room ----
@@ -207,7 +266,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
     if (this.seats.length < MIN_PLAYERS) return "not_enough_players";
     if (this.seats.length < 2 * this.imposters + 1) return "too_few_for_two"; // two imposters: five players at least
-    this.lock();
+    for (const id of this.spectators.keys()) this.sendGrave(this.clients.getById(id)); // still watching from the last game
     const pool = this.category === "random" ? WORDS : wordsOf(this.category);
     this.word = pool[Math.floor(Math.random() * pool.length)];
     const order = this.seats.map((_, i) => i).sort(() => Math.random() - 0.5);
@@ -326,6 +385,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private knockOut(seat: Seat) {
     seat.out = true;
     this.voice(seat, false);
+    this.sendGrave(this.clients.getById(seat.id));
   }
 
   /** All the imposters out: the players win; as many imposters as the others: the imposters win. */
@@ -367,6 +427,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       s.score += s.gained;
       this.voice(s, true);
     }
+    if (voiceEnabled) closeVoice(this.roomId, { graveOnly: true }).catch(() => {}); // everyone together again
   }
 
   /** The host takes everyone back to the waiting room (the scores stay); newcomers can join again. */
@@ -376,7 +437,6 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     for (const s of this.seats) Object.assign(s, { imposter: false, out: false, seen: false, wantsVote: false, vote: null });
     this.word = null;
     this.phase = "lobby";
-    this.unlock();
     this.updateListing();
   }
 
@@ -402,7 +462,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: MAX_SEATS,
-        spectators: 0,
+        spectators: this.spectators.size,
       },
     });
   }
@@ -442,6 +502,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       guessed: over ? this.guessed : "",
       word: over ? word : null,
       winner: this.winner,
+      spectators: this.spectators.size,
+      log: this.phase === "lobby" ? this.log : [],
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

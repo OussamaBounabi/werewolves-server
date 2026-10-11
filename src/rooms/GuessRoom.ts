@@ -5,7 +5,7 @@ import {
   botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
 } from "../guess.js";
-import { closeVoice, dropFromVoice, voiceEnabled, voiceToken } from "../voice.js";
+import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 
 /**
  * Guess Who, football edition. Each player has a secret footballer; turn by turn they ask about the other's
@@ -28,7 +28,7 @@ type Meta = {
 type Settings = {
   roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
-type JoinOptions = Settings & { mode?: string; name?: string; playerId?: string; idToken?: string };
+type JoinOptions = Settings & { mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; connected: boolean; bot: boolean; quit: boolean };
 /** One of the match's two players: a (blue) or b (red). */
 type Side = {
@@ -52,6 +52,8 @@ const RECONNECT_SECONDS = 600;
 const CLOSE_AFTER_GAME_MS = 90_000;
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
 
+const MAX_SPECTATORS = 20;
+
 export class GuessRoom extends Room<{ metadata: Meta }> {
   static botSpeed = 1; // tests: bots think faster
   static pace = 1; // tests: every pause shorter
@@ -70,6 +72,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = [];
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
+  private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private botSeq = 0;
   private matches: Match[] = []; // a cup's, in playing order (1 vs 1: one)
   private current = -1; // the match being played
@@ -86,7 +89,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   onCreate(options: JoinOptions = {}) {
     this.mode = options.mode === "cup" ? "cup" : "duel";
-    this.maxClients = this.mode === "cup" ? Math.max(...CUP_SIZES) : 2;
+    this.maxClients = (this.mode === "cup" ? Math.max(...CUP_SIZES) : 2) + MAX_SPECTATORS; // the seats are counted in onAuth
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -100,6 +103,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     on("add_bot", (c) => this.handleAddBot(c));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on("start_game", (c) => this.handleStart(c));
+    on("sit", (c) => this.handleSit(c));
     on<{ player: string }>("pick", (c, m) => this.handlePick(c.sessionId, String(m.player)));
     on<Question>("ask", (c, m) => this.handleAsk(c.sessionId, m));
     on<{ player: string }>("guess", (c, m) => this.handleGuess(c.sessionId, String(m.player)));
@@ -122,8 +126,13 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
-    if (this.phase !== "lobby") throw new ServerError(4409, "started");
-    if (this.seats.length >= this.capacity()) throw new ServerError(4409, "full");
+    if (options.spectator) {
+      if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
+      if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
+    } else {
+      if (this.phase !== "lobby") throw new ServerError(4409, "started");
+      if (this.seats.length >= this.capacity()) throw new ServerError(4409, "full");
+    }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
         (account && this.invited.has(account.uid)) ||
@@ -134,6 +143,18 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    const account: Account | null = client.auth?.account ?? null;
+    if (account) {
+      this.members.set(client.sessionId, account.uid);
+      setRoom(account.uid, this.roomId).catch(() => {});
+    }
+    if (options.spectator) this.spectators.set(client.sessionId, options);
+    else this.addSeat(client, options);
+    this.updateListing();
+    this.sync();
+  }
+
+  private addSeat(client: Client, options: JoinOptions) {
     const account: Account | null = client.auth?.account ?? null;
     const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
     const ghost = this.seats.find((s) => s.playerId === playerId);
@@ -149,16 +170,22 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       bot: false,
       quit: false,
     });
-    if (account) {
-      this.members.set(client.sessionId, account.uid);
-      setRoom(account.uid, this.roomId).catch(() => {});
-    }
     if (!this.hostId) this.hostId = client.sessionId;
+  }
+
+  /** Back in the waiting room, a spectator takes a seat. */
+  private handleSit(client: Client) {
+    const options = this.spectators.get(client.sessionId);
+    if (this.phase !== "lobby" || !options) return;
+    if (this.seats.length >= this.capacity()) return "full";
+    this.spectators.delete(client.sessionId);
+    this.addSeat(client, options);
+    if (voiceEnabled) setVoiceRights(this.roomId, client.sessionId, { talk: true, hear: true }).catch(() => {});
     this.updateListing();
-    this.sync();
   }
 
   onDrop(client: Client) {
+    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
     const seat = this.seat(client.sessionId);
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -177,6 +204,10 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
     if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.spectators.delete(id)) {
+      this.updateListing();
+      return this.sync();
+    }
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.quit(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && !s.quit && this.clients.getById(s.id))?.id ?? "";
@@ -192,8 +223,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
-    const name = this.seat(client.sessionId)?.name ?? "player";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: true, hear: true })) });
+    const name = this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: !!this.seat(client.sessionId), hear: true })) });
   }
 
   // ---- the waiting room ----
@@ -247,7 +278,6 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
     if (this.seats.length < this.capacity()) return "not_enough_players";
-    this.lock();
     if (this.mode === "duel") {
       this.matches = [{ a: this.seats[0].id, b: this.seats[1].id, winner: "", rounds: [] }];
       return this.startMatch(0);
@@ -451,7 +481,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: this.capacity(),
-        spectators: 0,
+        spectators: this.spectators.size,
         mode: this.mode,
       },
     });
@@ -461,7 +491,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
    * players when the room allows it. */
   private sees(viewer: string, side: Side) {
     if (viewer === side.id || ["round", "between", "gameover"].includes(this.phase)) return true;
-    return this.spectate && this.mode === "cup" && !this.sides.some((s) => s.id === viewer);
+    // (Someone watching without a seat sees what's public only.)
+    return this.spectate && this.mode === "cup" && !!this.seat(viewer) && !this.sides.some((s) => s.id === viewer);
   }
 
   private sync() {
@@ -491,6 +522,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       endsAt: this.endsAt,
       roundWinner: this.roundWinner,
       champion: this.champion,
+      spectators: this.spectators.size,
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

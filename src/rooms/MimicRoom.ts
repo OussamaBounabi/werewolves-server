@@ -20,7 +20,7 @@ type Meta = {
   players: number; maxPlayers: number; spectators: number;
 };
 type Settings = { roomType?: string; rounds?: number; category?: string };
-type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string };
+type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
   playerId: string;
@@ -54,9 +54,11 @@ const MAX_CLIP_BYTES = 400_000;
 const PCM_BYTES_PER_MS = 32; // 16 kHz, 16-bit mono
 const RECONNECT_SECONDS = 600;
 
+const MAX_SPECTATORS = 20;
+
 export class MimicRoom extends Room<{ metadata: Meta }> {
   static pace = 1; // tests: every timer shorter
-  maxClients = MAX_SEATS;
+  maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
   private phase: Phase = "lobby";
   private hostId = "";
@@ -66,6 +68,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = [];
   private members = new Map<string, string>();
   private invited = new Set<string>();
+  private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private round = 0;
   private deck: string[] = []; // the sounds still to come
   private sound = "";
@@ -89,6 +92,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       if (this.phase === "lobby" && c.sessionId === this.hostId) this.applySettings(m);
     });
     on("start_game", (c) => this.handleStart(c));
+    on("sit", (c) => this.handleSit(c));
     on("done", (c) => this.handleDone(c.sessionId));
     on("next", (c) => this.handleNext(c.sessionId));
     on("play_again", (c) => this.handlePlayAgain(c));
@@ -110,8 +114,13 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
-    if (this.phase !== "lobby") throw new ServerError(4409, "started");
-    if (this.seats.length >= MAX_SEATS) throw new ServerError(4409, "full");
+    if (options.spectator) {
+      if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
+      if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
+    } else {
+      if (this.phase !== "lobby") throw new ServerError(4409, "started");
+      if (this.seats.length >= MAX_SEATS) throw new ServerError(4409, "full");
+    }
     if (this.roomType !== "public" && this.seats.length > 0) {
       const ok =
         (account && this.invited.has(account.uid)) ||
@@ -122,6 +131,18 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    const account: Account | null = client.auth?.account ?? null;
+    if (account) {
+      this.members.set(client.sessionId, account.uid);
+      setRoom(account.uid, this.roomId).catch(() => {});
+    }
+    if (options.spectator) this.spectators.set(client.sessionId, options);
+    else this.addSeat(client, options);
+    this.updateListing();
+    this.sync();
+  }
+
+  private addSeat(client: Client, options: JoinOptions) {
     const account: Account | null = client.auth?.account ?? null;
     const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
     const ghost = this.seats.find((s) => s.playerId === playerId);
@@ -143,16 +164,22 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       done: false,
       ready: false,
     });
-    if (account) {
-      this.members.set(client.sessionId, account.uid);
-      setRoom(account.uid, this.roomId).catch(() => {});
-    }
     if (!this.hostId) this.hostId = client.sessionId;
+  }
+
+  /** Back in the waiting room, a spectator takes a seat. */
+  private handleSit(client: Client) {
+    const options = this.spectators.get(client.sessionId);
+    if (this.phase !== "lobby" || !options) return;
+    if (this.seats.length >= MAX_SEATS) return;
+    this.spectators.delete(client.sessionId);
+    this.addSeat(client, options);
+    if (voiceEnabled) setVoiceRights(this.roomId, client.sessionId, { talk: this.talking, hear: true }).catch(() => {});
     this.updateListing();
-    this.sync();
   }
 
   onDrop(client: Client) {
+    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
     const seat = this.seat(client.sessionId);
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -172,6 +199,10 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
     if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.spectators.delete(id)) {
+      this.updateListing();
+      return this.sync();
+    }
     const seat = this.seat(id);
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
     else if (seat) {
@@ -191,8 +222,8 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
-    const name = this.seat(client.sessionId)?.name ?? "player";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: this.talking, hear: true })) });
+    const name = this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: this.talking && !!this.seat(client.sessionId), hear: true })) });
   }
 
   /** Mics off from the sound until the results are over (the takes stay clean and are heard clearly). */
@@ -215,7 +246,6 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
 
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
-    this.lock();
     for (const s of this.seats) s.scores = [];
     this.round = 0;
     this.deck = [];
@@ -335,7 +365,6 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     this.sound = "";
     this.order = [];
     this.phase = "lobby";
-    this.unlock();
     this.updateListing();
   }
 
@@ -382,7 +411,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: MAX_SEATS,
-        spectators: 0,
+        spectators: this.spectators.size,
       },
     });
   }
@@ -411,6 +440,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
         left: s.left, takes: s.takes, done: s.done, ready: s.ready, ms: s.ms,
         score: shown(s) ? s.score : -1, scores: s.scores,
       })),
+      spectators: this.spectators.size,
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

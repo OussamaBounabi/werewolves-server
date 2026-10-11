@@ -27,7 +27,12 @@ type DeathCause =
   | "love" | "dragon" | "barbe" | "barbe_fail" | "dictator" | "dictator_fail" | "joker";
 type Team = "wolves" | "village" | "whitewolf";
 type Winner = "werewolves" | "villagers" | "whitewolf" | "lovers";
-type ChatLine = { from: string; name: string; text: string; wolvesOnly: boolean };
+/** One chat line, with its writer's look: his seat id changes when he leaves and comes back, his messages stay his. */
+type ChatLine = {
+  from: string; name: string; uid: string; avatar: number; frame: number; text: string; at: number;
+  wolvesOnly: boolean; // the pack's, at night
+  dead?: boolean; // the graveyard's: the dead and the spectators, among themselves
+};
 /** Roles the host picked for the room: counts for wolves/villagers, in-or-out for the rest. */
 type Composition = { werewolf: number; villager: number } & Record<Special, boolean>;
 /** What the host can change in the lobby (also accepted as create options). */
@@ -115,6 +120,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private eventSeq = 0;
   private chatLog: ChatLine[] = [];
   private wolfChatLog: ChatLine[] = [];
+  private deadChatLog: ChatLine[] = [];
+  private graveChatSent = new Set<string>(); // given the graveyard's chat so far
   private closeTimer: { clear(): void } | null = null;
   private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
   private phaseTimer: { clear(): void } | null = null;
@@ -170,6 +177,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
   onBeforePatch() {
     this.syncVoice();
+    this.syncGraveChat();
     this.sendGod();
     const snapshot = this.state.toJSON();
     const json = JSON.stringify(snapshot);
@@ -223,7 +231,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     // Someone here invited a friend (the invite itself goes through the app's chat): let him in.
     this.onMessage("invite", (client, msg: { uid: string }) => {
-      if (this.members.has(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+      if (!this.members.has(client.sessionId) || typeof msg?.uid !== "string") return;
+      this.invited.add(msg.uid);
+      if (client.sessionId === this.state.hostId) this.banned.delete(msg.uid); // the host takes his kick back
     });
     this.onMessage("recreated", (client, msg: { roomId: string }) => this.handleRecreated(client, msg));
   }
@@ -394,7 +404,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const all = [...this.publicLog];
     for (const [id, events] of this.privateLogs) for (const e of events) all.push({ ...e, for: this.nameOf(id) });
     client.send("events", all.sort((a, b) => a.seq - b.seq));
-    client.send("chat_history", [...this.chatLog, ...this.wolfChatLog]);
+    client.send("chat_history", [...this.chatLog, ...this.wolfChatLog, ...this.deadChatLog].sort((a, b) => a.at - b.at));
     client.send("vote_history", this.voteHistory);
   }
 
@@ -434,9 +444,27 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const id = client.sessionId;
     const mine = this.privateLogs.get(id) ?? [];
     client.send("events", [...this.publicLog, ...mine].sort((a, b) => a.seq - b.seq));
-    const chat = this.isPack(id) ? [...this.chatLog, ...this.wolfChatLog] : this.chatLog;
-    client.send("chat_history", chat);
+    client.send("chat_history", this.chatFor(id));
     client.send("vote_history", this.voteHistory);
+  }
+
+  /** The chat [id] may read, oldest first: everyone's, the pack's for the pack, the graveyard's for who is in it. */
+  private chatFor(id: string) {
+    const lines = [...this.chatLog];
+    if (this.isPack(id)) lines.push(...this.wolfChatLog);
+    if (this.inGraveyard(id)) lines.push(...this.deadChatLog);
+    return lines.sort((a, b) => a.at - b.at);
+  }
+
+  /** Runs before each patch: whoever just left the game (died, or came to watch) gets the graveyard's chat so far. */
+  private syncGraveChat() {
+    if (!this.gameRunning()) return this.graveChatSent.clear();
+    for (const client of this.clients) {
+      const id = client.sessionId;
+      if (this.graveChatSent.has(id) || this.admins.has(id) || !this.inGraveyard(id)) continue;
+      this.graveChatSent.add(id);
+      if (this.deadChatLog.length > 0) client.send("chat_history", this.chatFor(id));
+    }
   }
 
   private nameOf(id: string | null | undefined) {
@@ -695,6 +723,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.gameStartedAt = Date.now();
     this.privateLogs.clear();
     this.chatLog = [];
+    this.deadChatLog = [];
     this.broadcast("events", []);
     this.assignRoles();
     this.dealTime = DEAL_MS;
@@ -1816,22 +1845,38 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   // ---- chat ----
 
   private handleChat(client: Client, msg: { text: string }) {
-    const player = this.state.players.get(client.sessionId);
+    const id = client.sessionId;
+    const player = this.state.players.get(id);
     const text = typeof msg?.text === "string" ? msg.text.trim().slice(0, CHAT_MAX) : "";
-    if (!player || !text) return;
-
+    if (!text || this.admins.has(id)) return;
+    const account: Account | null = client.auth?.account ?? null;
     const phase = this.state.phase;
-    const open = phase === "lobby" || phase === "gameover";
-    if (!open && !player.alive) return;
+    const payload: ChatLine = {
+      from: id,
+      name: player?.name ?? account?.name ?? "spectator",
+      uid: player?.uid ?? account?.uid ?? "",
+      avatar: player?.avatar ?? account?.avatar ?? 0,
+      frame: player?.frame ?? account?.frame ?? 0,
+      text,
+      at: Date.now(),
+      wolvesOnly: phase === "night",
+    };
+    // Out of the game while it runs (dead, or watching): they write to each other, the living never read it.
+    if (this.inGraveyard(id)) {
+      Object.assign(payload, { wolvesOnly: false, dead: true });
+      this.deadChatLog.push(payload);
+      for (const c of this.clients) if (this.inGraveyard(c.sessionId)) c.send("chat", payload);
+      return;
+    }
+    if (!player) return; // watching a room that isn't playing: nobody to write to
 
-    const payload: ChatLine = { from: client.sessionId, name: player.name, text, wolvesOnly: phase === "night" };
     if (phase !== "night") {
       this.chatLog.push(payload);
       this.broadcast("chat", payload);
       return;
     }
     // At night only the pack talks, and only to itself.
-    if (!this.isPack(client.sessionId)) return;
+    if (!this.isPack(id)) return;
     this.wolfChatLog.push(payload);
     for (const id of [...this.packIds(), ...this.admins]) this.clients.getById(id)?.send("chat", payload);
   }

@@ -928,4 +928,51 @@ describe("WerewolfRoom", () => {
     await host.leave();
     await waitFor(() => room.state.hostId === other.sessionId);
   });
+
+  it("the host's invite takes his kick back; another player's doesn't", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room, { playerId: "host-device" });
+    const other = await colyseus.connectTo(room, { playerId: "other-device" });
+    const guest = await colyseus.connectTo(room, { playerId: "guest-device" });
+    const r = room as any;
+    r.members.set(host.sessionId, "host-uid").set(other.sessionId, "other-uid"); // as with accounts
+
+    const kicked = guest.waitForMessage("kicked");
+    host.send("kick", { targetId: guest.sessionId });
+    await kicked;
+    await waitFor(() => !room.state.players.has(guest.sessionId));
+    other.send("invite", { uid: "guest-device" });
+    await waitFor(() => r.invited.has("guest-device"));
+    await assert.rejects(colyseus.connectTo(room, { playerId: "guest-device" }), /banned/);
+    host.send("invite", { uid: "guest-device" });
+    await waitFor(() => !r.banned.has("guest-device"));
+    const back = await colyseus.connectTo(room, { playerId: "guest-device" });
+    assert.ok(room.state.players.has(back.sessionId));
+  });
+
+  it("the dead and the spectators write to each other; the living never read it", async () => {
+    const { room, clients } = await startGame();
+    const heardByLiving: any[] = [];
+    for (const c of clients) c.onMessage("chat", (m: any) => heardByLiving.push(m));
+    const [w1, w2] = [
+      await colyseus.connectTo(room, { spectator: true, playerId: "w1" }),
+      await colyseus.connectTo(room, { spectator: true, playerId: "w2" }),
+    ];
+    await waitFor(() => room.state.spectators === 2);
+    for (const w of [w1, w2]) w.onMessage("chat_history", () => {});
+    const got = w2.waitForMessage("chat");
+    w1.send("chat", { text: "who is the wolf?" });
+    const line: any = await got;
+    assert.strictEqual(line.text, "who is the wolf?");
+    assert.strictEqual(line.dead, true);
+    assert.strictEqual(line.from, w1.sessionId);
+    assert.strictEqual(typeof line.avatar, "number"); // a line keeps its writer's look
+    await new Promise((r) => setTimeout(r, 150));
+    assert.deepStrictEqual(heardByLiving, []);
+    // Someone who comes to watch later reads what was said in the graveyard.
+    const w3 = await colyseus.connectTo(room, { spectator: true, playerId: "w3" });
+    const histories: any[] = [];
+    w3.onMessage("chat_history", (h: any) => histories.push(h));
+    await waitFor(() => histories.some((h) => h.some((l: any) => l.dead && l.text === "who is the wolf?")));
+  });
 });

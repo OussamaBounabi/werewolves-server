@@ -67,4 +67,32 @@ describe("DominoRoom", () => {
       assert.ok(r.winner === "" || r.points >= 0);
     });
   }
+
+  it("a spectator sees the table, never a hand, and can't play", async () => {
+    const room: any = await colyseus.createRoom("domino", {});
+    const host = await colyseus.connectTo(room);
+    const guest = await colyseus.connectTo(room);
+    for (const c of [host, guest]) {
+      c.onMessage("domino", () => {});
+      c.onMessage("domino_fx", () => {});
+    }
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(colyseus.connectTo(room), /started/);
+    const watcher: any = await colyseus.connectTo(room, { spectator: true });
+    let seen: any = null;
+    watcher.onMessage("domino", (s: any) => (seen = s));
+    watcher.onMessage("domino_fx", () => {});
+    watcher.onMessage("domino_error", () => {});
+    watcher.send("draw"); // not his to do (and everyone is told the table again)
+    while (!seen) await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(seen.hand, []);
+    assert.deepStrictEqual(seen.seats.map((s: any) => s.cards), [7, 7]);
+    assert.ok(!seen.seats.some((s: any) => s.id === seen.me));
+    assert.strictEqual(seen.spectators, 1);
+    assert.strictEqual(room.pile.length, 14, "he drew nothing");
+    await watcher.leave();
+    while (room.spectators.size > 0) await new Promise((r) => setTimeout(r, 20));
+    room.disconnect();
+  });
 });
