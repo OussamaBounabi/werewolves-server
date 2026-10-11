@@ -844,7 +844,7 @@ describe("WerewolfRoom", () => {
     assert.ok(r.ancientUsed.has(ancient.sessionId));
     r.kill(ancient.sessionId, "vote");
     assert.strictEqual(r.powerOf(seer.sessionId), "villager"); // the seer's power is gone…
-    assert.strictEqual(r.roles.get(seer.sessionId), "seer"); // …but she's still the seer
+    assert.strictEqual(r.roles.get(seer.sessionId), "villager"); // …and her card with it: a simple villager now
   });
 
   it("the doubler copies a role; the joker sends someone else to die; the raven's +2 counts", async () => {
@@ -974,5 +974,29 @@ describe("WerewolfRoom", () => {
     const histories: any[] = [];
     w3.onMessage("chat_history", (h: any) => histories.push(h));
     await waitFor(() => histories.some((h) => h.some((l: any) => l.dead && l.text === "who is the wolf?")));
+  });
+
+  it("the ancient killed by the village: its special players become simple villagers, the wolves keep everything", async () => {
+    const { room, byRole } = await startGame({ wolves: 1, villagers: 1, seer: true, witch: true, ancient: true, roundSeconds: 10 });
+    const r = room as any;
+    const [seer, witch, wolf, ancient] = [byRole("seer"), byRole("witch"), byRole("werewolf"), byRole("ancient")];
+    const cursed = seer.waitForMessage("cursed");
+    const card = seer.waitForMessage("role_assigned");
+    r.kill(ancient.sessionId, "vote");
+    await cursed;
+    assert.strictEqual((await card).role, "villager"); // his card too
+    assert.strictEqual(r.roles.get(seer.sessionId), "villager");
+    assert.strictEqual(r.roles.get(witch.sessionId), "villager");
+    assert.strictEqual(r.potions.has(witch.sessionId), false);
+    assert.strictEqual(r.roles.get(wolf.sessionId), "werewolf");
+    assert.strictEqual(r.roles.get(ancient.sessionId), "ancient"); // the dead show what they were
+  });
+
+  it("seat numbers are a room setting, off until the host turns them on", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const host = await colyseus.connectTo(room);
+    assert.strictEqual(room.state.seatNumbers, false);
+    host.send("settings", { seatNumbers: true });
+    await waitFor(() => room.state.seatNumbers === true);
   });
 });

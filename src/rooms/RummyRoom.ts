@@ -94,6 +94,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>(); // account uids invited by someone at the table
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
+  private listedStarted = false; // what the room list was last told
   private hands = new Map<string, number[]>();
   private opened = new Set<string>(); // laid down this round
   private staged = new Map<string, number[][]>(); // melds being put together for the next lay-down (still in the hand)
@@ -123,7 +125,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         this.sync();
       });
     on<Settings>("settings", (c, m) => {
-      if (this.phase === "lobby" && c.sessionId === this.hostId) this.applySettings(m);
+      if (this.phase === "lobby" && this.idOf(c) === this.hostId) this.applySettings(m);
     });
     on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
@@ -141,12 +143,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     );
     on<{ card: number; faceUp?: boolean }>("discard", (c, m) => this.handleDiscard(c, m.card, m.faceUp));
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
-    on("ready", (c) => this.handleReady(c.sessionId));
-    on<{ index: number }>("pick", (c, m) => this.handlePick(c.sessionId, Number(m.index)));
+    on("ready", (c) => this.handleReady(this.idOf(c)));
+    on<{ index: number }>("pick", (c, m) => this.handlePick(this.idOf(c), Number(m.index)));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     // Someone at the table invited a friend (the invite itself goes through the app's chat): let him in.
     this.onMessage("invite", (client, msg: { uid: string }) => {
-      if (this.seat(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+      if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
     });
     this.updateListing();
   }
@@ -160,6 +162,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
+    // He left this game: back to the seat he had, whichever door he comes through.
+    if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
       if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
       if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
@@ -182,11 +186,14 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   onJoin(client: Client, options: JoinOptions = {}) {
     const account: Account | null = client.auth?.account ?? null;
+    const back = this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""));
+    if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
     if (account) {
-      this.members.set(client.sessionId, account.uid);
+      this.members.set(this.idOf(client), account.uid);
       setRoom(account.uid, this.roomId).catch(() => {});
     }
-    if (options.spectator) this.spectators.set(client.sessionId, options);
+    if (back) this.retakeSeat(back);
+    else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
     this.updateListing();
     this.sync();
@@ -194,14 +201,14 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private addSeat(client: Client, options: JoinOptions) {
     const account: Account | null = client.auth?.account ?? null;
-    const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
+    const playerId = account?.uid ?? String(options.playerId ?? this.idOf(client));
     // Same account (or device) already seated: a join its app gave up on. That seat goes.
     const ghost = this.seats.find((s) => s.playerId === playerId);
     if (ghost) this.removeSeat(ghost.id);
     this.seats.push({
-      id: client.sessionId,
+      id: this.idOf(client),
       playerId,
-      name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`),
+      name: account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${this.idOf(client).slice(0, 4)}`),
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       frame: account?.frame ?? randomFrame(),
@@ -209,36 +216,61 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       score: 0,
       bot: null,
     });
-    if (!this.hostId) this.hostId = client.sessionId;
+    if (!this.hostId) this.hostId = this.idOf(client);
   }
 
   /** Back in the waiting room, a spectator takes a seat. */
   private handleSit(client: Client) {
-    const options = this.spectators.get(client.sessionId);
+    const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.maxPlayers) return "full";
-    this.spectators.delete(client.sessionId);
+    this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
-    if (voiceEnabled) setVoiceRights(this.roomId, client.sessionId, { talk: true, hear: true }).catch(() => {});
+    if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
     this.updateListing();
   }
 
+  /** His seat's id: his connection's, or the seat he came back to. */
+  private idOf(client: Client) {
+    return this.returned.get(client.sessionId) ?? client.sessionId;
+  }
+
+  /** The connection of whoever holds this seat. */
+  private connectionOf(id: string) {
+    for (const [session, seat] of this.returned) if (seat === id) return this.clients.getById(session);
+    return this.clients.getById(id);
+  }
+
+  /** During a game: the seat this player left. He comes back to it. */
+  private seatLeftBy(playerId: string) {
+    if (this.phase === "lobby" || !playerId) return undefined;
+    return this.seats.find((s) => s.playerId === playerId && !!s.bot);
+  }
+
+  /** Back in his seat, under the id it always had: everything about the game knows him by it. */
+  private retakeSeat(seat: Seat) {
+    seat.bot = null;
+    seat.connected = true;
+    if (this.turn === seat.id) this.botTimer?.clear(); // his turn: his to play, in the time left
+  }
+
   onDrop(client: Client) {
-    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
-    const seat = this.seat(client.sessionId);
+    if (this.spectators.has(this.idOf(client))) return; // no seat to hold: onLeave runs next
+    const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
     this.sync();
   }
 
   onReconnect(client: Client) {
-    const seat = this.seat(client.sessionId);
+    const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = true;
     this.sync();
   }
 
   onLeave(client: Client) {
-    const id = client.sessionId;
+    const id = this.idOf(client);
+    this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
@@ -249,7 +281,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     }
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.becomeBot(id);
-    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.clients.getById(s.id))?.id ?? "";
+    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
     this.updateListing();
     this.sync();
   }
@@ -262,8 +294,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
-    const name = this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, name, { talk: !!this.seat(client.sessionId), hear: true })) });
+    const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk: !!this.seat(this.idOf(client)), hear: true })) });
   }
 
   // ---- the waiting room ----
@@ -289,7 +321,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
    * partners sit face to face and turns alternate between the teams.
    */
   private handlePartner(client: Client, partnerId: string) {
-    const host = client.sessionId;
+    const host = this.idOf(client);
     if (this.phase !== "lobby" || host !== this.hostId || !this.teams || host === partnerId) return;
     const partner = this.seat(partnerId);
     if (!partner) return;
@@ -314,7 +346,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleAddBot(client: Client, level: string) {
-    if (this.phase !== "lobby" || client.sessionId !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -332,13 +364,13 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleRemoveBot(client: Client, id: string) {
-    if (this.phase !== "lobby" || client.sessionId !== this.hostId || !this.seat(id)?.bot) return;
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || !this.seat(id)?.bot) return;
     this.removeSeat(id);
     this.updateListing();
   }
 
   private handleStart(client: Client) {
-    if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
     if (this.teams) this.deal();
@@ -493,7 +525,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private actor(client: Client, stage: "draw" | "play"): string | null {
-    return this.phase === "playing" && client.sessionId === this.turn && this.stage === stage ? client.sessionId : null;
+    return this.phase === "playing" && this.idOf(client) === this.turn && this.stage === stage ? this.idOf(client) : null;
   }
 
   /**
@@ -572,7 +604,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleUnstage(client: Client, index: number) {
-    const id = this.phase === "playing" && client.sessionId === this.turn ? client.sessionId : null;
+    const id = this.phase === "playing" && this.idOf(client) === this.turn ? this.idOf(client) : null;
     if (id) this.staged.get(id)?.splice(Number(index), 1);
   }
 
@@ -857,6 +889,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   private updateListing() {
+    this.listedStarted = this.phase !== "lobby";
     this.setMatchmaking({
       metadata: {
         host: this.seat(this.hostId)?.name ?? "",
@@ -873,6 +906,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   /** Everyone's view: the table, the scores, and his own hand. */
   private sync() {
+    if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const table = {
       phase: this.phase,
       seating: this.seating && {
@@ -912,7 +946,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       serverNow: Date.now(),
     };
     for (const client of this.clients) {
-      const id = client.sessionId;
+      const id = this.idOf(client);
       const staged = this.staged.get(id) ?? [];
       client.send("rummy", {
         ...table,

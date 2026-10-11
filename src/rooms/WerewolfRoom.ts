@@ -48,6 +48,7 @@ type Settings = {
   mayor?: boolean;
   talkingSeer?: boolean;
   talkingDetective?: boolean;
+  seatNumbers?: boolean;
 } & Partial<Record<Special, boolean>>;
 type Potions = { revive: boolean; poison: boolean }; // potions not used yet
 
@@ -622,7 +623,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
     if (s.greenGuesses !== undefined) st.greenGuesses = int(s.greenGuesses, 1, 5);
-    for (const key of ["mayor", "talkingSeer", "talkingDetective"] as const) {
+    for (const key of ["mayor", "talkingSeer", "talkingDetective", "seatNumbers"] as const) {
       if (typeof s[key] === "boolean") st[key] = s[key];
     }
     if (st.villagers === 0) st.bluewolf = false; // he hides behind a simple villager
@@ -1959,6 +1960,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.roles.get(sessionId) === "ancient" && VILLAGE_KILLS.includes(cause) && !this.villageDisabled) {
       this.villageDisabled = true;
       this.logEvent("ancient_curse");
+      // The village's special players are simple villagers from now on, card and all; the wolves keep everything.
+      for (const [id, role] of this.roles) {
+        if (id === sessionId || role === "villager" || !this.isAlive(id) || this.teamOf(id) !== "village") continue;
+        this.roles.set(id, "villager");
+        this.powers.delete(id);
+        this.potions.delete(id);
+        this.clients.getById(id)?.send("cursed");
+      }
       for (const id of this.roles.keys()) this.sendRole(id);
     }
   }

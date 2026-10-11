@@ -66,6 +66,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
+  private listedStarted = false; // what the room list was last told
   private log: { type: "joined" | "left"; name: string; at: number }[] = []; // the waiting room's comings and goings
   private word: Word | null = null;
   private round = 0;
@@ -84,18 +86,18 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
         this.sync();
       });
     on<Settings>("settings", (c, m) => {
-      if (this.phase === "lobby" && c.sessionId === this.hostId) this.applySettings(m);
+      if (this.phase === "lobby" && this.idOf(c) === this.hostId) this.applySettings(m);
     });
     on("start_game", (c) => this.handleStart(c));
-    on("seen", (c) => this.handleSeen(c.sessionId));
-    on("vote_now", (c) => this.handleVoteNow(c.sessionId));
-    on<{ target?: string }>("vote", (c, m) => this.handleVote(c.sessionId, String(m.target ?? "")));
-    on<{ word?: string }>("guess", (c, m) => this.handleGuess(c.sessionId, String(m.word ?? "")));
+    on("seen", (c) => this.handleSeen(this.idOf(c)));
+    on("vote_now", (c) => this.handleVoteNow(this.idOf(c)));
+    on<{ target?: string }>("vote", (c, m) => this.handleVote(this.idOf(c), String(m.target ?? "")));
+    on<{ word?: string }>("guess", (c, m) => this.handleGuess(this.idOf(c), String(m.word ?? "")));
     on("play_again", (c) => this.handlePlayAgain(c));
     on("sit", (c) => this.handleSit(c));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("invite", (client, msg: { uid: string }) => {
-      if (this.seat(client.sessionId) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+      if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
     });
     this.updateListing();
   }
@@ -111,6 +113,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
+    // He left this game: back to the seat he had, whichever door he comes through.
+    if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
       if (this.phase === "lobby") throw new ServerError(4409, "lobby"); // nothing to watch yet: join it instead
       if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
@@ -129,11 +133,14 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   onJoin(client: Client, options: JoinOptions = {}) {
     const account: Account | null = client.auth?.account ?? null;
+    const back = this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""));
+    if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
     if (account) {
-      this.members.set(client.sessionId, account.uid);
+      this.members.set(this.idOf(client), account.uid);
       setRoom(account.uid, this.roomId).catch(() => {});
     }
-    if (options.spectator) this.spectators.set(client.sessionId, options);
+    if (back) this.retakeSeat(back);
+    else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
     this.updateListing();
     this.sync();
@@ -141,13 +148,13 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   private addSeat(client: Client, options: JoinOptions) {
     const account: Account | null = client.auth?.account ?? null;
-    const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
+    const playerId = account?.uid ?? String(options.playerId ?? this.idOf(client));
     const ghost = this.seats.find((s) => s.playerId === playerId);
     if (ghost) this.removeSeat(ghost.id);
-    const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`);
+    const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${this.idOf(client).slice(0, 4)}`);
     this.note("joined", name);
     this.seats.push({
-      id: client.sessionId,
+      id: this.idOf(client),
       playerId,
       name,
       uid: account?.uid ?? "",
@@ -163,17 +170,17 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       score: ghost?.score ?? 0,
       gained: 0,
     });
-    if (!this.hostId) this.hostId = client.sessionId;
+    if (!this.hostId) this.hostId = this.idOf(client);
   }
 
   /** Back in the waiting room, a spectator takes a seat. */
   private handleSit(client: Client) {
-    const options = this.spectators.get(client.sessionId);
+    const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= MAX_SEATS) return "full";
-    this.spectators.delete(client.sessionId);
+    this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
-    this.voice(this.seat(client.sessionId)!, true);
+    this.voice(this.seat(this.idOf(client))!, true);
     this.updateListing();
   }
 
@@ -181,22 +188,46 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     this.log = [...this.log, { type, name, at: Date.now() }].slice(-LOG_LINES);
   }
 
+  /** His seat's id: his connection's, or the seat he came back to. */
+  private idOf(client: Client) {
+    return this.returned.get(client.sessionId) ?? client.sessionId;
+  }
+
+  /** The connection of whoever holds this seat. */
+  private connectionOf(id: string) {
+    for (const [session, seat] of this.returned) if (seat === id) return this.clients.getById(session);
+    return this.clients.getById(id);
+  }
+
+  /** During a game: the seat this player left. He comes back to it. */
+  private seatLeftBy(playerId: string) {
+    if (this.phase === "lobby" || !playerId) return undefined;
+    return this.seats.find((s) => s.playerId === playerId && s.left);
+  }
+
+  /** Back in his seat, under the id it always had: everything about the game knows him by it. */
+  private retakeSeat(seat: Seat) {
+    seat.left = false; // (leaving put him out of the game: he's back among those who are out)
+    seat.connected = true;
+  }
+
   onDrop(client: Client) {
-    if (this.spectators.has(client.sessionId)) return; // no seat to hold: onLeave runs next
-    const seat = this.seat(client.sessionId);
+    if (this.spectators.has(this.idOf(client))) return; // no seat to hold: onLeave runs next
+    const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
     this.sync();
   }
 
   onReconnect(client: Client) {
-    const seat = this.seat(client.sessionId);
+    const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = true;
     this.sync();
   }
 
   onLeave(client: Client) {
-    const id = client.sessionId;
+    const id = this.idOf(client);
+    this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) setRoom(uid, "", this.roomId).catch(() => {});
@@ -209,7 +240,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     if (leaving && this.phase === "lobby") this.note("left", leaving.name);
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
     else this.leaveGame(id);
-    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.left && this.clients.getById(s.id))?.id ?? "";
+    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.left && this.connectionOf(s.id))?.id ?? "";
     this.updateListing();
     this.sync();
   }
@@ -221,10 +252,10 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
-    const seat = this.seat(client.sessionId);
+    const seat = this.seat(this.idOf(client));
     const talk = !!seat && !seat.out; // a spectator listens
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, this.voiceName(client), { talk, hear: true })) });
-    if (this.inGraveyard(client.sessionId)) this.sendGrave(client);
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), this.voiceName(client), { talk, hear: true })) });
+    if (this.inGraveyard(this.idOf(client))) this.sendGrave(client);
   }
 
   /** Who's out of the game hears the table but doesn't talk to it; back in the waiting room, everyone talks again. */
@@ -233,7 +264,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   }
 
   private voiceName(client: Client) {
-    return this.seat(client.sessionId)?.name ?? client.auth?.account?.name ?? "spectator";
+    return this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
   }
 
   /** Out of a running game, or watching it: with the others like him, in the graveyard's voice. */
@@ -246,7 +277,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   /** The graveyard's voice: they talk there among themselves, the table never hears them. */
   private async sendGrave(client: Client | undefined) {
     if (!voiceEnabled || !client) return;
-    const access = await voiceToken(this.roomId, client.sessionId, this.voiceName(client), { talk: true, hear: true }, true);
+    const access = await voiceToken(this.roomId, this.idOf(client), this.voiceName(client), { talk: true, hear: true }, true);
     client.send("voice_grave", access);
   }
 
@@ -263,10 +294,10 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleStart(client: Client) {
-    if (this.phase !== "lobby" || client.sessionId !== this.hostId) return;
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < MIN_PLAYERS) return "not_enough_players";
     if (this.seats.length < 2 * this.imposters + 1) return "too_few_for_two"; // two imposters: five players at least
-    for (const id of this.spectators.keys()) this.sendGrave(this.clients.getById(id)); // still watching from the last game
+    for (const id of this.spectators.keys()) this.sendGrave(this.connectionOf(id)); // still watching from the last game
     const pool = this.category === "random" ? WORDS : wordsOf(this.category);
     this.word = pool[Math.floor(Math.random() * pool.length)];
     const order = this.seats.map((_, i) => i).sort(() => Math.random() - 0.5);
@@ -385,7 +416,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private knockOut(seat: Seat) {
     seat.out = true;
     this.voice(seat, false);
-    this.sendGrave(this.clients.getById(seat.id));
+    this.sendGrave(this.connectionOf(seat.id));
   }
 
   /** All the imposters out: the players win; as many imposters as the others: the imposters win. */
@@ -432,7 +463,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   /** The host takes everyone back to the waiting room (the scores stay); newcomers can join again. */
   private handlePlayAgain(client: Client) {
-    if (this.phase !== "result" || client.sessionId !== this.hostId) return;
+    if (this.phase !== "result" || this.idOf(client) !== this.hostId) return;
     this.seats = this.seats.filter((s) => !s.left);
     for (const s of this.seats) Object.assign(s, { imposter: false, out: false, seen: false, wantsVote: false, vote: null });
     this.word = null;
@@ -453,6 +484,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   }
 
   private updateListing() {
+    this.listedStarted = this.phase !== "lobby";
     this.setMatchmaking({
       metadata: {
         host: this.seat(this.hostId)?.name ?? "",
@@ -468,6 +500,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const over = this.phase === "result";
     const counts: Record<string, number> = {};
     let skips = 0;
@@ -507,11 +540,11 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       serverNow: Date.now(),
     };
     for (const client of this.clients) {
-      const me = this.seat(client.sessionId);
+      const me = this.seat(this.idOf(client));
       const playing = this.phase !== "lobby" && me && this.word;
       client.send("imposter", {
         ...table,
-        me: client.sessionId,
+        me: this.idOf(client),
         card: playing ? (me.imposter ? { imposter: true } : { imposter: false, word }) : null,
         myVote: me?.vote ?? null,
         // The caught imposter's last chance: the category's words.

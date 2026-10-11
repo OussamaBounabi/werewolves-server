@@ -48,6 +48,7 @@ export const WerewolfState = schema({
   mayor: t.boolean().default(true), // play with a mayor (elected after night 1)
   talkingSeer: t.boolean().default(false), // the village hears which role the seer (or triple face) saw
   talkingDetective: t.boolean().default(false), // the village hears the detective's verdict
+  seatNumbers: t.boolean().default(false), // "(3) Karim": each player's number by his name, to talk about him
   cupid: t.boolean().default(false),
   wildchild: t.boolean().default(false),
   dragon: t.boolean().default(false),

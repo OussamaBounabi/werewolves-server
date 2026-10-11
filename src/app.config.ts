@@ -77,6 +77,11 @@ const server = defineServer({
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
     api_imposter_rooms: createEndpoint("/api/imposter/rooms", { method: "GET" }, async () => publicRooms("imposter")),
     api_mimic_rooms: createEndpoint("/api/mimic/rooms", { method: "GET" }, async () => publicRooms("mimic")),
+    // The home: how many public rooms each game has now.
+    api_room_counts: createEndpoint("/api/room-counts", { method: "GET" }, async () => {
+      const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic"];
+      return Object.fromEntries(await Promise.all(games.map(async (g) => [g, (await publicRooms(g)).length])));
+    }),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
     // Mission definitions and the current periods (the app reads progress from Firestore).

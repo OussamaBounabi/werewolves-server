@@ -95,4 +95,40 @@ describe("DominoRoom", () => {
     while (room.spectators.size > 0) await new Promise((r) => setTimeout(r, 20));
     room.disconnect();
   });
+
+  it("tells the room list its game started, and gives a returning player his seat back from the bot", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const room: any = await colyseus.createRoom("domino", {});
+    const host = await colyseus.connectTo(room, { playerId: "host-device" });
+    const guest = await colyseus.connectTo(room, { playerId: "guest-device" });
+    for (const c of [host, guest]) {
+      c.onMessage("domino", () => {});
+      c.onMessage("domino_fx", () => {});
+    }
+    assert.strictEqual(room.metadata.started, false);
+    host.send("start_game");
+    while (room.phase !== "playing" || !room.metadata.started) await sleep(20); // the list knows without anyone leaving
+    const seatId = guest.sessionId;
+    await guest.leave();
+    while (!room.seat(seatId).bot) await sleep(20); // a bot plays for him
+    // Back through the "watch" door: he's recognised, and sits where he was.
+    const back: any = await colyseus.connectTo(room, { playerId: "guest-device", spectator: true });
+    let seen: any = null;
+    back.onMessage("domino", (s: any) => (seen = s));
+    back.onMessage("domino_fx", () => {});
+    back.onMessage("domino_error", () => {});
+    back.send("ready"); // (nothing to do now: everyone is told the table again)
+    while (!seen) await sleep(20);
+    assert.strictEqual(seen.me, seatId, "his seat's id, not his new connection's");
+    assert.strictEqual(room.seat(seatId).bot, null);
+    assert.strictEqual(room.spectators.size, 0);
+    assert.ok(seen.hand.length > 0);
+    assert.deepStrictEqual(seen.hand, room.hands.get(seatId));
+    assert.strictEqual(seen.seats.find((s: any) => s.id === seatId).bot, "");
+    // Someone else can only watch.
+    const other: any = await colyseus.connectTo(room, { playerId: "other-device", spectator: true });
+    while (room.spectators.size !== 1) await sleep(20);
+    await other.leave();
+    room.disconnect();
+  });
 });
