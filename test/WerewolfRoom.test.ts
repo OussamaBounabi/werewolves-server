@@ -295,13 +295,9 @@ describe("WerewolfRoom", () => {
       await waitFor(() => room.state.nightStep === "witch_seer", STEP);
       seer.send("seer_peek", { targetId: wolf.sessionId });
     };
-    // A day whose vote is a 2–2 tie (nobody votes in the mayor election, so there's no mayor): nobody goes out.
+    // A day where nobody votes (a tie would add 30 seconds to break it): nobody goes out.
     const quietDay = async () => {
       await waitFor(() => room.state.phase === "day", 60_000);
-      protector.send("day_vote", { targetId: villagerA.sessionId });
-      seer.send("day_vote", { targetId: villagerA.sessionId });
-      villagerA.send("day_vote", { targetId: villagerB.sessionId });
-      villagerB.send("day_vote", { targetId: villagerB.sessionId });
       await waitFor(() => room.state.phase === "night", STEP);
     };
 
@@ -473,7 +469,7 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the judge deciding: mics off
     room.state.phase = "day";
     room.state.players.get(seer.sessionId)!.alive = false;
-    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen
+    assert.deepStrictEqual(rights(seer), { talk: false, hear: true }); // the dead listen (by day)
     assert.ok(r.inGraveyard(seer.sessionId) && !r.inGraveyard(wolf.sessionId)); // the dead talk in the graveyard
     r.spectators.add("watcher");
     assert.deepStrictEqual(r.voiceRightsOf("watcher"), { talk: false, hear: true });
@@ -998,5 +994,47 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.seatNumbers, false);
     host.send("settings", { seatNumbers: true });
     await waitFor(() => room.state.seatNumbers === true);
+  });
+
+  it("a day that ends on a tie gets 30 more seconds, once; still tied, nobody goes", async () => {
+    const { room, clients } = await startGame();
+    const r = room as any;
+    const [a, b, c, d] = clients.map((x: any) => x.sessionId);
+    r.openDebate(60_000); // (straight to a day)
+    const events: any[] = [];
+    clients[0].onMessage("event", (e: any) => events.push(e));
+    room.state.players.get(a)!.votedFor = c;
+    room.state.players.get(b)!.votedFor = d;
+    r.resolveVote(); // the day's time is up: 1 against 1
+    assert.strictEqual(room.state.phase, "day");
+    assert.ok(room.state.phaseEndsAt - Date.now() > 25_000 && room.state.phaseEndsAt - Date.now() <= 30_000);
+    await waitFor(() => events.some((e) => e.type === "vote_tie_extra"));
+    r.resolveVote(); // still tied after the extra time
+    assert.notStrictEqual(room.state.phase, "day");
+    assert.strictEqual([...room.state.players.values()].filter((p) => !p.alive).length, 0);
+  });
+
+  it("the dead hear nothing of the night and read no more of the pack's chat, a dead wolf included", async () => {
+    const { room, clients, byRole } = await startGame({ wolves: 2, villagers: 1, seer: true, witch: true, protector: false, roundSeconds: 10 });
+    const r = room as any;
+    const wolves = clients.filter((x: any) => r.isPack(x.sessionId));
+    const [alive, dead] = wolves;
+    const villager = byRole("villager");
+    room.state.players.get(dead.sessionId)!.alive = false;
+    room.state.players.get(villager.sessionId)!.alive = false;
+    assert.strictEqual(room.state.phase, "night");
+    assert.deepStrictEqual(r.voiceRightsOf(dead.sessionId), { talk: false, hear: false });
+    assert.deepStrictEqual(r.voiceRightsOf(villager.sessionId), { talk: false, hear: false });
+    assert.deepStrictEqual(r.voiceRightsOf(alive.sessionId), { talk: true, hear: true });
+    const read: any[] = [];
+    dead.onMessage("chat", (m: any) => read.push(m));
+    villager.onMessage("chat", (m: any) => read.push(m));
+    const got = alive.waitForMessage("chat");
+    alive.send("chat", { text: "who do we eat?" });
+    assert.strictEqual(((await got) as any).wolvesOnly, true);
+    await new Promise((res) => setTimeout(res, 150));
+    assert.deepStrictEqual(read.filter((m) => m.wolvesOnly), []);
+    assert.ok(!r.chatFor(dead.sessionId).some((l: any) => l.wolvesOnly));
+    assert.ok(r.chatFor(alive.sessionId).some((l: any) => l.wolvesOnly));
   });
 });

@@ -11,6 +11,8 @@ import { listen } from "@colyseus/tools";
 
 // Import Colyseus config
 import app from "./app.config.js";
+import { watchNewPlayers } from "./firebase.js";
 
 // Create and listen on 2567 (or PORT environment variable.)
 listen(app);
+watchNewPlayers(); // each new player's welcome gift

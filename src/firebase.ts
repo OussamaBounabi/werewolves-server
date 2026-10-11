@@ -160,6 +160,36 @@ export async function grantAllAvatars(email: string) {
   return { uid, count: avatarIds.length + frameIds.length };
 }
 
+/** For now, every new player starts with a gift. Given once, when his profile appears. */
+const WELCOME_GIFT = { coins: 10_000, diamonds: 1_000 };
+/** Profiles older than this had theirs by hand (the gift to every player of 2026-10-11). */
+const WELCOME_SINCE = new Date("2026-10-11T17:30:00Z");
+
+/** The game server calls this once, at start: new profiles get their welcome gift (those it missed while down, too). */
+export function watchNewPlayers() {
+  if (!app) return;
+  const db = getFirestore(app);
+  db.collection("users")
+    .where("createdAt", ">", WELCOME_SINCE)
+    .onSnapshot(
+      (snap) => {
+        for (const change of snap.docChanges()) {
+          if (change.type === "removed" || change.doc.get("welcomeGift")) continue;
+          db.runTransaction(async (tx) => {
+            const doc = await tx.get(change.doc.ref);
+            if (!doc.exists || doc.get("welcomeGift")) return; // (the app's own writes come through here again)
+            tx.update(doc.ref, {
+              coins: FieldValue.increment(WELCOME_GIFT.coins),
+              diamonds: FieldValue.increment(WELCOME_GIFT.diamonds),
+              welcomeGift: true,
+            });
+          }).catch((e) => console.error("welcome gift failed", e));
+        }
+      },
+      (e) => console.error("watching new players failed", e),
+    );
+}
+
 /** Admin tool (scripts/grant-coins.ts): adds coins and diamonds to the account with this username. */
 export async function grantCurrency(username: string, coins: number, diamonds: number) {
   if (!app) throw new Error("no service account");

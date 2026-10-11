@@ -90,6 +90,7 @@ const LOVERS_MS = 5_000; // night 1: the lovers open their eyes and see each oth
 const JUDGE_MS = 10_000; // after a vote puts someone out: the judge may order a new vote
 const REVOTE_MS = 60_000; // the judge's revote: a one-minute day
 const SHRINK_MS = 30_000; // all voters but one have voted: the day ends in 30 seconds
+const TIE_MS = 30_000; // the day ends on a tie: this much more to break it
 
 export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }> {
   maxClients = MAX_CONNECTIONS;
@@ -165,6 +166,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private wildTurned: string | null = null; // the wild child, once his model died: a wolf now
   private pendingVote: string[] = []; // the ballots, while the judge decides
   private dayShrunk = false; // today's time already dropped to 30s
+  private tieExtended = false; // today's tie already got its extra time
   private dictatorArmed = false; // he said yes last night: his moment comes at daybreak
   private ancientUsed = new Set<string>(); // ancients who already survived a wolf attack
   private villageDisabled = false; // the ancient died by the village's hand: no village powers any more
@@ -452,7 +454,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** The chat [id] may read, oldest first: everyone's, the pack's for the pack, the graveyard's for who is in it. */
   private chatFor(id: string) {
     const lines = [...this.chatLog];
-    if (this.isPack(id)) lines.push(...this.wolfChatLog);
+    if (this.isPack(id) && this.isAlive(id)) lines.push(...this.wolfChatLog);
     if (this.inGraveyard(id)) lines.push(...this.deadChatLog);
     return lines.sort((a, b) => a.at - b.at);
   }
@@ -464,7 +466,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       const id = client.sessionId;
       if (this.graveChatSent.has(id) || this.admins.has(id) || !this.inGraveyard(id)) continue;
       this.graveChatSent.add(id);
-      if (this.deadChatLog.length > 0) client.send("chat_history", this.chatFor(id));
+      client.send("chat_history", this.chatFor(id)); // (a wolf who just died loses the pack's lines too)
     }
   }
 
@@ -1631,6 +1633,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.phase = "day";
     this.clearVotes();
     this.dayShrunk = false;
+    this.tieExtended = false;
     this.setPhaseTimer(ms, () => this.resolveVote());
   }
 
@@ -1755,6 +1758,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** A vote that puts someone out first gives the (secret) judge a few seconds to order a new one. */
   private resolveVote() {
     const votes = this.withMarks(this.aliveVotes(2));
+    // The day ends on a tie at the top: a bell, and a little more time to break it (once: still tied, nobody goes).
+    if (!this.tieExtended && topCandidates(votes).length > 1) {
+      this.tieExtended = true;
+      this.logEvent("vote_tie_extra", { seconds: TIE_MS / 1000 });
+      this.setPhaseTimer(TIE_MS, () => this.resolveVote());
+      return;
+    }
     const excluded = topVoted(votes); // ponytail: a tie skips elimination; add a runoff vote if that feels unsatisfying
     const judge = this.aliveWithRole("judge");
     if (excluded && judge && !this.spent.has(judge) && !this.state.spared) {
@@ -1879,7 +1889,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // At night only the pack talks, and only to itself.
     if (!this.isPack(id)) return;
     this.wolfChatLog.push(payload);
-    for (const id of [...this.packIds(), ...this.admins]) this.clients.getById(id)?.send("chat", payload);
+    const pack = this.packIds().filter((id) => this.isAlive(id)); // a dead wolf reads no more of it
+    for (const id of [...pack, ...this.admins]) this.clients.getById(id)?.send("chat", payload);
   }
 
   // ---- shared helpers ----
@@ -2039,7 +2050,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const player = this.state.players.get(id);
     if (!player) return { talk: false, hear: false };
     if (!this.gameRunning()) return { talk: true, hear: true };
-    if (!player.alive) return { talk: false, hear: true };
+    if (!player.alive) return { talk: false, hear: !night }; // the dead: nothing of the night (the pack's talk)
     if (night) {
       const wolf = this.isPack(id);
       return { talk: wolf, hear: wolf };
