@@ -173,6 +173,25 @@ export async function grantCurrency(username: string, coins: number, diamonds: n
 }
 
 /**
+ * Admin tool (scripts/grant-coins.ts --all): the same coins and diamonds to every player. Returns how many
+ * accounts; with [dryRun] it only counts them.
+ */
+export async function grantCurrencyToAll(coins: number, diamonds: number, dryRun = false) {
+  if (!app) throw new Error("no service account");
+  const db = getFirestore(app);
+  const users = await db.collection("users").select().get(); // their ids only
+  if (dryRun) return users.size;
+  for (let i = 0; i < users.size; i += 400) {
+    const batch = db.batch(); // (a batch takes 500 writes at most)
+    for (const doc of users.docs.slice(i, i + 400)) {
+      batch.update(doc.ref, { coins: FieldValue.increment(coins), diamonds: FieldValue.increment(diamonds) });
+    }
+    await batch.commit();
+  }
+  return users.size;
+}
+
+/**
  * Hands out a mission's reward once: checks the player's progress for the current period, marks it
  * claimed, adds coins/XP/diamonds (the XP counts for this week's leaderboard too).
  */
