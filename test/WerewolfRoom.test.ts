@@ -27,7 +27,12 @@ describe("WerewolfRoom", () => {
   after(async () => colyseus.shutdown());
   beforeEach(async () => await colyseus.cleanup());
 
-  async function startGame(options: object = ONE_OF_EACH, players = 5) {
+  /**
+   * A game started, up to night 1. A room that plays with a mayor opens on his election (a whole day): [mayor]
+   * names who everyone votes for, by the roles dealt; without it nobody votes, so the village has no mayor.
+   * [opened]: the phase the game opened on.
+   */
+  async function startGame(options: object = ONE_OF_EACH, players = 5, mayor?: (roles: string[]) => number) {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", options);
     const clients: any[] = [];
     for (let i = 0; i < players; i++) clients.push(await colyseus.connectTo(room)); // join order: clients[0] is host
@@ -35,12 +40,29 @@ describe("WerewolfRoom", () => {
     clients[0].send("start_game"); // roles are dealt after the 10s countdown
     const roles = (await rolesPromise).map((m: any) => m.role as string);
     const byRole = (role: string) => clients[roles.indexOf(role)];
-    return { room, clients, roles, byRole };
+    const opened = room.state.phase;
+    if (opened === "mayor") {
+      if (mayor) {
+        const pick = clients[mayor(roles)].sessionId;
+        for (const c of clients) c.send("day_vote", { targetId: pick });
+        await waitFor(() => [...room.state.players.values()].every((p) => p.votedFor === pick));
+      }
+      // The election day's end, without waiting for it — and until everyone has heard the night fall: a test
+      // that listens for the next event must not get the election's.
+      const nightHeard = Promise.all(clients.map((c) => new Promise<void>((heard) => {
+        c.onMessage("event", (e: any) => e.type === "night" && heard());
+      })));
+      (room as any).resolveMayor();
+      await nightHeard;
+    }
+    return { room, clients, roles, byRole, opened };
   }
 
-  it("deals the host's role mix and starts the night with the protector", async () => {
-    const { room, roles } = await startGame();
+  it("deals the host's role mix, elects the mayor, then starts the night with the protector", async () => {
+    const { room, roles, opened } = await startGame();
     assert.deepStrictEqual([...roles].sort(), ["protector", "seer", "villager", "werewolf", "witch"]);
+    assert.strictEqual(opened, "mayor"); // the roles dealt, the election comes first
+    assert.strictEqual(room.state.dayNumber, 1);
     assert.strictEqual(room.state.phase, "night");
     assert.strictEqual(room.state.nightStep, "protector");
     assert.strictEqual(room.state.nightRoles, "protector");
@@ -176,7 +198,7 @@ describe("WerewolfRoom", () => {
     witch.send("witch_revive");
     witch.send("witch_pass");
     assert.deepStrictEqual(await night, { deaths: [], saved: true });
-    assert.strictEqual(room.state.phase, "mayor"); // first night over → the village elects a mayor
+    assert.strictEqual(room.state.phase, "day"); // first night over: the mayor was elected before it
   });
 
   it("reveals each night death with its cause: the wolves' victim first, then the witch's poison", async function () {
@@ -238,9 +260,10 @@ describe("WerewolfRoom", () => {
 
   it("elects a mayor whose exclusion vote counts twice", async function () {
     this.timeout(45_000);
-    const { room, byRole } = await startGame();
+    const { room, byRole } = await startGame(ONE_OF_EACH, 5, (roles) => roles.indexOf("villager"));
     const [wolf, witch, seer] = [byRole("werewolf"), byRole("witch"), byRole("seer")];
     const [villager, protector] = [byRole("villager"), byRole("protector")];
+    assert.strictEqual(room.state.mayorId, villager.sessionId); // elected before the first night
 
     // A quick night where nobody dies.
     protector.send("protect", { targetId: villager.sessionId });
@@ -249,12 +272,6 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.nightStep === "witch_seer", STEP);
     seer.send("seer_peek", { targetId: wolf.sessionId });
     witch.send("witch_pass");
-    await waitFor(() => room.state.phase === "mayor");
-
-    const elected = villager.waitForMessage("mayor_result", STEP); // at the end of the election day
-    for (const c of [wolf, witch, seer, villager, protector]) c.send("day_vote", { targetId: villager.sessionId });
-    assert.deepStrictEqual(await elected, { mayorId: villager.sessionId });
-    assert.strictEqual(room.state.mayorId, villager.sessionId);
 
     await waitFor(() => room.state.phase === "day", STEP);
     const result = villager.waitForMessage("vote_result", STEP); // counted when the day ends
@@ -268,14 +285,17 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(r.votes, 3); // mayor ×2 + the wolf himself
     assert.strictEqual(r.day, 1);
     assert.strictEqual(r.mayorId, villager.sessionId);
-    assert.strictEqual(r.ballots[seer.sessionId], witch.sessionId); // every ballot is kept for the history
+    assert.strictEqual(r.ballots[seer.sessionId], witch.sessionId); // every ballot is kept for the history…
+    assert.strictEqual(r.ballots[villager.sessionId], wolf.sessionId); // …those against whoever went out too
+    assert.strictEqual(r.ballots[wolf.sessionId], wolf.sessionId);
+    assert.deepStrictEqual((room as any).voteHistory.at(-1).ballots, r.ballots);
     assert.strictEqual(room.state.winner, "villagers");
     assert.ok(room.state.phaseEndsAt > Date.now() + 50_000); // the room closes a minute after the game
 
     // What someone arriving now gets: the whole game's log, lobby lines excluded.
     const types = ((room as any).publicLog as any[]).map((e) => e.type);
-    assert.strictEqual(types[0], "night");
-    assert.ok(types.includes("mayor") && types.includes("vote_result"));
+    assert.deepStrictEqual(types.slice(0, 3), ["mayor_election", "mayor", "night"]);
+    assert.ok(types.includes("vote_result"));
     assert.strictEqual(types.at(-1), "game_over");
     assert.ok(!types.includes("your_role")); // private lines stay private
   });
@@ -314,10 +334,12 @@ describe("WerewolfRoom", () => {
   });
 
   it("lets a dead mayor name his successor", async function () {
-    this.timeout(90_000); // the election is a whole day before day 1
-    const { room, clients, roles, byRole } = await startGame({ ...ONE_OF_EACH, villagers: 2, protector: false });
+    this.timeout(90_000);
+    const mix = { ...ONE_OF_EACH, villagers: 2, protector: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 5, (roles) => roles.indexOf("villager"));
     const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
     const [mayor, heir] = clients.filter((_, i) => roles[i] === "villager");
+    assert.strictEqual(room.state.mayorId, mayor.sessionId);
 
     // Quiet night (no protector in this mix): the witch revives the wolves' victim.
     await waitFor(() => room.state.nightStep === "wolves");
@@ -326,10 +348,6 @@ describe("WerewolfRoom", () => {
     seer.send("seer_peek", { targetId: wolf.sessionId });
     witch.send("witch_revive");
     witch.send("witch_pass");
-    await waitFor(() => room.state.phase === "mayor");
-
-    for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId });
-    await waitFor(() => room.state.mayorId === mayor.sessionId, STEP); // at the end of the election day
 
     await waitFor(() => room.state.phase === "day", STEP);
     for (const c of clients) c.send("day_vote", { targetId: mayor.sessionId }); // the village votes its mayor out
@@ -409,10 +427,8 @@ describe("WerewolfRoom", () => {
     tripleFace.send("seer_peek", { targetId: wolf.sessionId });
     assert.strictEqual((await peek).role, "werewolf");
 
-    await waitFor(() => room.state.phase === "mayor");
+    await waitFor(() => room.state.phase === "day", 2 * STEP);
     assert.ok([...room.state.players.values()].every((p) => p.alive)); // Red Hood survived
-    for (const c of clients) c.send("day_vote", { targetId: wolf.sessionId });
-    await waitFor(() => room.state.phase === "day", 2 * STEP); // after the election day
 
     const bear = roles.indexOf("bear");
     const n = roles.length;
@@ -884,10 +900,11 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.phase, "day");
   });
 
-  it("the mayor election is a whole day; a tie leaves the village without a mayor", async () => {
+  it("the mayor election is a whole day; a tie leaves the village without a mayor; then night 1", async () => {
     const { room, clients } = await startGame({ ...ONE_OF_EACH, roundSeconds: 300 });
     const r = room as any;
-    r.startMayorVote();
+    r.state.dayNumber = 0;
+    r.startMayorVote(); // (as the game opens)
     assert.ok(room.state.phaseEndsAt - Date.now() > 250_000); // as long as a day
     const [a, b] = clients;
     a.send("day_vote", { targetId: b.sessionId });
@@ -895,6 +912,28 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.players.get(b.sessionId)?.votedFor === a.sessionId);
     r.resolveMayor();
     assert.strictEqual(room.state.mayorId, ""); // 1–1: no mayor
+    assert.strictEqual(room.state.phase, "night");
+    assert.strictEqual(room.state.dayNumber, 1);
+  });
+
+  it("the host hands the room over to a player at the table; the black wolf may silence himself", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 0, villagers: 4, blackwolf: true, mayor: false };
+    const { room, clients, byRole, opened } = await startGame(mix, 5);
+    assert.strictEqual(opened, "night"); // no mayor: straight to the first night
+    const r = room as any;
+    const [host, other] = clients;
+    other.send("transfer_host", { targetId: other.sessionId }); // not his to give
+    host.send("transfer_host", { targetId: "nobody" });
+    host.send("transfer_host", { targetId: other.sessionId });
+    await waitFor(() => room.state.hostId === other.sessionId);
+    assert.strictEqual(r.publicLog.at(-1).type, "new_host");
+
+    const black = byRole("blackwolf");
+    await waitFor(() => room.state.nightStep === "wolves");
+    black.send("wolf_target", { targetId: clients.find((c: any) => c !== black).sessionId });
+    await waitFor(() => room.state.nightStep === "wolf_powers", STEP);
+    black.send("silence", { targetId: black.sessionId });
+    await waitFor(() => r.silenceTarget === black.sessionId);
   });
 
   it("after the game, the host's new room takes the table: Play again gets in, even a private one", async () => {

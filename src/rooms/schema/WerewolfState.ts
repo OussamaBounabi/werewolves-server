@@ -45,7 +45,7 @@ export const WerewolfState = schema({
   greenwolf: t.boolean().default(false),
   redwolf: t.boolean().default(false),
   greenGuesses: t.number().default(3), // the green wolf's guesses for the whole game (one per night)
-  mayor: t.boolean().default(true), // play with a mayor (elected after night 1)
+  mayor: t.boolean().default(true), // play with a mayor (elected as the game opens, before night 1)
   talkingSeer: t.boolean().default(false), // the village hears which role the seer (or triple face) saw
   talkingDetective: t.boolean().default(false), // the village hears the detective's verdict
   seatNumbers: t.boolean().default(false), // "(3) Karim": each player's number by his name, to talk about him

@@ -171,10 +171,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private ancientUsed = new Set<string>(); // ancients who already survived a wolf attack
   private villageDisabled = false; // the ancient died by the village's hand: no village powers any more
   private foxKnown = new Map<string, { ids: string[]; wolf: boolean }[]>(); // fox → his smells (for reconnects)
-  private dealTime = 0; // DEAL_MS for the first night step of the game, then 0
+  private dealTime = 0; // DEAL_MS for the game's first timer (the election, or night 1's first step), then 0
   private revealsPending = 0; // deaths whose card reveal the clients are about to play
   private pendingShooters: string[] = []; // dead hunters waiting for their shot
-  private mayorElected = false; // the village elects once; a dead mayor can only hand the title on
   private pendingSuccession: string | null = null; // mayor who just died and picks a successor
 
   // The Flutter client reads state from this plain message instead of Colyseus's binary patches.
@@ -197,6 +196,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
     });
     this.onMessage("kick", (client, msg: { targetId: string }) => this.handleKick(client, msg));
+    this.onMessage("transfer_host", (client, msg: { targetId: string }) => this.handleTransferHost(client, msg));
     this.onMessage("start_game", (client) => this.handleStartGame(client));
     this.onMessage("cancel_start", (client) => this.handleCancelStart(client));
     this.onMessage("trap", (client, msg: { targetId: string }) => this.handleTrap(client, msg));
@@ -588,7 +588,16 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     kicked?.leave(4000);
   }
 
-  /** The 1-hour limit: an unfinished game ends with no winner (endGame then closes the room). */
+  /** The host hands the room over to another player at the table (who is here): at any time, the game running or not. */
+  private handleTransferHost(client: Client, msg: { targetId: string }) {
+    const target = msg?.targetId;
+    if (client.sessionId !== this.state.hostId || !target || target === client.sessionId) return;
+    if (!this.state.players.get(target)?.connected) return;
+    this.setHost(target);
+    this.logEvent("new_host", { name: this.nameOf(target) });
+  }
+
+  /** The room's time limit: an unfinished game ends with no winner (endGame then closes the room). */
   private expire() {
     if (this.state.phase !== "gameover") this.endGame(null);
   }
@@ -730,7 +739,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.broadcast("events", []);
     this.assignRoles();
     this.dealTime = DEAL_MS;
-    this.startNight();
+    // The roles dealt, the village elects its mayor (if it plays with one), then the first night falls.
+    if (this.state.mayor) this.startMayorVote();
+    else this.startNight();
     this.updateListing();
   }
 
@@ -1117,7 +1128,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private handleSilence(client: Client, msg: { targetId: string }) {
     const id = this.powerActor(client, "blackwolf");
     const target = msg?.targetId;
-    if (!id || !this.isAlive(target) || target === id) return;
+    if (!id || !this.isAlive(target)) return; // himself too: no voice or vote tomorrow, but nobody votes against him
     if (target === this.lastSilenced) {
       client.send("error", { code: "same_silence" });
       return;
@@ -1466,8 +1477,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.morningNews();
     this.broadcast("night_result", { deaths: [...deaths.keys()], saved: this.reviving });
     if (this.endGameIfOver()) return;
-    // The village elects its mayor once, after the first night.
-    this.afterDeaths(() => (this.mayorElected || !this.state.mayor ? this.startDay() : this.startMayorVote()));
+    this.afterDeaths(() => this.startDay());
   }
 
   /** The father's bite: he joins the pack right away (their chat and voice) and is told so. */
@@ -1593,22 +1603,26 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   // ---- mayor election, day discussion, exclusion vote ----
 
-  /** The mayor election is a whole day after night 1: talk and vote, same length and rules as any day. */
+  /**
+   * The mayor election opens the game, before night 1: a whole day to talk and vote, same length and rules as any
+   * day (plus the time of the card deal playing in the app). The village elects once; a dead mayor can only hand
+   * the title on.
+   */
   private startMayorVote() {
     this.state.phase = "mayor";
     this.clearVotes();
     this.dayShrunk = false;
     this.logEvent("mayor_election");
-    this.setPhaseTimer(this.state.roundSeconds * 1000, () => this.resolveMayor());
+    this.setPhaseTimer(this.state.roundSeconds * 1000 + this.dealTime, () => this.resolveMayor());
+    this.dealTime = 0;
   }
 
   private resolveMayor() {
     const mayor = topVoted(this.aliveVotes(1)) ?? ""; // a tie (or no vote): no mayor
     this.state.mayorId = mayor;
-    this.mayorElected = true;
     this.broadcast("mayor_result", { mayorId: mayor || null });
     this.logEvent("mayor", { name: this.nameOf(mayor), successor: false });
-    this.startDay();
+    this.startNight();
   }
 
   /** Daybreak: the bear sniffs, the dictator strikes if he said so last night, then the debate. */
@@ -1837,12 +1851,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const bestCount = excluded ? votes.filter((v) => v === excluded).length : 0;
 
     const voters = this.aliveCount() + (this.isAlive(this.state.mayorId) ? 1 : 0);
-    if (excluded) this.kill(excluded, cause);
-
+    // The record first: a death wipes the votes against the dead (and a dead mayor's title).
     const ballots: Record<string, string> = {};
-    for (const [id, p] of this.state.players) if (p.votedFor && (p.alive || id === excluded)) ballots[id] = p.votedFor;
+    for (const [id, p] of this.state.players) if (p.votedFor && p.alive) ballots[id] = p.votedFor;
     const record: VoteRecord = { day: this.state.dayNumber, excluded, ballots, mayorId: this.state.mayorId };
     this.voteHistory.push(record);
+    if (excluded) this.kill(excluded, cause);
 
     this.broadcast("vote_result", { ...record, votes: bestCount, voters });
     if (cause === "vote") this.logEvent("vote_result", {
