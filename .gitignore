@@ -8,3 +8,6 @@ service-account.json
 
 # Secrets (LiveKit keys etc.): never commit
 .env
+
+# A local PocketBase's data (the real one lives on the VPS)
+pb_data

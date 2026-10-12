@@ -19,10 +19,12 @@ import { LudoRoom } from "./rooms/LudoRoom.js";
 import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
+import { PresenceRoom } from "./rooms/PresenceRoom.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
-import { buyAvatar, buyFrame, claimMission, ClaimError, isAdmin, StoreError } from "./firebase.js";
+import { AuthError, buyAvatar, buyFrame, claimMission, ClaimError, isAdmin, ProfileError, StoreError, updateProfile, type ProfileChanges } from "./accounts.js";
+import { legacyLogin, LegacyLoginError } from "./legacyLogin.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -38,6 +40,18 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     started: r.metadata?.started === true,
     mode: r.metadata?.mode ?? "", // guess who: duel | cup
   };
+}
+
+/** An app's PocketBase login token, from "Authorization: Bearer <token>". */
+const bearer = (ctx: { request?: Request }) => ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
+
+/** The HTTP status for what went wrong with an account request: a bad token, a refusal, or our fault. */
+function statusFor(e: unknown) {
+  if (e instanceof AuthError) return 401;
+  if (e instanceof ProfileError) return e.status;
+  if (e instanceof StoreError || e instanceof ClaimError) return 409;
+  console.error("account request failed", e);
+  return 500;
 }
 
 async function publicRooms(name: string) {
@@ -59,6 +73,7 @@ const server = defineServer({
     guess: defineRoom(GuessRoom),
     imposter: defineRoom(ImposterRoom),
     mimic: defineRoom(MimicRoom),
+    presence: defineRoom(PresenceRoom), // every app, while open: who's online
   },
 
   /**
@@ -84,7 +99,7 @@ const server = defineServer({
     }),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
-    // Mission definitions and the current periods (the app reads progress from Firestore).
+    // Mission definitions and the current periods (the app reads progress from PocketBase).
     api_missions: createEndpoint("/api/missions", { method: "GET" }, async () => ({
       missions: MISSIONS,
       dailyBonus: DAILY_BONUS,
@@ -92,43 +107,65 @@ const server = defineServer({
       week: weekKey(),
       ends: periodEnds(),
     })),
-    // Claim a mission's reward: Authorization: Bearer <Firebase ID token>, body { id }.
+    // Claim a mission's reward: Authorization: Bearer <PocketBase token>, body { id }.
     api_claim: createEndpoint("/api/missions/claim", { method: "POST" }, async (ctx) => {
-      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const token = bearer(ctx);
       const id = (ctx.body as { id?: string } | undefined)?.id;
       if (!token || !id) throw ctx.error(400, { error: "missing token or id" });
       try {
         return { ok: true, reward: await claimMission(token, id) };
       } catch (e) {
-        throw ctx.error(e instanceof ClaimError ? 409 : 401, { error: (e as Error).message });
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
-    // Buy an avatar (Authorization: Bearer <ID token>, body { id }): the server takes the price and the player wears it.
+    // Buy an avatar (Authorization: Bearer <token>, body { id }): the server takes the price and the player wears it.
     api_avatar_buy: createEndpoint("/api/avatars/buy", { method: "POST" }, async (ctx) => {
-      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const token = bearer(ctx);
       const id = Number((ctx.body as { id?: unknown } | undefined)?.id);
       if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
       try {
         return await buyAvatar(token, id);
       } catch (e) {
-        throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
-    // Buy an animated frame (Authorization: Bearer <ID token>, body { id }): price taken, the frame worn.
+    // Buy an animated frame (Authorization: Bearer <token>, body { id }): price taken, the frame worn.
     api_frame_buy: createEndpoint("/api/frames/buy", { method: "POST" }, async (ctx) => {
-      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "");
+      const token = bearer(ctx);
       const id = Number((ctx.body as { id?: unknown } | undefined)?.id);
       if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
       try {
         return await buyFrame(token, id);
       } catch (e) {
-        throw ctx.error(e instanceof StoreError ? 409 : 401, { error: (e as Error).message });
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
-    // Admins only (Authorization: Bearer <ID token>): every room, private ones included.
+    // His own profile (Authorization: Bearer <token>, body { name?, avatar?, frame?, username? }): the name once
+    // a day, owned or free avatars and frames, a username only if he has none. Answers the profile as it is now.
+    api_profile: createEndpoint("/api/profile", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx);
+      if (!token) throw ctx.error(400, { error: "missing token" });
+      try {
+        return await updateProfile(token, (ctx.body ?? {}) as ProfileChanges);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // An e-mail player's first login after the move from Firebase (body { email, password }): see legacyLogin.ts.
+    api_legacy_login: createEndpoint("/api/auth/legacy-login", { method: "POST" }, async (ctx) => {
+      const body = ctx.body as { email?: unknown; password?: unknown } | undefined;
+      try {
+        await legacyLogin(body?.email, body?.password);
+        return { ok: true };
+      } catch (e) {
+        if (e instanceof LegacyLoginError) throw ctx.error(e.status, { error: e.message });
+        console.error("legacy login failed", e);
+        throw ctx.error(500, { error: "failed" });
+      }
+    }),
+    // Admins only (Authorization: Bearer <token>): every room, private ones included.
     api_admin_rooms: createEndpoint("/api/admin/rooms", { method: "GET" }, async (ctx) => {
-      const token = ctx.request?.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
-      if (!(await isAdmin(token))) throw ctx.error(403, { error: "admins only" });
+      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
       return (await matchMaker.query({ name: "werewolf" })).map((r) => ({
         ...roomInfo(r),
         phase: r.metadata?.phase ?? "",

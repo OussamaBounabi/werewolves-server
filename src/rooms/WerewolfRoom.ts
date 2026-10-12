@@ -2,7 +2,8 @@ import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
-import { accountFor, firebaseEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, setRoom, type Account, type GameResult } from "../firebase.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, type Account, type GameResult } from "../accounts.js";
+import { enterRoom, leaveRoom } from "../presence.js";
 
 const SPECIALS = [
   "seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface",
@@ -248,7 +249,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * Runs when the client's socket connects (not on reconnects): the player's account (from his app's
-   * Firebase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
+   * PocketBase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
    */
   async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null; admin?: boolean }> {
     // God view: the admin app's login, any room, any phase, invisible.
@@ -258,7 +259,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     // ponytail: guests (no token) are still allowed, for the bots and tests; require a token for release.
     let account: Account | null = null;
-    if (options.idToken && firebaseEnabled) {
+    if (options.idToken && accountsEnabled) {
       try {
         account = await accountFor(String(options.idToken));
       } catch {
@@ -302,7 +303,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const uid: string | undefined = client.auth?.account?.uid;
     if (uid) {
       this.members.set(client.sessionId, uid);
-      setRoom(uid, this.roomId).catch((e) => console.error("setRoom failed", e));
+      enterRoom(uid, this.roomName, this.roomId);
     }
     const returning = this.deadSeatOf(String(client.auth?.account?.uid ?? options.playerId ?? ""));
     if (returning) return this.retakeSeat(client, returning);
@@ -383,7 +384,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Quietly removes an older seat of a player who just joined again (lobby only). */
   private dropGhost(id: string) {
-    this.members.delete(id); // his account is still here: keep users/{uid}.room
+    this.members.delete(id); // his account is still here: keep users.room
     this.accounts.delete(id);
     if (this.voiceRights.delete(id)) dropFromVoice(this.roomId, id).catch(() => {});
     this.heldSeats.get(id)?.reject("replaced");
@@ -2093,7 +2094,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!uid) return;
     this.members.delete(sessionId);
     if ([...this.members.values()].includes(uid)) return; // still here on another connection
-    setRoom(uid, "", this.roomId).catch((e) => console.error("setRoom failed", e));
+    leaveRoom(uid, this.roomId);
   }
 
   onDispose() {
