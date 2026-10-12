@@ -13,6 +13,7 @@ export const PlayerState = schema({
   silenced: t.boolean().default(false), // the black wolf's victim, for the day: no voice, no vote, can't be voted
   voteBonus: t.number().default(0), // today: +2 from the raven, −2 from the owl (everyone sees it)
   infectedShown: t.boolean().default(false), // everyone knows he was infected (revealed by death or the trickster)
+  aiming: t.boolean().default(false), // a dead hunter who hasn't shot yet: the app still shows him standing
 });
 export type PlayerState = SchemaType<typeof PlayerState>;
 
@@ -49,6 +50,7 @@ export const WerewolfState = schema({
   talkingSeer: t.boolean().default(false), // the village hears which role the seer (or triple face) saw
   talkingDetective: t.boolean().default(false), // the village hears the detective's verdict
   seatNumbers: t.boolean().default(false), // "(3) Karim": each player's number by his name, to talk about him
+  narrator: t.boolean().default(false), // at dawn the village is told what the night hid: a save, a blocked attack, an infection
   cupid: t.boolean().default(false),
   wildchild: t.boolean().default(false),
   dragon: t.boolean().default(false),

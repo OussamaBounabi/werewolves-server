@@ -22,7 +22,7 @@ function init(): App | null {
 const app = init();
 export const firebaseEnabled = app !== null;
 
-export type Account = { uid: string; name: string; avatar: number; frame: number };
+export type Account = { uid: string; name: string; avatar: number; frame: number; vip: boolean };
 
 /** The account behind an app's login token, with its display name and avatar. Throws if invalid. */
 export async function accountFor(idToken: string): Promise<Account> {
@@ -35,7 +35,20 @@ export async function accountFor(idToken: string): Promise<Account> {
     name: String(profile.name ?? profile.username),
     avatar: Number(profile.avatar) || 0,
     frame: Number(profile.frame) || 0,
+    vip: profile.vip === true,
   };
+}
+
+/** Makes an account VIP (or not): found by its e-mail or its username. VIPs pick their own role as a werewolf host. */
+export async function setVip(who: string, vip: boolean) {
+  if (!app) throw new Error("accounts disabled");
+  const db = getFirestore(app);
+  const uid = who.includes("@")
+    ? (await getAuth(app).getUserByEmail(who)).uid
+    : (await db.doc(`usernames/${who.toLowerCase()}`).get()).data()?.uid;
+  if (!uid) throw new Error(`no account for ${who}`);
+  await db.doc(`users/${uid}`).update({ vip });
+  return (await db.doc(`users/${uid}`).get()).data()?.username as string;
 }
 
 /** Whether this login token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */

@@ -91,6 +91,19 @@ describe("WerewolfRoom", () => {
     host.send("settings", { stepSeconds: 70 }); // over a minute
     await new Promise((r) => setTimeout(r, 100));
     assert.strictEqual(room.state.stepSeconds, 30);
+
+    // The narrator is off unless the host turns him on. Picking his own role is a VIP host's.
+    const r = room as any;
+    assert.strictEqual(room.state.narrator, false);
+    host.send("settings", { narrator: true, testRole: "seer" });
+    await waitFor(() => room.state.narrator === true);
+    assert.strictEqual(r.testHostRole, null);
+    r.vips.add(host.sessionId);
+    host.send("settings", { testRole: "seer" });
+    await waitFor(() => r.testHostRole === "seer");
+    host.send("transfer_host", { targetId: guest.sessionId }); // the role he picked doesn't pass to the next host
+    await waitFor(() => room.state.hostId === guest.sessionId);
+    assert.strictEqual(r.testHostRole, null);
   });
 
   it("counts down 10s before starting; the host can cancel; joining is closed meanwhile", async () => {
@@ -177,7 +190,7 @@ describe("WerewolfRoom", () => {
 
   it("plays a night: protector → wolves → witch sees the victim and revives it", async function () {
     this.timeout(30_000);
-    const { room, byRole } = await startGame();
+    const { room, byRole } = await startGame({ ...ONE_OF_EACH, narrator: true });
     const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
     const villager = byRole("villager"), protector = byRole("protector");
 
@@ -186,7 +199,12 @@ describe("WerewolfRoom", () => {
 
     const witchTurn = witch.waitForMessage("witch_turn", STEP);
     wolf.send("wolf_target", { targetId: villager.sessionId });
-    assert.deepStrictEqual(await witchTurn, { victim: villager.sessionId, canPoison: true });
+    // Every wolf has voted: the pack's time drops to 5 seconds.
+    await waitFor(() => room.state.phaseEndsAt - Date.now() <= 5_000);
+    assert.strictEqual(room.state.nightStep, "wolves");
+    // Nobody kills on the first night: she can only revive.
+    assert.deepStrictEqual(await witchTurn, { victim: villager.sessionId, canPoison: false });
+    witch.send("witch_poison", { targetId: seer.sessionId });
     assert.strictEqual(room.state.nightStep, "witch_seer");
     assert.strictEqual(room.state.nightRoles, "witch,seer");
 
@@ -199,6 +217,12 @@ describe("WerewolfRoom", () => {
     witch.send("witch_pass");
     assert.deepStrictEqual(await night, { deaths: [], saved: true });
     assert.strictEqual(room.state.phase, "day"); // first night over: the mayor was elected before it
+    assert.ok([...room.state.players.values()].every((p) => p.alive)); // her poison stayed in its vial
+    assert.strictEqual((room as any).potions.get(witch.sessionId).poison, true);
+    // The narrator told of the save, under the day's title.
+    const types = ((room as any).publicLog as any[]).map((e) => e.type);
+    const dawn = types.indexOf("day");
+    assert.deepStrictEqual(types.slice(dawn, dawn + 3), ["day", "village_wakes", "witch_saved"]);
   });
 
   it("reveals each night death with its cause: the wolves' victim first, then the witch's poison", async function () {
@@ -206,12 +230,13 @@ describe("WerewolfRoom", () => {
     const { room, byRole } = await startGame();
     const wolf = byRole("werewolf"), witch = byRole("witch"), seer = byRole("seer");
     const villager = byRole("villager"), protector = byRole("protector");
+    room.state.dayNumber = 2; // (not the first night: nobody kills on that one)
 
     protector.send("protect", { targetId: protector.sessionId });
     await waitFor(() => room.state.nightStep === "wolves");
     const witchTurn = witch.waitForMessage("witch_turn", STEP);
     wolf.send("wolf_target", { targetId: villager.sessionId });
-    await witchTurn;
+    assert.strictEqual((await witchTurn).canPoison, true);
 
     const reveals: any[] = [];
     seer.onMessage("death_reveal", (d: any) => reveals.push(d));
@@ -226,17 +251,25 @@ describe("WerewolfRoom", () => {
     ]);
   });
 
-  it("hides the revive when the wolves attack the protected player", async function () {
-    this.timeout(30_000);
-    const { byRole } = await startGame();
-    const wolf = byRole("werewolf"), witch = byRole("witch"), villager = byRole("villager");
+  for (const narrator of [false, true]) {
+    it(`hides the revive when the wolves attack the protected player; the narrator ${narrator ? "tells" : "is off: a secret"}`, async function () {
+      this.timeout(30_000);
+      const { room, byRole } = await startGame({ ...ONE_OF_EACH, narrator });
+      const wolf = byRole("werewolf"), witch = byRole("witch"), villager = byRole("villager");
 
-    byRole("protector").send("protect", { targetId: villager.sessionId });
-    const witchTurn = witch.waitForMessage("witch_turn", STEP);
-    await new Promise((r) => setTimeout(r, 50));
-    wolf.send("wolf_target", { targetId: villager.sessionId });
-    assert.deepStrictEqual(await witchTurn, { victim: null, canPoison: true });
-  });
+      byRole("protector").send("protect", { targetId: villager.sessionId });
+      const witchTurn = witch.waitForMessage("witch_turn", STEP);
+      await new Promise((r) => setTimeout(r, 50));
+      wolf.send("wolf_target", { targetId: villager.sessionId });
+      assert.deepStrictEqual(await witchTurn, { victim: null, canPoison: false });
+
+      byRole("seer").send("seer_peek", { targetId: wolf.sessionId });
+      witch.send("witch_pass");
+      await waitFor(() => room.state.phase === "day", STEP);
+      const told = ((room as any).publicLog as any[]).filter((e) => e.type === "narrator").map((e) => e.what);
+      assert.deepStrictEqual(told, narrator ? ["protected"] : []); // which kind of attack failed, never on whom
+    });
+  }
 
   it("lets wolves vote each other: the most-voted dies even if he's a wolf", async function () {
     this.timeout(30_000);
@@ -682,6 +715,37 @@ describe("WerewolfRoom", () => {
     assert.ok(r.spent.has(dragon.sessionId));
     r.resolveNight();
     assert.strictEqual(room.state.players.get(target.sessionId)?.alive, false);
+  });
+
+  it("the talking detective's verdict is told at dawn, under the day's title", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, detective: true, talkingDetective: true };
+    const { room, clients, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const detective = byRole("detective");
+    const [a, b] = clients.filter((c: any) => c !== detective);
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([detective.sessionId, "someone"]);
+    detective.send("detective_check", { a: a.sessionId, b: b.sessionId });
+    await waitFor(() => r.detectiveKnown.length === 1);
+    const types = () => (r.publicLog as any[]).map((e) => e.type);
+    assert.ok(!types().includes("detective_public")); // not during the night
+    r.resolveNight();
+    assert.deepStrictEqual(types().slice(types().indexOf("day"), types().indexOf("day") + 3), ["day", "village_wakes", "detective_public"]);
+  });
+
+  it("a dead hunter stands until he has shot", async () => {
+    const { room, byRole } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 3, hunter: true }, 5);
+    const r = room as any;
+    const [hunter, wolf] = [byRole("hunter"), byRole("werewolf")];
+    const state = () => room.state.players.get(hunter.sessionId)!;
+    r.kill(hunter.sessionId, "wolves");
+    assert.deepStrictEqual([state().alive, state().aiming], [false, true]);
+    r.revealsPending = 0;
+    r.afterDeaths(() => {});
+    assert.strictEqual(room.state.shooterId, hunter.sessionId);
+    hunter.send("hunter_shoot", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.players.get(wolf.sessionId)?.alive === false);
+    assert.strictEqual(state().aiming, false);
   });
 
   it("barbé unmasks a wolf; the dictator dies with an innocent", async () => {

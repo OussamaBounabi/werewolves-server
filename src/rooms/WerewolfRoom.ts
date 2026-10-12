@@ -48,6 +48,7 @@ type Settings = {
   mayor?: boolean;
   talkingSeer?: boolean;
   talkingDetective?: boolean;
+  narrator?: boolean;
   seatNumbers?: boolean;
 } & Partial<Record<Special, boolean>>;
 type Potions = { revive: boolean; poison: boolean }; // potions not used yet
@@ -79,7 +80,8 @@ const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
 const STEP_OPTIONS = [10, 20, 30, 40, 50, 60]; // night steps, votes, the hunter's shot, the mayor's succession
 const START_MS = 10_000; // the countdown before the game starts
-const RECONNECT_SECONDS = 600; // a dropped player's seat is held 10 minutes, then he dies
+const RECONNECT_SECONDS = 1200; // a dropped player's seat is held 20 minutes, then he dies
+const WOLVES_AGREED_MS = 5_000; // every wolf has voted: the pack's time drops to this
 const ROOM_LIFESPAN_MS = 2 * 60 * 60_000; // a room lives at most 2 hours from creation
 const CLOSE_AFTER_GAME_MS = 60_000; // after the game ends, the room closes a minute later
 const MAX_CONNECTIONS = 100; // players + spectators; the player limit is maxPlayers, checked in onAuth
@@ -125,7 +127,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private deadChatLog: ChatLine[] = [];
   private graveChatSent = new Set<string>(); // given the graveyard's chat so far
   private closeTimer: { clear(): void } | null = null;
-  private testHostRole: Role | null = null; // TEST ONLY: host picks their own role
+  private testHostRole: Role | null = null; // a VIP host picks his own role
+  private vips = new Set<string>(); // sessionIds of VIP accounts
+  private nightNews: string[] = []; // what the narrator tells at dawn: "protected" | "redhood" | "ancient" | "infection"
+  private detectiveNews: boolean[] = []; // the talking detective's verdicts of the night, told at dawn
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
 
@@ -307,6 +312,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       return this.updateListing();
     }
     const account: Account | null = client.auth?.account ?? null;
+    if (account?.vip) this.vips.add(client.sessionId);
     const name = account?.name ?? (String(options.name ?? "").trim().slice(0, 24) || `Player-${client.sessionId.slice(0, 4)}`);
     const playerId = account?.uid ?? String(options.playerId ?? client.sessionId);
     // Same account (or device) already seated: a join its app gave up on (slow network). That seat goes.
@@ -634,11 +640,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (s.villagers !== undefined) st.villagers = int(s.villagers, 0, 12);
     for (const r of SPECIALS) if (typeof s[r] === "boolean") st[r] = s[r];
     if (s.greenGuesses !== undefined) st.greenGuesses = int(s.greenGuesses, 1, 5);
-    for (const key of ["mayor", "talkingSeer", "talkingDetective", "seatNumbers"] as const) {
+    for (const key of ["mayor", "talkingSeer", "talkingDetective", "seatNumbers", "narrator"] as const) {
       if (typeof s[key] === "boolean") st[key] = s[key];
     }
     if (st.villagers === 0) st.bluewolf = false; // he hides behind a simple villager
-    if (s.testRole !== undefined) this.testHostRole = ROLES.includes(s.testRole as Role) ? (s.testRole as Role) : null;
+    // Picking his own role is a VIP host's.
+    if (s.testRole !== undefined) {
+      const mayPick = this.vips.has(st.hostId) && ROLES.includes(s.testRole as Role);
+      this.testHostRole = mayPick ? (s.testRole as Role) : null;
+    }
     this.updateListing();
   }
 
@@ -680,7 +690,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private setHost(sessionId: string) {
-    if (this.state.hostId !== sessionId) this.banned.clear(); // a new host lifts the old host's bans
+    if (this.state.hostId !== sessionId) {
+      this.banned.clear(); // a new host lifts the old host's bans
+      this.testHostRole = null; // …and the role the old one picked for himself goes with him
+    }
     this.state.hostId = sessionId;
     this.updateListing();
   }
@@ -804,6 +817,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     this.ravenTarget = null;
     this.owlTarget = null;
+    this.nightNews = [];
+    this.detectiveNews = [];
     this.lastParalysed = this.paralysed;
     this.paralysed = null;
     this.lastSilenced = this.silenceTarget;
@@ -1030,6 +1045,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     else this.wolfVotes.set(id, msg.targetId);
     const votes = Object.fromEntries(this.wolfVotes);
     for (const w of this.packIds()) this.clients.getById(w)?.send("wolf_votes", votes);
+    // Every wolf who is here has voted: the pack's time drops to a few seconds (a vote can still change in them).
+    const pack = this.packIds().filter((w) => this.isAlive(w) && this.state.players.get(w)?.connected);
+    if (pack.every((w) => this.wolfVotes.has(w)) && this.state.phaseEndsAt - Date.now() > WOLVES_AGREED_MS) {
+      this.setPhaseTimer(WOLVES_AGREED_MS, () => this.endWolvesStep());
+    }
   }
 
   private endWolvesStep() {
@@ -1118,6 +1138,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         this.logEvent("infect_failed", { name: this.nameOf(target) }, id);
       } else {
         this.infectNow = true;
+        this.nightNews.push("infection");
         this.logEvent("infect_done", { name: this.nameOf(target) }, id);
         this.infect(target); // at once — he still plays his own role tonight (a bitten seer still looks)
       }
@@ -1184,12 +1205,20 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** The pack's victim, after the father wolf, the protector and Red Hood; then the witch & co. wake. */
   private finishWolfPowers() {
     this.powerActors.clear();
-    const victim = this.wolfTarget;
-    let bitten = !this.infectNow && victim && victim !== this.protectTarget ? victim : null;
-    if (bitten && this.redHoodSafe(bitten)) bitten = null;
+    // (Each attack that came to nothing is news for the narrator: which kind, never on whom.)
+    let bitten = !this.infectNow && this.wolfTarget ? this.wolfTarget : null;
+    if (bitten && bitten === this.protectTarget) {
+      this.nightNews.push("protected");
+      bitten = null;
+    }
+    if (bitten && this.redHoodSafe(bitten)) {
+      this.nightNews.push("redhood");
+      bitten = null;
+    }
     if (bitten && this.powerOf(bitten) === "ancient" && !this.ancientUsed.has(bitten)) {
       this.ancientUsed.add(bitten); // his one extra life is gone
       this.logEvent("ancient_survived", {}, bitten);
+      this.nightNews.push("ancient");
       bitten = null;
     }
     this.wolfVictim = bitten;
@@ -1212,7 +1241,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.activeWithRole("seer"),
       day === 1 ? tripleFace : undefined,
       this.canInvestigate(detective),
-      dragon && !this.spent.has(dragon) ? dragon : undefined, // until he has burned someone
+      dragon && !this.spent.has(dragon) && day > 1 ? dragon : undefined, // from night 2, until he has burned someone
       this.dictatorToAsk(),
       this.tricksterReady(),
       this.foxReady(),
@@ -1242,8 +1271,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const canRevive = p.revive && !this.reviving && this.wolfVictim !== null;
     this.clients.getById(witchId)?.send("witch_turn", {
       victim: canRevive ? this.wolfVictim : null,
-      canPoison: p.poison,
+      canPoison: p.poison && this.canKillTonight(),
     });
+  }
+
+  /** Nobody kills by a power on the first night: the witch only revives, the dragon waits. */
+  private canKillTonight() {
+    return this.state.dayNumber > 1;
   }
 
   /** Awake in the witch/seer step and still to act. */
@@ -1400,7 +1434,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.detectiveKnown.push(check);
     client.send("detective_result", check);
     this.logEvent("detective_saw", { a: this.nameOf(a), b: this.nameOf(b), same }, id);
-    if (this.state.talkingDetective) this.logEvent("detective_public", { same }); // the verdict, not who
+    if (this.state.talkingDetective) this.detectiveNews.push(same); // told at dawn, under the day's title
     this.awake.delete(id);
     this.maybeEndWitchSeer();
   }
@@ -1423,7 +1457,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private handleWitchPoison(client: Client, msg: { targetId: string }) {
     const id = this.witchActor(client);
     const p = id && this.potions.get(id);
-    if (!id || !p || !p.poison || !this.isAlive(msg?.targetId)) return; // she may poison herself
+    if (!id || !p || !p.poison || !this.canKillTonight() || !this.isAlive(msg?.targetId)) return; // she may poison herself
     p.poison = false;
     this.poisons.set(id, msg.targetId);
     this.finishWitchIfNothingLeft(id);
@@ -1439,7 +1473,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private finishWitchIfNothingLeft(id: string) {
     const p = this.potions.get(id)!;
     const canStillRevive = p.revive && !this.reviving && this.wolfVictim !== null;
-    if (!canStillRevive && !p.poison) this.awake.delete(id);
+    if (!canStillRevive && !(p.poison && this.canKillTonight())) this.awake.delete(id);
     this.maybeEndWitchSeer();
   }
 
@@ -1472,10 +1506,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // The log reads: "Day N", "the village wakes up", then one line per death (who killed whom).
     this.logEvent("day", { day: this.state.dayNumber });
     this.logEvent("village_wakes", { deaths: deaths.size });
-    if (this.reviving) this.logEvent("witch_saved");
+    for (const same of this.detectiveNews) this.logEvent("detective_public", { same }); // the verdict, not who
+    // The narrator tells what the night hid (without him it all stays secret): the witch's save, an attack that
+    // came to nothing (a protected player, Red Hood, the ancient), an infection. Never who.
+    const told = this.state.narrator;
+    if (told && this.reviving) this.logEvent("witch_saved");
+    if (told) for (const what of this.nightNews) this.logEvent("narrator", { what });
     for (const [id, cause] of deaths) this.kill(id, cause);
     this.morningNews();
-    this.broadcast("night_result", { deaths: [...deaths.keys()], saved: this.reviving });
+    this.broadcast("night_result", { deaths: [...deaths.keys()], saved: told && this.reviving });
     if (this.endGameIfOver()) return;
     this.afterDeaths(() => this.startDay());
   }
@@ -1554,7 +1593,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    */
   private startHunterShot(hunterId: string, next: () => void): void {
     const prey = [...this.state.players.keys()].filter((id) => this.isAlive(id) && id !== hunterId);
-    if (!prey.length) return this.afterDeaths(next);
+    if (!prey.length) {
+      this.fallen(hunterId);
+      return this.afterDeaths(next);
+    }
     this.afterShot = next;
     this.state.phase = "hunter";
     this.state.shooterId = hunterId;
@@ -1575,8 +1617,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.endHunterShot();
   }
 
+  /** The hunter's shot is over (or never came): he lies with the dead now. */
+  private fallen(hunterId: string) {
+    const hunter = this.state.players.get(hunterId);
+    if (hunter) hunter.aiming = false;
+  }
+
   private endHunterShot() {
     const target = this.state.shooterAim;
+    this.fallen(this.state.shooterId);
     this.state.shooterAim = "";
     this.state.shooterId = "";
     if (target && this.isAlive(target)) {
@@ -1969,7 +2018,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.logEvent("death", { name: player.name, role: player.revealedRole, cause, infected });
     }
     if (inPlay) this.revealsPending++;
-    if (shooter) this.pendingShooters.push(sessionId);
+    if (shooter) {
+      this.pendingShooters.push(sessionId);
+      player.aiming = true; // still standing in the apps, until his shot
+    }
     if (this.state.mayorId === sessionId) {
       this.state.mayorId = "";
       this.pendingSuccession = sessionId;
@@ -2132,7 +2184,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.shooterId = "";
     this.state.shooterAim = "";
     this.phaseTimer?.clear();
-    for (const [id, player] of this.state.players) player.revealedRole = this.roles.get(id) ?? "";
+    for (const [id, player] of this.state.players) {
+      player.revealedRole = this.roles.get(id) ?? "";
+      player.aiming = false;
+    }
     this.broadcast("game_over", { winner, reason: winner ? "win" : "expired" });
     this.logEvent("game_over", { winner, reason: winner ? "win" : "expired" });
     if (winner) this.awardResults(winner); // an expired room counts for nobody
