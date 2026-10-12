@@ -67,8 +67,10 @@ describe("LudoRoom", () => {
       const host = await colyseus.connectTo(room);
       host.onMessage("ludo", () => {});
       host.onMessage("ludo_fx", () => {});
-      for (let i = 0; i < (teams ? 3 : 2); i++) host.send("add_bot", { level: ["easy", "normal", "hard"][i] });
+      // (An older app still names a level: every bot plays its best all the same.)
+      for (let i = 0; i < (teams ? 3 : 2); i++) host.send("add_bot", i ? { level: "easy" } : undefined);
       await new Promise((r) => setTimeout(r, 200));
+      assert.deepStrictEqual(room.seats.map((s: any) => s.bot), teams ? [null, "hard", "hard", "hard"] : [null, "hard", "hard"]);
       host.send("start_game");
       while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
       assert.deepStrictEqual(room.seats.map((s: any) => s.color), teams ? [0, 1, 2, 3] : [0, 1, 2]);

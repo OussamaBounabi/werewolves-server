@@ -26,7 +26,7 @@ type Seat = {
   avatar: number;
   frame: number; // the animated frame he wears, 0 none
   connected: boolean;
-  bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
+  bot: BotLevel | null; // a bot, or a player who left mid-game and is replaced by one
   auto: boolean; // "auto play": the bot plays for him
   color: number;
   pawns: number[];
@@ -38,7 +38,7 @@ const ROOM_TYPES = ["public", "friends", "private"];
 const TURN_OPTIONS = [10, 15, 20, 30];
 const CAPTURE_OPTIONS = ["auto", "ask"];
 const PAWN_OPTIONS = [2, 4];
-const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
+const BOT: BotLevel = "hard"; // every bot plays its best: there is no level to pick
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
 const LANDED_MS = 250; // the die has stopped: its number shows a moment
 const HOP_MS = 160; // a pawn's hop from square to square
@@ -92,7 +92,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     on<Settings>("settings", (c, m) => {
       if (this.phase === "lobby" && this.idOf(c) === this.hostId) this.applySettings(m);
     });
-    on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
+    on("add_bot", (c) => this.handleAddBot(c));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("start_game", (c) => this.handleStart(c));
@@ -265,7 +265,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     this.updateListing();
   }
 
-  private handleAddBot(client: Client, level: string) {
+  private handleAddBot(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
@@ -277,7 +277,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       avatar: 0,
       frame: 0,
       connected: true,
-      bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
+      bot: BOT,
       auto: false,
       color: 0,
       pawns: [],
@@ -324,7 +324,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private becomeBot(id: string) {
     const seat = this.seat(id);
     if (!seat || seat.bot) return;
-    seat.bot = "normal";
+    seat.bot = BOT;
     seat.connected = true;
     if (this.turn === id && this.phase === "playing" && this.step !== "wait") this.botAct(id, 300);
   }
@@ -484,12 +484,12 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     }
   }
 
-  /** Out of time: the roll is made for him, or the move a normal bot would make. */
+  /** Out of time: the roll is made for him, or the move a bot would make. */
   private timeOut() {
     if (this.phase !== "playing") return;
     const id = this.turn;
     if (this.step === "roll") this.handleRoll(id);
-    else if (this.step === "move") this.handleMove(id, this.pick(id, "normal"), true);
+    else if (this.step === "move") this.handleMove(id, this.pick(id, BOT), true);
   }
 
   private pick(id: string, level: BotLevel) {
