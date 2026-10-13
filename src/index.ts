@@ -11,18 +11,11 @@ import { listen } from "@colyseus/tools";
 
 // Import Colyseus config
 import app from "./app.config.js";
-import { accountsEnabled, legacyGuardLoaded, resetPresence, watchNewPlayers } from "./accounts.js";
+import { resetPresence, watchNewPlayers } from "./accounts.js";
 
 // Nobody is connected yet: nobody is online or in a room (a crash may have left some marked). 10 s at most.
 await Promise.race([resetPresence(), new Promise((done) => setTimeout(done, 10_000).unref())])
   .catch((e) => console.error("resetting presence failed", e));
-
-// Without PocketBase's hook, the legacy login refuses everyone (503): say so now, not at the first login.
-if (accountsEnabled) {
-  legacyGuardLoaded()
-    .then((loaded) => loaded || console.error("PocketBase runs without pocketbase/pb_hooks (--hooksDir): the legacy login is off until it does (README)"))
-    .catch(() => {}); // (PocketBase unreachable: the first legacy login checks again)
-}
 
 // Create and listen on 2567 (or PORT environment variable.)
 listen(app);

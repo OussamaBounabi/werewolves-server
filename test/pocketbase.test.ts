@@ -102,8 +102,8 @@ describe("PocketBase", function () {
       for (const extra of [{ coins: 5 }, { xp: 1 }, { vip: true }, { avatars: [601] }, { welcomeGift: true }, { room: "R" }, { avatar: 601 }, { id: "Chosen0000000000001" }]) {
         await refused(signUp({ username: `x_${++seq}`, name: "Xavier", ...extra }));
       }
-      const sneaky = await signUp({ username: `x_${++seq}`, name: "Xavier", legacyAuth: true }); // hidden: ignored
-      assert.strictEqual((await user(sneaky.id)).legacyAuth, false);
+      const sneaky = await signUp({ username: `x_${++seq}`, name: "Xavier", legacyKey: "copy" }); // hidden: ignored
+      assert.strictEqual((await user(sneaky.id)).legacyKey, "");
       await assert.rejects(signUp({ username: "alice_1", name: "Another" }), (e: any) => e.response.data.username.code === "validation_not_unique");
       await refused(signUp({ username: "Bad Name", name: "Bad" }));
       await refused(signUp({ username: "ab", name: "Short" }));
@@ -503,7 +503,7 @@ describe("PocketBase", function () {
       assert.strictEqual((await post("/api/auth/legacy-login", {})).status, 400);
       // No FIREBASE_WEB_API_KEY here: an account still waiting for its password can't move.
       const waiting = { email: `w_${++seq}@test.local` }; // copied from Firebase, still waiting for his password
-      await admin.collection("users").create({ email: waiting.email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true });
+      await admin.collection("users").create({ email: waiting.email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" });
       delete process.env.FIREBASE_WEB_API_KEY;
       assert.strictEqual((await post("/api/auth/legacy-login", { email: waiting.email, password: "whatever" })).status, 503);
       assert.strictEqual((await post("/api/auth/legacy-login", { email: p.email, password: "whatever" })).status, 409); // has his own
@@ -573,15 +573,15 @@ describe("PocketBase", function () {
       const problems = await importFirebase(admin, exported(), { voice, log: quiet });
       const anna = await user(A);
       assert.deepStrictEqual(
-        [anna.email, anna.username, anna.name, anna.avatars, anna.coins, anna.vip, anna.room, anna.welcomeGift, anna.legacyAuth, anna.verified],
+        [anna.email, anna.username, anna.name, anna.avatars, anna.coins, anna.vip, anna.room, anna.welcomeGift, /^[A-Za-z0-9]{50}$/.test(anna.legacyKey), anna.verified],
         ["anna@example.com", "anna", "Anna", [101, 601], 3400, true, "", true, true, false],
       );
       assert.deepStrictEqual([anna.createdAt, anna.nameChangedAt], [t(0).toISOString().replace("T", " "), t(5).toISOString().replace("T", " ")]);
       const gus = await user(G);
-      assert.deepStrictEqual([gus.name, gus.coins, gus.legacyAuth, gus.verified], ["gus", 0, false, true]); // his name didn't fit
+      assert.deepStrictEqual([gus.name, gus.coins, gus.legacyKey, gus.verified], ["gus", 0, "", true]); // his name didn't fit
       assert.strictEqual(gus.nameChangedAt, ""); // so he may pick another at once
       const nora = await user(N);
-      assert.deepStrictEqual([nora.username, nora.legacyAuth, nora.welcomeGift], ["", true, true]);
+      assert.deepStrictEqual([nora.username, !!nora.legacyKey, nora.welcomeGift], ["", true, true]);
       const link = await admin.collection("_externalAuths").getFirstListItem(`recordRef = "${G}"`);
       assert.deepStrictEqual([link.provider, link.providerId], ["google", "100000000000000000001"]);
       const info = await admin.collection("private_info").getOne(A);
@@ -666,11 +666,10 @@ describe("PocketBase", function () {
         const copied = "UnverifiedFirebaseUid0000010";
         await admin.collection("users").create({
           id: copied, email: "unverified.copy@gmail.com", password: "copy-random-1", passwordConfirm: "copy-random-1",
-          legacyAuth: true, verified: false, welcomeGift: true, username: "unverified_copy", name: "Unverified",
+          legacyKey: "copy", verified: false, welcomeGift: true, username: "unverified_copy", name: "Unverified",
         });
         const linked = await signIn("unverified");
         assert.deepStrictEqual([linked.record.id, linked.record.verified], [copied, true]);
-        assert.strictEqual((await user(copied)).legacyAuth, false);
         const firebase = async (email: string, password: string) => (password === "old-firebase-pass" ? copied : null);
         await assert.rejects(legacyLogin("unverified.copy@gmail.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
       } finally {
@@ -713,21 +712,20 @@ describe("PocketBase", function () {
         });
         // Three copied e-mail players whose Firebase password is "old-firebase-pass".
         const [R, S, K] = ["ResetFirebaseUid000000000007", "SetFirebaseUid00000000000008", "KeptFirebaseUid0000000000009"];
-        let asked = 0;
-        const firebase = async (email: string, password: string) => {
-          asked++;
-          return password === "old-firebase-pass" ? { "reset@example.com": R, "admin@example.com": S, "kept@example.com": K }[email] ?? null : null;
-        };
+        const firebase = async (email: string, password: string) =>
+          password === "old-firebase-pass" ? { "reset@example.com": R, "admin@example.com": S, "kept@example.com": K }[email] ?? null : null;
         for (const [id, email] of [[R, "reset@example.com"], [S, "admin@example.com"], [K, "kept@example.com"]]) {
           await admin.collection("users").create({
-            id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true, welcomeGift: true,
+            id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy", welcomeGift: true,
             username: `u${id.slice(0, 12).toLowerCase()}`, name: id.slice(0, 12),
           });
         }
         // What the game server writes doesn't end the move.
+        const keyK = (await user(K)).legacyKey;
         await accounts.recordResults([result(K, true)]);
         await accounts.savePresence(K, { state: "in_game", game: "ludo", room: "R1" });
-        assert.strictEqual((await user(K)).legacyAuth, true);
+        assert.strictEqual((await user(K)).legacyKey, keyK);
+        const staleR = (await user(R)).legacyKey; // (what a dashboard form opened now would hold)
         // He forgot his password and reset it by e-mail.
         await new PocketBase(URL_).collection("users").requestPasswordReset("reset@example.com");
         for (let i = 0; i < 50 && !mails.length; i++) await new Promise((r) => setTimeout(r, 100));
@@ -735,70 +733,87 @@ describe("PocketBase", function () {
         const token = mail.match(/confirm-password-reset\/([\w-]+\.[\w-]+\.[\w-]+)/)?.[1];
         assert.ok(token, "the reset e-mail has its link");
         await new PocketBase(URL_).collection("users").confirmPasswordReset(token!, "brand-new-pass", "brand-new-pass");
-        assert.strictEqual((await user(R)).legacyAuth, false);
-        asked = 0;
         await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-        assert.strictEqual(asked, 0); // Firebase isn't even asked
         const login = (email: string, password: string) => new PocketBase(URL_).collection("users").authWithPassword(email, password);
         assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
         await refused(login("reset@example.com", "old-firebase-pass"));
         // A superuser set it (the dashboard): the same.
         await admin.collection("users").update(S, { password: "set-by-admin-1", passwordConfirm: "set-by-admin-1" });
-        assert.strictEqual((await user(S)).legacyAuth, false);
         await assert.rejects(legacyLogin("admin@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
         await login("admin@example.com", "set-by-admin-1");
         // The legacy login's own write is checked inside the write too (a reset a moment before it can't slip
         // in between): the Firebase password for an account no longer waiting for it is refused.
-        assert.strictEqual(await accounts.giveFirebasePassword(R, "reset@example.com", "old-firebase-pass"), false);
+        assert.strictEqual(await accounts.giveFirebasePassword(R, "reset@example.com", "old-firebase-pass"), "already moved");
         assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
-        // A dashboard form saved with stale values (legacyAuth still true in it) can't bring the move back.
-        await assert.rejects(admin.collection("users").update(R, { legacyAuth: true, vip: true }), (e: any) => /already moved/i.test(JSON.stringify(e.response)));
-        assert.deepStrictEqual([(await user(R)).legacyAuth, (await user(R)).vip], [false, false]);
+        // A dashboard form saved with stale values (his old legacyKey in it) doesn't bring the move back.
+        await admin.collection("users").update(R, { legacyKey: staleR, vip: true });
+        await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
+        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
+        // Nobody else sets it: "copy" is for new accounts only.
+        await assert.rejects(admin.collection("users").update(S, { legacyKey: "copy" }));
         // Untouched: he still moves.
         await legacyLogin("kept@example.com", "old-firebase-pass", firebase);
         assert.strictEqual((await login("kept@example.com", "old-firebase-pass")).record.id, K);
-        assert.strictEqual((await user(K)).legacyAuth, false);
+        assert.strictEqual((await user(K)).legacyKey, "");
       } finally {
         smtp.close();
       }
     });
 
-    it("refuses every legacy login when PocketBase runs without its hook (--hooksDir), and says so", async () => {
+    it("fails closed when PocketBase runs without its hook (--hooksDir), and a reset made meanwhile still counts", async () => {
+      // A PocketBase of its own, started with the hook, without it, then with it again (same data).
       const other = mkdtempSync(join(tmpdir(), "pb-nohooks-"));
+      const OTHER = "http://127.0.0.1:8096";
       execFileSync(BIN!, ["migrate", "up", "--dir", other, "--migrationsDir", MIGRATIONS], { stdio: "ignore" });
       execFileSync(BIN!, ["superuser", "upsert", SUPERUSER.email, SUPERUSER.password, "--dir", other], { stdio: "ignore" });
-      const bare = spawn(BIN!, ["serve", "--http", "127.0.0.1:8096", "--dir", other, "--migrationsDir", MIGRATIONS, "--automigrate=false"], { stdio: "ignore" });
-      const errors: unknown[] = [];
-      const consoleError = console.error;
-      try {
-        for (let i = 0; i < 100 && !(await fetch("http://127.0.0.1:8096/api/health").then((r) => r.ok, () => false)); i++) {
+      let pb: ChildProcess | undefined;
+      const start = async (hooks: boolean) => {
+        pb = spawn(BIN!, [
+          "serve", "--http", "127.0.0.1:8096", "--dir", other, "--migrationsDir", MIGRATIONS, "--automigrate=false",
+          "--hooksDir", hooks ? HOOKS : join(other, "no-hooks"), "--hooksWatch=false",
+        ], { stdio: "ignore" });
+        for (let i = 0; i < 100 && !(await fetch(`${OTHER}/api/health`).then((r) => r.ok, () => false)); i++) {
           await new Promise((r) => setTimeout(r, 100));
         }
-        accounts.connectAccounts("http://127.0.0.1:8096", SUPERUSER.email, SUPERUSER.password);
-        const bareAdmin = new PocketBase("http://127.0.0.1:8096");
-        await bareAdmin.collection("_superusers").authWithPassword(SUPERUSER.email, SUPERUSER.password);
-        const W = "WaitingFirebaseUid0000000011";
-        await bareAdmin.collection("users").create({ id: W, email: "waiting@example.com", password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true });
-        assert.strictEqual(await accounts.legacyGuardLoaded(), false);
-        assert.strictEqual((await bareAdmin.collection("users").getOne(W)).legacyAuth, true); // (the check changed nothing)
-        let asked = 0;
+      };
+      const stop = () => new Promise((done) => (pb!.once("exit", done), pb!.kill()));
+      const errors: unknown[] = [];
+      const consoleError = console.error;
+      const [W, V] = ["WaitingFirebaseUid0000000011", "ResetMeanwhileUid00000000012"];
+      const firebase = async (email: string, password: string) =>
+        password === "old-firebase-pass" ? { "waiting@example.com": W, "meanwhile@example.com": V }[email] ?? null : null;
+      const login = (email: string, password: string) => new PocketBase(OTHER).collection("users").authWithPassword(email, password);
+      try {
+        await start(true);
+        accounts.connectAccounts(OTHER, SUPERUSER.email, SUPERUSER.password);
+        const otherAdmin = new PocketBase(OTHER);
+        await otherAdmin.collection("_superusers").authWithPassword(SUPERUSER.email, SUPERUSER.password);
+        for (const [id, email] of [[W, "waiting@example.com"], [V, "meanwhile@example.com"]]) {
+          await otherAdmin.collection("users").create({ id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" });
+        }
+        await stop();
+        await start(false); // the hook forgotten
+        // The copy can't make waiting accounts, and the legacy login writes nothing (503, and says why).
+        await assert.rejects(otherAdmin.collection("users").create({ email: "late@example.com", password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" }));
         console.error = (...args: unknown[]) => void errors.push(args);
-        await assert.rejects(
-          legacyLogin("waiting@example.com", "old-firebase-pass", async () => (asked++, W)),
-          (e: any) => e instanceof LegacyLoginError && e.status === 503,
-        );
-        assert.strictEqual(asked, 0);
+        await assert.rejects(legacyLogin("waiting@example.com", "old-firebase-pass", firebase), (e: any) => e instanceof LegacyLoginError && e.status === 503);
+        console.error = consoleError;
         assert.ok(errors.some((e) => String(e).includes("pb_hooks")), "it says why");
-        // Even so, the move's own write would leave legacyAuth false.
-        assert.strictEqual(await accounts.giveFirebasePassword(W, "waiting@example.com", "old-firebase-pass"), true);
-        assert.strictEqual((await bareAdmin.collection("users").getOne(W)).legacyAuth, false);
+        assert.strictEqual((await login("waiting@example.com", "copy-random-1")).record.id, W); // nothing written
+        // Meanwhile, a player resets his password (here: a superuser sets it).
+        await otherAdmin.collection("users").update(V, { password: "set-meanwhile-1", passwordConfirm: "set-meanwhile-1" });
+        await stop();
+        await start(true); // the hook back
+        await assert.rejects(legacyLogin("meanwhile@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
+        assert.strictEqual((await login("meanwhile@example.com", "set-meanwhile-1")).record.id, V);
+        await legacyLogin("waiting@example.com", "old-firebase-pass", firebase); // untouched: he moves
+        assert.strictEqual((await login("waiting@example.com", "old-firebase-pass")).record.id, W);
       } finally {
         console.error = consoleError;
         accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password);
-        bare.kill();
+        if (pb) await stop();
         rmSync(other, { recursive: true, force: true });
       }
-      assert.strictEqual(await accounts.legacyGuardLoaded(), true); // back on the PocketBase with its hook
     });
 
     it("moves an e-mail player's password from Firebase at his first login, once", async () => {
@@ -819,7 +834,7 @@ describe("PocketBase", function () {
       const { record, token } = await login("anna@example.com", "hunter2");
       assert.strictEqual(record.id, A);
       assert.strictEqual((await accounts.accountFor(token)).name, "Anna");
-      assert.strictEqual((await user(A)).legacyAuth, false);
+      assert.strictEqual((await user(A)).legacyKey, "");
       // Moved: never again, and Firebase isn't even asked.
       asked = 0;
       await assert.rejects(legacyLogin("anna@example.com", "hunter2", firebase), (e: any) => e.status === 409);

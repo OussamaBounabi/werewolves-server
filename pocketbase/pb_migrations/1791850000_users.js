@@ -13,7 +13,7 @@
 /** Written by the game server only (or chosen through it): a player may never set them himself. */
 const SERVER_FIELDS = [
   "nameChangedAt", "frame", "avatars", "frames", "xp", "coins", "diamonds", "rankPoints", "stats",
-  "room", "vip", "welcomeGift", "createdAt", "legacyAuth",
+  "room", "vip", "welcomeGift", "createdAt", "legacyKey",
 ];
 /** Set once at sign-up, then only through the game server. */
 const PROFILE_FIELDS = ["username", "name", "avatar"];
@@ -54,7 +54,10 @@ migrate((app) => {
     new BoolField({ name: "vip" }),
     new BoolField({ name: "welcomeGift" }),
     new DateField({ name: "createdAt" }),
-    new BoolField({ name: "legacyAuth", hidden: true }),
+    // A copied e-mail player still waiting for his Firebase password: his login key as it was when copied
+    // (pocketbase/pb_hooks/legacy_auth.pb.js). Only the hook fills it, from "copy" and "move", which the
+    // pattern refuses: without the hook, the copy and the legacy login fail instead of going ahead.
+    new TextField({ name: "legacyKey", hidden: true, max: 60, pattern: "^[A-Za-z0-9]{30,60}$" }),
   );
   // Unique usernames; a Google player has none until he picks it.
   users.addIndex("idx_users_username", true, "username", "username != ''");

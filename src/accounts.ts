@@ -24,7 +24,6 @@ export function connectAccounts(url: string, email: string, password: string) {
   pb.autoCancellation(false); // the server sends the same request for many players at once
   superuser = { email, password };
   signingIn = null;
-  guardCheckedAt = 0;
   accountsEnabled = true;
 }
 
@@ -493,81 +492,73 @@ export async function isFriendOfAny(uid: string, others: string[]): Promise<bool
   return items.length > 0;
 }
 
-/** For the legacy login: the account with this e-mail, and whether its password still has to come from Firebase. */
-export async function accountByEmail(email: string): Promise<{ id: string; legacyAuth: boolean } | null> {
+/**
+ * For the legacy login: the account with this e-mail, and whether it may still be waiting for its
+ * Firebase password (PocketBase's hook has the last word, when the password is written).
+ */
+export async function accountByEmail(email: string): Promise<{ id: string; waiting: boolean } | null> {
   const client = await db();
   const user = await maybe(client.collection("users").getFirstListItem(client.filter("email = {:email}", { email })));
-  return user && { id: user.id, legacyAuth: user.legacyAuth === true };
+  return user && { id: user.id, waiting: !!user.legacyKey };
 }
+
+/**
+ * How giving a Firebase password went: "moved"; "already moved" (moved before, or its password changed in
+ * PocketBase since the copy); "bad password" (PocketBase refuses that password, e.g. over 71 characters);
+ * "no hook" (PocketBase runs without pocketbase/pb_hooks, so nothing was written).
+ */
+export type MoveResult = "moved" | "already moved" | "bad password" | "no hook";
 
 /**
  * For the legacy login: gives a Firebase player's account (his Firebase uid) the password he just proved
- * with Firebase, once. False if it already has its own (moved already, or its password was reset or
- * changed in PocketBase). No account yet (he signed up after the copy): one is made, empty, for him to set up.
+ * with Firebase, once. No account yet (he signed up after the copy): one is made, empty, for him to set up.
  */
-export async function moveFromFirebase(uid: string, email: string, password: string): Promise<boolean> {
+export async function moveFromFirebase(uid: string, email: string, password: string): Promise<MoveResult> {
   return forPlayer(uid, async () => {
     const client = await db();
     const user = await maybe(client.collection("users").getOne(uid));
-    if (user && !user.legacyAuth) return false;
+    if (user && !user.legacyKey) return "already moved";
     if (user) return giveFirebasePassword(uid, email, password);
     const createdAt = new Date().toISOString();
     const batch = client.createBatch();
-    batch.collection("users").create({ id: uid, email, password, passwordConfirm: password, legacyAuth: false, welcomeGift: true, createdAt }); // a Firebase player had his gift
+    batch.collection("users").create({ id: uid, email, password, passwordConfirm: password, welcomeGift: true, createdAt }); // a Firebase player had his gift
     batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
-    await batch.send();
-    return true;
+    try {
+      await batch.send();
+    } catch (e) {
+      if (refusal(e)?.data?.password) return "bad password";
+      throw e;
+    }
+    return "moved";
   });
 }
 
-const alreadyMoved = (e: unknown) => e instanceof ClientResponseError && /already moved/i.test(JSON.stringify(e.response)); // (PocketBase words it "Already moved.")
-
-/**
- * The write of the legacy login, on its own for the tests: an account still waiting for its Firebase
- * password gets it. False if, by the time of writing, it no longer waits (a reset may have just
- * happened): PocketBase's hook (pocketbase/pb_hooks/legacy_auth.pb.js) checks that inside the write.
- */
-export async function giveFirebasePassword(uid: string, email: string, password: string): Promise<boolean> {
-  const client = await db();
-  const batch = client.createBatch(); // a batch reads the account inside the write transaction
-  // legacyAuth: true = "the password from Firebase": the hook takes it only from an account still
-  // waiting for it, and stores false. The second write stores false even if the hook were missing.
-  batch.collection("users").update(uid, { email, password, passwordConfirm: password, legacyAuth: true });
-  batch.collection("users").update(uid, { legacyAuth: false });
-  try {
-    await batch.send();
-    return true;
-  } catch (e) {
-    if (alreadyMoved(e)) return false;
-    throw e;
-  }
+/** What PocketBase answered to the failed request of a batch (it wraps it in a "Batch transaction failed."). */
+function refusal(e: unknown): { message?: string; data?: Record<string, unknown> } | undefined {
+  if (!(e instanceof ClientResponseError)) return undefined;
+  const requests = e.response?.data?.requests as Record<string, { response?: object }> | undefined;
+  return (requests && Object.values(requests)[0]?.response) ?? e.response;
 }
 
-let guardCheckedAt = 0;
-const GUARD_CHECK_EVERY_MS = 10 * 60_000;
-
 /**
- * Whether PocketBase runs with its hook (pocketbase/pb_hooks): without it, nothing ends a copied player's
- * move when his password is reset, so the legacy login must not run. The check: on any account, set
- * legacyAuth to the other value and back, in one batch. The hook refuses the step from false to true and
- * nothing changes; without the hook both steps pass, and the account ends as it was. Checked again every
- * 10 minutes.
+ * The legacy login's write, on its own for the tests: an account still waiting for its Firebase password
+ * gets it. PocketBase's hook (pocketbase/pb_hooks/legacy_auth.pb.js) decides, inside the write, whether it
+ * still waits: legacyKey = "move" goes through only while the account's login key hasn't changed since
+ * the copy, i.e. its password hasn't been reset or changed (by any path) since. A batch request, so that
+ * PocketBase reads the account inside the write transaction: a reset a moment earlier counts.
  */
-export async function legacyGuardLoaded(): Promise<boolean> {
-  if (Date.now() - guardCheckedAt < GUARD_CHECK_EVERY_MS) return true;
+export async function giveFirebasePassword(uid: string, email: string, password: string): Promise<MoveResult> {
   const client = await db();
-  const { items } = await client.collection("users").getList(1, 1, { fields: "id,legacyAuth", skipTotal: true });
-  if (!items.length) return true; // no player: nobody to protect
-  const { id, legacyAuth } = items[0];
   const batch = client.createBatch();
-  batch.collection("users").update(id, { legacyAuth: !legacyAuth });
-  batch.collection("users").update(id, { legacyAuth });
+  batch.collection("users").update(uid, { email, password, passwordConfirm: password, legacyKey: "move" });
   try {
     await batch.send();
-    return false; // both passed: no hook
+    return "moved";
   } catch (e) {
-    if (!alreadyMoved(e)) throw e;
-    guardCheckedAt = Date.now();
-    return true;
+    const answer = refusal(e);
+    if (/already moved/i.test(String(answer?.message ?? ""))) return "already moved"; // (worded "Already moved.")
+    if (answer?.data?.legacyKey) return "no hook"; // "move" left as it was: the pattern refused it
+    if (answer?.data?.password) return "bad password";
+    throw e;
   }
 }

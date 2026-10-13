@@ -8,7 +8,8 @@ import type PocketBase from "pocketbase";
  * carries on.
  *
  * - Every Firebase Auth account becomes a PocketBase account with the same id (his uid), his profile, and a
- *   random password: an e-mail player gets his own back at his first login (legacyAuth, src/legacyLogin.ts);
+ *   random password: an e-mail player gets his own back at his first login (src/legacyLogin.ts; his
+ *   account is created with legacyKey "copy", which PocketBase's hook turns into his login key);
  *   a Google player is linked to his Google account (_externalAuths), so signing in with Google finds it.
  * - Every migrated account counts as having had its welcome gift.
  * - Firestore's dates are kept in firebaseAt (or createdAt…). Messages and read markers are written in
@@ -169,7 +170,7 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       verified: u.emailVerified || !!u.googleId,
       password,
       passwordConfirm: password,
-      legacyAuth: u.password, // his Firebase password comes at his first login
+      ...(u.password ? { legacyKey: "copy" } : {}), // his Firebase password comes at his first login
       username,
       name,
       nameChangedAt,
@@ -395,6 +396,9 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
   }
   const chatsWithMessages = new Set(data.messages.map((m) => m.chatId));
   report.log(`chats: ${data.chats.length} conversations, ${chatsWithMessages.size} with messages (rebuilt by the conversations view)`);
+  if (report.problems.some((p) => p.includes('"legacyKey"'))) {
+    report.problem("PocketBase seems to run without pocketbase/pb_hooks (--hooksDir): e-mail accounts can't be copied without it. Restart it with the hook and run the copy again.");
+  }
   report.print(dry);
   return report.problems;
 }

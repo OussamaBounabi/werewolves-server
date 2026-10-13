@@ -13,9 +13,10 @@ The collections and their access rules are the migration files in [`pb_migration
 PocketBase applies them when it starts. To change a collection, add a new migration file here.
 
 There is one hook, [`pb_hooks/legacy_auth.pb.js`](pb_hooks/legacy_auth.pb.js), and it holds no game
-logic. When a copied player's password changes in PocketBase in any way, it ends his move from Firebase
-(`legacyAuth`, below). PocketBase must run with `--hooksDir` pointing at that folder. Without the hook,
-the game server refuses every legacy login (503) and logs why.
+logic. It lets a copied player bring his Firebase password only while his PocketBase password is still
+the one the copy gave him (`legacyKey`, below). PocketBase must run with `--hooksDir` pointing at that
+folder. Without the hook nothing goes through: the copy can't create e-mail accounts, and every legacy
+login answers 503 and is logged.
 
 **Who writes what.** The apps write directly only what a player may change himself: signing up, his
 password, friend requests and friendships, messages, read markers and reports. Everything that touches
@@ -75,7 +76,7 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `vip` | bool | a VIP werewolf host picks his own role |
 | `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of sign-up |
 | `createdAt` | date | when the account was made (Firebase's date for copied players) |
-| `legacyAuth` | bool, hidden | the player still has to bring his password from Firebase (see Log in). Cleared when he does. The hook also clears it as soon as his PocketBase password changes in any way: reset by e-mail, changed by him, set by a superuser, or replaced by PocketBase itself when a Google sign-in links his unverified account. Once false it never goes back to true, not even from the dashboard. From then on the legacy login refuses him, so his old Firebase password can never replace a newer one. |
+| `legacyKey` | text, hidden | set on a copied e-mail player still waiting for his Firebase password (see Log in): his login key as the copy left it. PocketBase gives an account a new login key whenever its password or e-mail changes, by any path, hook or not: a reset by e-mail, a change by the player, a superuser, or PocketBase itself when a Google sign-in links his unverified account. The legacy login writes only while `legacyKey` still matches, so his old Firebase password can never replace a newer one. Emptied when he moves. Only the hook fills it; don't edit it. |
 | `created`, `updated` | autodate | |
 
 Rules:
@@ -246,7 +247,8 @@ then `authWithPassword(email, password)`. If the username is taken, the error is
 |---|---|---|
 | 200 | his password is now on PocketBase | `authWithPassword` again |
 | 401 | wrong e-mail or password | show it |
-| 409 | nothing to move (already moved, password reset or changed in PocketBase, or a Google account) | show the usual wrong-password message |
+| 409 | nothing to move (already moved, password or e-mail changed in PocketBase since the copy, or a Google account) | show the usual wrong-password message |
+| 422 | PocketBase doesn't accept that password (over 71 characters) | ask him to reset it ("Forgot password") |
 | 429 | too many tries | ask to wait 15 minutes |
 | 503 | the server can't move passwords right now (a setup problem on our side) | show a generic error, try again later |
 

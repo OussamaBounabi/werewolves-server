@@ -1,15 +1,16 @@
-import { ClientResponseError } from "pocketbase";
-import { accountByEmail, legacyGuardLoaded, moveFromFirebase } from "./accounts.js";
+import { accountByEmail, moveFromFirebase } from "./accounts.js";
 
 /**
  * E-mail players moving from Firebase, at their first login on the new app. Firebase never gives out
  * passwords, so when PocketBase refuses his login the app sends his e-mail and password here once (POST
  * /api/auth/legacy-login, over HTTPS): Firebase Auth checks them, and his account (copied by
  * scripts/migrate-from-firebase.ts under his Firebase uid) gets that password; the app then logs in to
- * PocketBase as usual. Once an account has a password of its own (brought from Firebase, or reset
- * or changed in PocketBase: pocketbase/pb_hooks/legacy_auth.pb.js), it's never touched here again.
- * Needs FIREBASE_WEB_API_KEY (.env): the Firebase project's Web API key. Delete this file and its route
- * once everyone has moved.
+ * PocketBase as usual. Once an account has a password of its own (brought from Firebase, or reset or
+ * changed in PocketBase since the copy), it's never touched here again: PocketBase's hook
+ * (pocketbase/pb_hooks/legacy_auth.pb.js) checks that inside the write.
+ * Needs FIREBASE_WEB_API_KEY (.env): the Firebase project's Web API key. Once everyone has moved, delete
+ * this file and its route, giveFirebasePassword and moveFromFirebase in accounts.ts, the hook (and
+ * PocketBase's --hooksDir), and FIREBASE_WEB_API_KEY.
  */
 export class LegacyLoginError extends Error {
   constructor(message: string, readonly status: 400 | 401 | 409 | 422 | 429 | 502 | 503) {
@@ -60,23 +61,18 @@ export async function legacyLogin(emailIn: unknown, passwordIn: unknown, check: 
   const password = String(passwordIn ?? "");
   if (!email.includes("@") || !password || password.length > 4096) throw new LegacyLoginError("missing e-mail or password", 400);
   countTry(email);
-  if (!(await legacyGuardLoaded())) {
-    console.error("legacy login refused: PocketBase runs without pocketbase/pb_hooks (--hooksDir); see README");
-    throw new LegacyLoginError("not configured", 503);
-  }
   const account = await accountByEmail(email);
-  if (account && !account.legacyAuth) throw new LegacyLoginError("already moved", 409); // Firebase isn't asked
+  if (account && !account.waiting) throw new LegacyLoginError("already moved", 409); // Firebase isn't asked
   const uid = await check(email, password);
   if (!uid) throw new LegacyLoginError("wrong e-mail or password", 401);
   if (account && account.id !== uid) throw new LegacyLoginError("another account has this e-mail", 409);
-  let moved: boolean;
-  try {
-    moved = await moveFromFirebase(uid, email, password);
-  } catch (e) {
-    // PocketBase refused the password itself (longer than 71 characters): he resets it by e-mail.
-    if (e instanceof ClientResponseError && e.status === 400) throw new LegacyLoginError("password not accepted", 422);
-    throw e;
+  const result = await moveFromFirebase(uid, email, password);
+  if (result === "already moved") throw new LegacyLoginError("already moved", 409);
+  // PocketBase refuses the password itself (longer than 71 characters): he resets it by e-mail.
+  if (result === "bad password") throw new LegacyLoginError("password not accepted", 422);
+  if (result === "no hook") {
+    console.error("legacy login refused: PocketBase runs without pocketbase/pb_hooks (--hooksDir), see README");
+    throw new LegacyLoginError("not configured", 503);
   }
-  if (!moved) throw new LegacyLoginError("already moved", 409);
   tries.delete(email);
 }

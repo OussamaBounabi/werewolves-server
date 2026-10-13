@@ -60,7 +60,7 @@ knows who is online.
 - `src/legacyLogin.ts`: e-mail players' first login after the move (delete it once everyone has moved)
 - `src/rooms/*Room.ts`: the games
 - `pocketbase/pb_migrations/`: the PocketBase collections and their access rules
-- `pocketbase/pb_hooks/`: PocketBase's one hook: a copied player's password reset ends his move from Firebase
+- `pocketbase/pb_hooks/`: PocketBase's one hook: the legacy login only gives a Firebase password to an account whose password hasn't changed since the copy
 - `scripts/`: admin tools and the Firebase migration
 - `test/`: mocha tests
 
@@ -99,7 +99,8 @@ They use the PocketBase superuser from `.env`. On the VPS, or anywhere with
      --hooksDir /path/to/werewolves-server/pocketbase/pb_hooks --hooksWatch=false
    ```
    It applies new migration files when it starts. Restart it after pulling new migrations or hooks.
-   Without `--hooksDir`, the game server logs an error at start and refuses every legacy login (503).
+   Without `--hooksDir`, nothing goes through: the copy can't create e-mail accounts, and every legacy
+   login answers 503 (the game server logs why).
 3. Create two superusers: one for you (the dashboard) and one for the game server (`.env`):
    `/opt/pocketbase/pocketbase superuser upsert <email> <password> --dir /var/lib/pocketbase`
 4. HTTPS: proxy `https://pb.werewolf-server.duckdns.org` to `127.0.0.1:8090`. If the proxy is nginx:
@@ -137,14 +138,18 @@ The order, on the day:
    empty (the player picks one), and a bad name is replaced by the player's username.
 4. Stop writes to Firebase, so the copy is complete: take the old app versions out, or make the
    Firestore rules read-only.
-5. Copy: `npx tsx scripts/migrate-from-firebase.ts`. If it stops halfway, run it again: it carries on
+5. Copy: `npx tsx scripts/migrate-from-firebase.ts`. PocketBase must be running with its hook
+   (`--hooksDir`). If it stops halfway, run it again: it carries on
    and never copies anything twice. It never updates what it already copied, so for a final copy of
    newer data, start from an empty PocketBase.
 6. Restart the game server on this version. Release the apps that use PocketBase.
 7. E-mail players get their password back at their first login (`/api/auth/legacy-login`). Google
    players sign in with Google and find their account.
 8. Later, when the players have moved:
-   - delete `src/legacyLogin.ts` and its route, and `FIREBASE_WEB_API_KEY`;
+   - delete `src/legacyLogin.ts` and its route, `moveFromFirebase` and `giveFirebasePassword` in
+     `src/accounts.ts`, and `FIREBASE_WEB_API_KEY`;
+   - delete `pocketbase/pb_hooks/` and PocketBase's `--hooksDir` (and, in a new migration, the
+     `legacyKey` field);
    - delete `scripts/migrate-from-firebase.ts`, `scripts/firebaseImport.ts` and the `firebase-admin`
      dev dependency;
    - shut the Firebase project down.
