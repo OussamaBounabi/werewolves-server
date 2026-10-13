@@ -183,9 +183,17 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(dropper.sessionId)?.alive, true); // seat held for 10 minutes
   });
 
-  it("gives the host their test role", async () => {
-    const { roles } = await startGame({ ...ONE_OF_EACH, testRole: "witch" });
-    assert.strictEqual(roles[0], "witch");
+  it("gives a VIP host the role he picked", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
+    const clients: any[] = [];
+    for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room));
+    const r = room as any;
+    r.vips.add(clients[0].sessionId); // (his account's flag, read when he joins)
+    clients[0].send("settings", { testRole: "witch" });
+    await waitFor(() => r.testHostRole === "witch");
+    const dealt = clients[0].waitForMessage("role_assigned", STEP);
+    clients[0].send("start_game");
+    assert.strictEqual((await dealt).role, "witch");
   });
 
   it("plays a night: protector → wolves → witch sees the victim and revives it", async function () {
