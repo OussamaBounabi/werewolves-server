@@ -710,16 +710,29 @@ describe("PocketBase", function () {
           smtp: { enabled: true, host: "127.0.0.1", port: 2526, tls: false },
           meta: { senderAddress: "noreply@test.local", senderName: "PlayRoom" },
         });
-        // Three copied e-mail players whose Firebase password is "old-firebase-pass".
-        const [R, S, K] = ["ResetFirebaseUid000000000007", "SetFirebaseUid00000000000008", "KeptFirebaseUid0000000000009"];
-        const firebase = async (email: string, password: string) =>
-          password === "old-firebase-pass" ? { "reset@example.com": R, "admin@example.com": S, "kept@example.com": K }[email] ?? null : null;
-        for (const [id, email] of [[R, "reset@example.com"], [S, "admin@example.com"], [K, "kept@example.com"]]) {
+        // Copied e-mail players whose Firebase password is "old-firebase-pass".
+        const copiedUids = new Map<string, string>(); // e-mail → uid
+        const firebase = async (email: string, password: string) => (password === "old-firebase-pass" ? copiedUids.get(email) ?? null : null);
+        const copy = async (id: string, email: string) => {
+          copiedUids.set(email, id);
           await admin.collection("users").create({
             id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy", welcomeGift: true,
-            username: `u${id.slice(0, 12).toLowerCase()}`, name: id.slice(0, 12),
+            username: `copied_${++seq}`, name: "Copied",
           });
-        }
+        };
+        const resetLink = async (email: string) => {
+          const before = mails.length;
+          await new PocketBase(URL_).collection("users").requestPasswordReset(email);
+          for (let i = 0; i < 50 && mails.length === before; i++) await new Promise((r) => setTimeout(r, 100));
+          const mail = (mails[mails.length - 1] ?? "").replace(/=\r\n/g, "").replace(/=3D/g, "=");
+          const token = mail.match(/confirm-password-reset\/([\w-]+\.[\w-]+\.[\w-]+)/)?.[1];
+          assert.ok(token, "the reset e-mail has its link");
+          return token!;
+        };
+        const [R, S, K] = ["ResetFirebaseUid000000000007", "SetFirebaseUid00000000000008", "KeptFirebaseUid0000000000009"];
+        await copy(R, "reset@example.com");
+        await copy(S, "admin@example.com");
+        await copy(K, "kept@example.com");
         // What the game server writes doesn't end the move.
         const keyK = (await user(K)).legacyKey;
         await accounts.recordResults([result(K, true)]);
@@ -727,12 +740,7 @@ describe("PocketBase", function () {
         assert.strictEqual((await user(K)).legacyKey, keyK);
         const staleR = (await user(R)).legacyKey; // (what a dashboard form opened now would hold)
         // He forgot his password and reset it by e-mail.
-        await new PocketBase(URL_).collection("users").requestPasswordReset("reset@example.com");
-        for (let i = 0; i < 50 && !mails.length; i++) await new Promise((r) => setTimeout(r, 100));
-        const mail = mails.join("").replace(/=\r\n/g, "").replace(/=3D/g, "=");
-        const token = mail.match(/confirm-password-reset\/([\w-]+\.[\w-]+\.[\w-]+)/)?.[1];
-        assert.ok(token, "the reset e-mail has its link");
-        await new PocketBase(URL_).collection("users").confirmPasswordReset(token!, "brand-new-pass", "brand-new-pass");
+        await new PocketBase(URL_).collection("users").confirmPasswordReset(await resetLink("reset@example.com"), "brand-new-pass", "brand-new-pass");
         await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
         const login = (email: string, password: string) => new PocketBase(URL_).collection("users").authWithPassword(email, password);
         assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
@@ -751,6 +759,32 @@ describe("PocketBase", function () {
         assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
         // Nobody else sets it: "copy" is for new accounts only.
         await assert.rejects(admin.collection("users").update(S, { legacyKey: "copy" }));
+        // Overlapping writes: the reset form sent twice at once, and a reset racing the legacy login's own
+        // write. Whatever the order, his reset password stays and the old Firebase password can't come back.
+        for (let round = 0; round < 3; round++) {
+          const [D, E] = [`DoubleSubmitUid0000000000${round}a`, `ResetRacesMoveUid000000000${round}b`];
+          const [mailD, mailE] = [`double${round}@example.com`, `race${round}@example.com`];
+          await copy(D, mailD);
+          await copy(E, mailE);
+          const linkD = await resetLink(mailD);
+          const twice = await Promise.allSettled([1, 2].map(() =>
+            new PocketBase(URL_).collection("users").confirmPasswordReset(linkD, "double-reset-1", "double-reset-1")));
+          assert.ok(twice.some((r) => r.status === "fulfilled"));
+          await assert.rejects(legacyLogin(mailD, "old-firebase-pass", firebase), (e: any) => e.status === 409);
+          assert.strictEqual((await login(mailD, "double-reset-1")).record.id, D);
+          const linkE = await resetLink(mailE);
+          const [moved, reset] = await Promise.allSettled([
+            accounts.giveFirebasePassword(E, mailE, "old-firebase-pass"),
+            new PocketBase(URL_).collection("users").confirmPasswordReset(linkE, "race-reset-1", "race-reset-1"),
+          ]);
+          assert.strictEqual(moved.status, "fulfilled");
+          if (reset.status === "fulfilled") {
+            // The reset went through: it's his password now, and the move is over.
+            assert.strictEqual((await login(mailE, "race-reset-1")).record.id, E);
+            await assert.rejects(legacyLogin(mailE, "old-firebase-pass", firebase), (e: any) => e.status === 409);
+            assert.strictEqual((await login(mailE, "race-reset-1")).record.id, E);
+          }
+        }
         // Untouched: he still moves.
         await legacyLogin("kept@example.com", "old-firebase-pass", firebase);
         assert.strictEqual((await login("kept@example.com", "old-firebase-pass")).record.id, K);

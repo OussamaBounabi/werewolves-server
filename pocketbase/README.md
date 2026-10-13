@@ -76,7 +76,7 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `vip` | bool | a VIP werewolf host picks his own role |
 | `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of sign-up |
 | `createdAt` | date | when the account was made (Firebase's date for copied players) |
-| `legacyKey` | text, hidden | set on a copied e-mail player still waiting for his Firebase password (see Log in): his login key as the copy left it. PocketBase gives an account a new login key whenever its password or e-mail changes, by any path, hook or not: a reset by e-mail, a change by the player, a superuser, or PocketBase itself when a Google sign-in links his unverified account. The legacy login writes only while `legacyKey` still matches, so his old Firebase password can never replace a newer one. Emptied when he moves. Only the hook fills it; don't edit it. |
+| `legacyKey` | text, hidden | set on a copied e-mail player still waiting for his Firebase password (see Log in): his login key as the copy left it. PocketBase gives an account a new login key when its password or e-mail changes, hook or not: a reset by e-mail, a change by the player, a superuser, or PocketBase itself when a Google sign-in links his unverified account. The legacy login writes only while `legacyKey` still matches, so his old Firebase password can never replace a newer one. Emptied when he moves, and by any write that brings a new password or e-mail, so two overlapping writes (a reset form sent twice) can't make it match again. Only the hook fills it; don't edit it. |
 | `created`, `updated` | autodate | |
 
 Rules:
