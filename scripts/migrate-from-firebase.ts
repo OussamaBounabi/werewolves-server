@@ -61,8 +61,7 @@ async function authUsers() {
         uid: u.uid,
         email: u.email ?? "",
         emailVerified: u.emailVerified,
-        password: u.providerData.some((p) => p.providerId === "password"),
-        googleId: u.providerData.find((p) => p.providerId === "google.com")?.uid ?? null,
+        provider: ["password", "google.com"].find((id) => u.providerData.some((p) => p.providerId === id)) ?? "",
         created: u.metadata.creationTime ? new Date(u.metadata.creationTime) : null,
       });
     }

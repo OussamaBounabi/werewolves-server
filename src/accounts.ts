@@ -1,36 +1,72 @@
-import PocketBase, { BaseAuthStore, ClientResponseError, isTokenExpired, type RecordModel } from "pocketbase";
+import { randomBytes } from "node:crypto";
+import { initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isTokenExpired, type RecordModel } from "pocketbase";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS, PRICES } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
 
 /**
- * Player accounts, on our PocketBase (same VPS): checks the apps' login tokens and writes everything the
- * players can't write themselves — game results, rewards, purchases, missions, the welcome gift, where
- * each player is. The only file that talks to the database: moving to another one means rewriting it.
- * Signs in as a superuser: POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL and POCKETBASE_SUPERUSER_PASSWORD
- * (.env). Without them — tests, local bots — players join as guests and nothing is recorded.
+ * Player accounts. Players log in with Firebase Auth, as before: the server checks their Firebase ID
+ * tokens (firebase-admin with the project id only: no service account). Their data lives on our
+ * PocketBase (same VPS), which this server reads and writes as a superuser: game results, rewards,
+ * purchases, missions, the welcome gift, where each player is. The only file that talks to the database:
+ * moving to another one means rewriting it.
+ * Needs POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL and POCKETBASE_SUPERUSER_PASSWORD, and FIREBASE_PROJECT_ID
+ * to know the players (.env). Without them (tests, local bots) players join as guests and nothing is recorded.
  */
 try {
   process.loadEnvFile(); // .env next to package.json (git-ignored)
 } catch {}
 
+/** Who a Firebase ID token belongs to. */
+export type FirebaseUser = { uid: string; email: string; emailVerified: boolean; provider: string };
+/** Checks a Firebase ID token (signature, project, expiry): who it belongs to, or it throws. */
+export type VerifyToken = (idToken: string) => Promise<FirebaseUser>;
+
+/** The real check, with Google's public keys (fetched and cached by firebase-admin). */
+export function firebaseVerifier(projectId: string): VerifyToken {
+  const auth = getAuth(initializeApp({ projectId }, `accounts-${projectId}`));
+  return async (idToken) => {
+    const token = await auth.verifyIdToken(idToken);
+    return {
+      uid: token.uid,
+      email: String(token.email ?? "").toLowerCase(),
+      emailVerified: token.email_verified === true,
+      provider: String(token.firebase?.sign_in_provider ?? ""),
+    };
+  };
+}
+
 let pb: PocketBase | null = null;
 let superuser = { email: "", password: "" };
 let signingIn: Promise<unknown> | null = null;
+let verifyToken: VerifyToken = async () => {
+  throw new Error("accounts disabled");
+};
 export let accountsEnabled = false;
 
-/** Points the server at a PocketBase and its superuser (done from .env at start; the tests use their own). */
-export function connectAccounts(url: string, email: string, password: string) {
+/**
+ * Points the server at a PocketBase and its superuser, and at the check of Firebase ID tokens (done from
+ * .env at start; the tests use their own PocketBase and a stand-in for Firebase). Without that check
+ * (the admin scripts need none), players are only guests.
+ */
+export function connectAccounts(url: string, email: string, password: string, verify: VerifyToken | null) {
   pb = new PocketBase(url, new BaseAuthStore());
   pb.autoCancellation(false); // the server sends the same request for many players at once
   superuser = { email, password };
   signingIn = null;
-  accountsEnabled = true;
+  verifyToken = verify ?? (async () => {
+    throw new Error("no FIREBASE_PROJECT_ID");
+  });
+  accountsEnabled = verify !== null;
 }
 
 const testing = process.env.NODE_ENV === "test" || process.argv.some((arg) => arg.includes("mocha"));
-const { POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD } = process.env;
+const { FIREBASE_PROJECT_ID, POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD } = process.env;
 if (POCKETBASE_URL && POCKETBASE_SUPERUSER_EMAIL && POCKETBASE_SUPERUSER_PASSWORD && !testing) {
-  connectAccounts(POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD); // tests never touch the real one
+  // (tests never touch the real ones)
+  const verify = FIREBASE_PROJECT_ID ? firebaseVerifier(FIREBASE_PROJECT_ID) : null;
+  connectAccounts(POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD, verify);
 }
 
 /** The client, signed in as the superuser (again, when its token is about to expire). */
@@ -74,19 +110,15 @@ function forPlayer<T>(uid: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** A login token PocketBase doesn't accept (expired, forged, an old app's Firebase token…). */
+/** A Firebase ID token that doesn't check out (expired, forged, another project's…), or none. */
 export class AuthError extends Error {}
 
-/** The account behind an app's login token: PocketBase checks it. */
-async function signedIn(token: string): Promise<RecordModel> {
+/** Who an app's Firebase ID token belongs to. */
+async function signedIn(idToken: string): Promise<FirebaseUser> {
   if (!pb) throw new AuthError("accounts disabled");
-  if (!token) throw new AuthError("no token");
+  if (!idToken) throw new AuthError("no token");
   try {
-    const { record } = await pb.send("/api/collections/users/auth-refresh", {
-      method: "POST",
-      headers: { Authorization: token },
-    });
-    return record as RecordModel;
+    return await verifyToken(idToken);
   } catch {
     throw new AuthError("auth");
   }
@@ -94,12 +126,13 @@ async function signedIn(token: string): Promise<RecordModel> {
 
 export type Account = { uid: string; name: string; avatar: number; frame: number; vip: boolean };
 
-/** The account behind an app's login token, with its display name and avatar. Throws if invalid. */
+/** The account behind an app's Firebase ID token, with its display name and avatar. Throws if invalid. */
 export async function accountFor(idToken: string): Promise<Account> {
-  const user = await signedIn(idToken);
-  if (!user.username) throw new AuthError("no profile"); // a Google player who hasn't picked his username yet
+  const { uid } = await signedIn(idToken);
+  const user = await maybe((await db()).collection("users").getOne(uid));
+  if (!user?.username) throw new AuthError("no profile"); // not set up yet: no username
   return {
-    uid: user.id,
+    uid,
     name: String(user.name || user.username),
     avatar: Number(user.avatar) || 0,
     frame: Number(user.frame) || 0,
@@ -107,7 +140,7 @@ export async function accountFor(idToken: string): Promise<Account> {
   };
 }
 
-/** Whether this login token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
+/** Whether this Firebase ID token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
 export async function isAdmin(idToken: string): Promise<boolean> {
   const adminEmails = new Set(
     (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
@@ -115,10 +148,66 @@ export async function isAdmin(idToken: string): Promise<boolean> {
   if (!pb || adminEmails.size === 0) return false;
   try {
     const { email } = await signedIn(idToken);
-    return !!email && adminEmails.has(String(email).toLowerCase());
+    return !!email && adminEmails.has(email);
   } catch {
     return false;
   }
+}
+
+/**
+ * The PocketBase account of a Firebase user: found by his uid, or made for him (his first launch of the
+ * app on PocketBase), with his private info. His e-mail follows Firebase's. Nobody logs in to PocketBase
+ * with a password, but it wants one: a random one nobody knows.
+ */
+async function ensurePlayer(user: FirebaseUser): Promise<RecordModel> {
+  if (!user.email) throw new AuthError("no e-mail on this Firebase account");
+  return forPlayer(user.uid, async () => {
+    const client = await db();
+    const found = await maybe(client.collection("users").getOne(user.uid));
+    if (found && found.email === user.email && found.verified === user.emailVerified) return found;
+    const batch = client.createBatch();
+    if (found) {
+      batch.collection("users").update(user.uid, { email: user.email, verified: user.emailVerified });
+      batch.collection("private_info").upsert({ id: user.uid, user: user.uid, email: user.email });
+    } else {
+      const password = randomBytes(24).toString("base64url");
+      const createdAt = new Date().toISOString();
+      const provider = ["password", "google.com"].includes(user.provider) ? user.provider : "";
+      batch.collection("users").create({
+        id: user.uid, email: user.email, emailVisibility: false, verified: user.emailVerified, password, passwordConfirm: password, createdAt,
+      });
+      batch.collection("private_info").create({ id: user.uid, user: user.uid, email: user.email, provider, createdAt });
+    }
+    try {
+      await batch.send();
+    } catch (e) {
+      // Another account has this e-mail: one deleted from Firebase but not from here (README: the exchange).
+      if (/"email":\{"code":"validation_not_unique"/.test(JSON.stringify((e as ClientResponseError).response ?? ""))) {
+        throw new ProfileError("e-mail taken by another account", 409);
+      }
+      throw e;
+    }
+    return client.collection("users").getOne(user.uid);
+  });
+}
+
+/** How long a PocketBase token from the exchange lasts: no longer than a Firebase ID token does. */
+export const EXCHANGE_TOKEN_SECONDS = 60 * 60;
+
+/**
+ * POST /api/auth/exchange: an app's Firebase ID token for a PocketBase token of the same player (his
+ * account is made at his first exchange), good for an hour and not refreshable: the app exchanges again
+ * at each launch and when it expires. [expires] in epoch ms.
+ */
+export async function exchangeToken(idToken: string) {
+  const user = await signedIn(idToken);
+  await ensurePlayer(user);
+  const client = await db();
+  const { token, record } = await client.send(`/api/collections/users/impersonate/${encodeURIComponent(user.uid)}`, {
+    method: "POST",
+    body: { duration: EXCHANGE_TOKEN_SECONDS },
+  });
+  return { token: String(token), expires: Number(getTokenPayload(token).exp) * 1000, record: record as RecordModel };
 }
 
 /** The account with this e-mail, or this username (admin tools). */
@@ -239,10 +328,11 @@ async function sell(
   wornField: "avatar" | "frame",
 ) {
   if (!pb) throw new StoreError("accounts disabled");
-  const { id: uid } = await signedIn(idToken);
+  const { uid } = await signedIn(idToken);
   return forPlayer(uid, async () => {
     const client = await db();
-    const user = await client.collection("users").getOne(uid);
+    const user = await maybe(client.collection("users").getOne(uid));
+    if (!user) throw new StoreError("no profile");
     const owned: number[] = Array.isArray(user[ownedField]) ? user[ownedField] : [];
     if (owned.includes(id)) throw new StoreError("owned");
     const have = Number(user[currency]) || 0;
@@ -286,27 +376,19 @@ export async function giveWelcomeGifts() {
   for (const { id } of items) await giveWelcomeGift(id);
 }
 
-/** His gift, his account's date, and his private info (e-mail, how he signs in). Once. */
+/** His gift (and his account's date and empty stats, if missing). Once. */
 async function giveWelcomeGift(uid: string) {
   await forPlayer(uid, async () => {
     const client = await db();
     const user = await client.collection("users").getOne(uid);
     if (user.welcomeGift) return;
-    const google = await client.collection("_externalAuths").getList(1, 1, {
-      filter: client.filter("recordRef = {:uid} && provider = 'google'", { uid }),
-      skipTotal: true,
-    });
-    const createdAt = user.createdAt || user.created;
-    const batch = client.createBatch();
+    const batch = client.createBatch(); // ("coins+" in a batch: see sell)
     batch.collection("users").update(uid, {
       "coins+": WELCOME_GIFT.coins,
       "diamonds+": WELCOME_GIFT.diamonds,
       welcomeGift: true,
-      createdAt,
+      createdAt: user.createdAt || user.created,
       ...(user.stats ? {} : { stats: { games: 0, wins: 0, losses: 0 } }),
-    });
-    batch.collection("private_info").upsert({
-      id: uid, user: uid, email: user.email, provider: google.items.length ? "google.com" : "password", createdAt,
     });
     await batch.send();
   });
@@ -350,7 +432,7 @@ export async function grantCurrencyToAll(coins: number, diamonds: number, dryRun
  */
 export async function claimMission(idToken: string, id: string) {
   if (!pb) throw new ClaimError("accounts disabled");
-  const { id: uid } = await signedIn(idToken);
+  const { uid } = await signedIn(idToken);
   const mission = id === DAILY_BONUS.id ? { ...DAILY_BONUS, period: "daily" } : MISSIONS.find((m) => m.id === id);
   if (!mission) throw new ClaimError("unknown mission");
   const period = mission.period === "daily" ? dayKey() : weekKey();
@@ -391,11 +473,14 @@ const parseDate = (d: unknown) => (d ? Date.parse(String(d).replace(" ", "T")) :
 /**
  * What a player changes on his own profile (POST /api/profile): his name (3 to 16 letters, digits or _,
  * once per 24 hours), the avatar and frame he wears (free or owned ones), and his username once, if he has
- * none yet (a Google player setting up his account; that first name doesn't count as a change).
+ * none yet (a new player setting up his account; that first name doesn't count as a change). His account
+ * is made first if he has none yet.
  */
 export async function updateProfile(idToken: string, changes: ProfileChanges) {
   if (!pb) throw new ProfileError("accounts disabled", 409);
-  const { id: uid } = await signedIn(idToken);
+  const firebaseUser = await signedIn(idToken);
+  await ensurePlayer(firebaseUser);
+  const { uid } = firebaseUser;
   return forPlayer(uid, async () => {
     const client = await db();
     const user = await client.collection("users").getOne(uid);
@@ -490,75 +575,4 @@ export async function isFriendOfAny(uid: string, others: string[]): Promise<bool
   const filter = client.filter(`user = {:uid} && (${others.map((_, i) => `friend = {:f${i}}`).join(" || ")})`, params);
   const { items } = await client.collection("friends").getList(1, 1, { filter, fields: "id", skipTotal: true });
   return items.length > 0;
-}
-
-/**
- * For the legacy login: the account with this e-mail, and whether it may still be waiting for its
- * Firebase password (PocketBase's hook has the last word, when the password is written).
- */
-export async function accountByEmail(email: string): Promise<{ id: string; waiting: boolean } | null> {
-  const client = await db();
-  const user = await maybe(client.collection("users").getFirstListItem(client.filter("email = {:email}", { email })));
-  return user && { id: user.id, waiting: !!user.legacyKey };
-}
-
-/**
- * How giving a Firebase password went: "moved"; "already moved" (moved before, or its password changed in
- * PocketBase since the copy); "bad password" (PocketBase refuses that password, e.g. over 71 characters);
- * "no hook" (PocketBase runs without pocketbase/pb_hooks, so nothing was written).
- */
-export type MoveResult = "moved" | "already moved" | "bad password" | "no hook";
-
-/**
- * For the legacy login: gives a Firebase player's account (his Firebase uid) the password he just proved
- * with Firebase, once. No account yet (he signed up after the copy): one is made, empty, for him to set up.
- */
-export async function moveFromFirebase(uid: string, email: string, password: string): Promise<MoveResult> {
-  return forPlayer(uid, async () => {
-    const client = await db();
-    const user = await maybe(client.collection("users").getOne(uid));
-    if (user && !user.legacyKey) return "already moved";
-    if (user) return giveFirebasePassword(uid, email, password);
-    const createdAt = new Date().toISOString();
-    const batch = client.createBatch();
-    batch.collection("users").create({ id: uid, email, password, passwordConfirm: password, welcomeGift: true, createdAt }); // a Firebase player had his gift
-    batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
-    try {
-      await batch.send();
-    } catch (e) {
-      if (refusal(e)?.data?.password) return "bad password";
-      throw e;
-    }
-    return "moved";
-  });
-}
-
-/** What PocketBase answered to the failed request of a batch (it wraps it in a "Batch transaction failed."). */
-function refusal(e: unknown): { message?: string; data?: Record<string, unknown> } | undefined {
-  if (!(e instanceof ClientResponseError)) return undefined;
-  const requests = e.response?.data?.requests as Record<string, { response?: object }> | undefined;
-  return (requests && Object.values(requests)[0]?.response) ?? e.response;
-}
-
-/**
- * The legacy login's write, on its own for the tests: an account still waiting for its Firebase password
- * gets it. PocketBase's hook (pocketbase/pb_hooks/legacy_auth.pb.js) decides, inside the write, whether it
- * still waits: legacyKey = "move" goes through only while the account's login key hasn't changed since
- * the copy, i.e. its password hasn't been reset or changed (by any path) since. A batch request, so that
- * PocketBase reads the account inside the write transaction: a reset a moment earlier counts.
- */
-export async function giveFirebasePassword(uid: string, email: string, password: string): Promise<MoveResult> {
-  const client = await db();
-  const batch = client.createBatch();
-  batch.collection("users").update(uid, { email, password, passwordConfirm: password, legacyKey: "move" });
-  try {
-    await batch.send();
-    return "moved";
-  } catch (e) {
-    const answer = refusal(e);
-    if (/already moved/i.test(String(answer?.message ?? ""))) return "already moved"; // (worded "Already moved.")
-    if (answer?.data?.legacyKey) return "no hook"; // "move" left as it was: the pattern refused it
-    if (answer?.data?.password) return "bad password";
-    throw e;
-  }
 }

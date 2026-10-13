@@ -7,10 +7,10 @@ import type PocketBase from "pocketbase";
  * on made-up data. It only creates what PocketBase doesn't have yet: after a failure, run it again and it
  * carries on.
  *
- * - Every Firebase Auth account becomes a PocketBase account with the same id (his uid), his profile, and a
- *   random password: an e-mail player gets his own back at his first login (src/legacyLogin.ts; his
- *   account is created with legacyKey "copy", which PocketBase's hook turns into his login key);
- *   a Google player is linked to his Google account (_externalAuths), so signing in with Google finds it.
+ * - Every Firebase Auth account becomes a PocketBase account with the same id (his uid) and his profile.
+ *   Players keep logging in with Firebase Auth and nobody logs in to PocketBase, so no password and no
+ *   Google link is copied (PocketBase wants a password on every account: each gets a random one nobody
+ *   knows, unused since password login is off).
  * - Every migrated account counts as having had its welcome gift.
  * - Firestore's dates are kept in firebaseAt (or createdAt…). Messages and read markers are written in
  *   their original order, so PocketBase's own times sort them, and count unread ones, as Firestore did.
@@ -23,8 +23,7 @@ export type AuthUser = {
   uid: string;
   email: string;
   emailVerified: boolean;
-  password: boolean; // signs in with e-mail + password
-  googleId: string | null; // signs in with Google: his Google account's id
+  provider: string; // how he signs in: "password" (e-mail), "google.com", or "" (something else)
   created: Date | null;
 };
 /** A Firestore document, Timestamps turned into Dates. */
@@ -162,15 +161,14 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       if (n < 0) report.problem(`users/${u.uid}: ${field} ${n} raised to 0`);
       return Math.max(0, n);
     };
-    const password = randomBytes(24).toString("base64url"); // nobody knows it
+    const password = randomBytes(24).toString("base64url"); // nobody knows it, and password login is off
     accounts.push({
       id: u.uid,
       email: u.email.toLowerCase(),
       emailVisibility: false,
-      verified: u.emailVerified || !!u.googleId,
+      verified: u.emailVerified,
       password,
       passwordConfirm: password,
-      ...(u.password ? { legacyKey: "copy" } : {}), // his Firebase password comes at his first login
       username,
       name,
       nameChangedAt,
@@ -193,14 +191,6 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
   await create("users", accounts.filter((a) => !knownUsers.has(a.id)), accounts.filter((a) => knownUsers.has(a.id)).length, 20);
   const createdAt = new Map(accounts.map((a) => [a.id, a.createdAt]));
 
-  // Google players: signing in with Google finds their account.
-  const usersCollection = dry ? "" : (await pb!.collections.getOne("users")).id;
-  const links = await have("_externalAuths", (l) => `${l.recordRef}/${l.provider}`, "recordRef,provider");
-  const google = data.authUsers
-    .filter((u) => u.googleId && players.has(u.uid))
-    .map((u) => ({ collectionRef: usersCollection, recordRef: u.uid, provider: "google", providerId: u.googleId }));
-  await create("_externalAuths", google.filter((l) => !links.has(`${l.recordRef}/google`)), google.filter((l) => links.has(`${l.recordRef}/google`)).length);
-
   // His private info, for every account (made from his Auth account if he had none).
   const infos = new Map(data.privateInfo.map((d) => [d.id, d.data]));
   const knownInfo = await have("private_info");
@@ -212,7 +202,7 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       id: uid,
       user: uid,
       email: String(i.email ?? u.email),
-      provider: ["password", "google.com"].includes(i.provider) ? i.provider : u.password ? "password" : "google.com",
+      provider: ["password", "google.com"].includes(i.provider) ? i.provider : ["password", "google.com"].includes(u.provider) ? u.provider : "",
       birthDate: BIRTH_DATE.test(String(i.birthDate ?? "")) ? String(i.birthDate) : "",
       createdAt: date(i.createdAt) || createdAt.get(uid),
     };
@@ -396,9 +386,6 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
   }
   const chatsWithMessages = new Set(data.messages.map((m) => m.chatId));
   report.log(`chats: ${data.chats.length} conversations, ${chatsWithMessages.size} with messages (rebuilt by the conversations view)`);
-  if (report.problems.some((p) => p.includes('"legacyKey"'))) {
-    report.problem("PocketBase seems to run without pocketbase/pb_hooks (--hooksDir): e-mail accounts can't be copied without it. Restart it with the hook and run the copy again.");
-  }
   report.print(dry);
   return report.problems;
 }

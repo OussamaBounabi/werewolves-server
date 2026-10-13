@@ -1,8 +1,6 @@
 import assert from "assert";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:http";
-import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,25 +10,36 @@ import { ColyseusTestServer } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import * as accounts from "../src/accounts.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
-import { legacyLogin, LegacyLoginError } from "../src/legacyLogin.js";
 import { dayKey, weekKey } from "../src/missions.js";
 import { appClosed, appOpened, enterRoom, leaveRoom, presenceSaved } from "../src/presence.js";
 import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.js";
 
 /**
- * The PocketBase side, on a real PocketBase built from pocketbase/pb_migrations: its access rules, what the
- * game server writes there, and the copy from Firebase. Needs the pocketbase executable, so it's skipped
- * unless POCKETBASE_BIN points to it:
+ * The PocketBase side, on a real PocketBase built from pocketbase/pb_migrations: its access rules, the
+ * exchange of Firebase ID tokens for PocketBase ones, what the game server writes there, and the copy from
+ * Firebase. Needs the pocketbase executable, so it's skipped unless POCKETBASE_BIN points to it:
  *   POCKETBASE_BIN=/path/to/pocketbase npx mocha -r tsx test/pocketbase.test.ts --exit --timeout 60000
  */
 const BIN = process.env.POCKETBASE_BIN;
 const MIGRATIONS = fileURLToPath(new URL("../pocketbase/pb_migrations", import.meta.url));
-const HOOKS = fileURLToPath(new URL("../pocketbase/pb_hooks", import.meta.url));
 const PORT = 8097;
 const URL_ = `http://127.0.0.1:${PORT}`;
 const SUPERUSER = { email: "server@test.local", password: "server-pass-123" };
-const PASSWORD = "secret-123";
 const GAME_PORT = 2574;
+
+/**
+ * Firebase Auth, stood in for: its ID tokens are "firebase:" and the account they belong to. Anything else
+ * is refused, as an expired, forged or other project's token is by the real check (firebaseVerifier,
+ * tested at the end on what it refuses without Google's keys).
+ */
+type FirebaseAccount = { uid: string; email: string; provider?: string; emailVerified?: boolean };
+const firebaseToken = ({ uid, email, provider = "password", emailVerified = false }: FirebaseAccount) =>
+  `firebase:${Buffer.from(JSON.stringify({ uid, email, provider, emailVerified })).toString("base64url")}`;
+const firebase: accounts.VerifyToken = async (token) => {
+  if (!token.startsWith("firebase:")) throw new Error("not a Firebase ID token");
+  const { uid, email, provider, emailVerified } = JSON.parse(Buffer.from(token.slice(9), "base64url").toString());
+  return { uid, email: String(email).toLowerCase(), provider, emailVerified };
+};
 
 describe("PocketBase", function () {
   let server: ChildProcess | undefined;
@@ -46,7 +55,6 @@ describe("PocketBase", function () {
     // (--automigrate=false: the tests change collections, which must not write migration files into the repo)
     server = spawn(BIN, [
       "serve", "--http", `127.0.0.1:${PORT}`, "--dir", dir, "--migrationsDir", MIGRATIONS, "--automigrate=false",
-      "--hooksDir", HOOKS, "--hooksWatch=false",
     ], { stdio: "ignore" });
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${URL_}/api/health`).then((r) => r.ok, () => false)) break;
@@ -55,7 +63,7 @@ describe("PocketBase", function () {
     admin = new PocketBase(URL_);
     admin.autoCancellation(false);
     await admin.collection("_superusers").authWithPassword(SUPERUSER.email, SUPERUSER.password);
-    accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password);
+    accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password, firebase);
   });
 
   after(() => {
@@ -63,21 +71,30 @@ describe("PocketBase", function () {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
-  type Player = { id: string; token: string; pb: PocketBase; email: string; username: string };
+  /**
+   * A player as the app holds him: [idToken], his Firebase ID token (for the game server); [token], the
+   * PocketBase token it was exchanged for; [pb], a PocketBase client signed in with it.
+   */
+  type Player = { id: string; idToken: string; token: string; pb: PocketBase; email: string; username: string };
 
-  /** A new account, signed up from the app (and signed in). */
-  async function signUp(fields: Record<string, unknown> = {}, email = `p${++seq}@test.local`) {
-    const client = new PocketBase(URL_);
-    client.autoCancellation(false);
-    const { id } = await client.collection("users").create({ email, password: PASSWORD, passwordConfirm: PASSWORD, ...fields });
-    const { token } = await client.collection("users").authWithPassword(email, PASSWORD);
-    return { id, token, pb: client, email };
+  /** A new player's first launch: signed up on Firebase, his ID token exchanged. No profile yet. */
+  async function newcomer(account: Partial<FirebaseAccount> = {}) {
+    const n = ++seq;
+    const id = account.uid ?? `Fb${String(n).padStart(26, "0")}`; // 28 characters, like Firebase's uids
+    const email = account.email ?? `p${n}@test.local`;
+    const idToken = firebaseToken({ ...account, uid: id, email });
+    const { token, record } = await accounts.exchangeToken(idToken);
+    const pb = new PocketBase(URL_);
+    pb.autoCancellation(false);
+    pb.authStore.save(token, record);
+    return { n, id, idToken, token, pb, email };
   }
 
   /** A player as most are: a username, a name, a free avatar (and his welcome gift already had). */
   async function player(): Promise<Player> {
-    const username = `player_${++seq}`;
-    const p = await signUp({ username, name: `Player_${seq}`, avatar: 103 });
+    const { n, ...p } = await newcomer();
+    const username = `player_${n}`;
+    await accounts.updateProfile(p.idToken, { username, name: `Player_${n}`, avatar: 103 });
     await admin.collection("users").update(p.id, { welcomeGift: true });
     return { ...p, username };
   }
@@ -95,128 +112,143 @@ describe("PocketBase", function () {
   });
 
   describe("accounts", () => {
-    it("lets a player sign up with a username, a name and a free avatar, and nothing more", async () => {
-      const p = await signUp({ username: "alice_1", name: "Alice", avatar: 104 });
-      const me = await user(p.id);
-      assert.deepStrictEqual([me.username, me.name, me.avatar, me.coins, me.xp, me.vip], ["alice_1", "Alice", 104, 0, 0, false]);
-      for (const extra of [{ coins: 5 }, { xp: 1 }, { vip: true }, { avatars: [601] }, { welcomeGift: true }, { room: "R" }, { avatar: 601 }, { id: "Chosen0000000000001" }]) {
-        await refused(signUp({ username: `x_${++seq}`, name: "Xavier", ...extra }));
-      }
-      const sneaky = await signUp({ username: `x_${++seq}`, name: "Xavier", legacyKey: "copy" }); // hidden: ignored
-      assert.strictEqual((await user(sneaky.id)).legacyKey, "");
-      await assert.rejects(signUp({ username: "alice_1", name: "Another" }), (e: any) => e.response.data.username.code === "validation_not_unique");
-      await refused(signUp({ username: "Bad Name", name: "Bad" }));
-      await refused(signUp({ username: "ab", name: "Short" }));
-      // Display names: 3 to 16 of [A-Za-z0-9_], any case.
-      for (const name of ["Al", "x".repeat(17), "Bad Name", "Bad-Name", "Amélie", "علي"]) {
-        await assert.rejects(signUp({ username: `n_${++seq}`, name }), (e: any) => !!e.response?.data?.name, name); // refused for its name
-      }
-      assert.strictEqual((await user((await signUp({ username: `n_${++seq}`, name: "Exactly_16_chars" })).id)).name, "Exactly_16_chars");
-      assert.strictEqual((await user((await signUp({ username: `n_${++seq}`, name: "ABC" })).id)).name, "ABC");
+    it("exchanges a Firebase ID token for a PocketBase token of the same player, his account made at the first", async () => {
+      const uid = "ExchangeFirebaseUid000000001";
+      const google = { uid, email: "Ex@Test.local", provider: "google.com", emailVerified: true };
+      const before = Date.now();
+      const first = await accounts.exchangeToken(firebaseToken(google));
+      assert.strictEqual(first.record.id, uid);
+      // Good for an hour, like his Firebase ID token: the app exchanges again then, and at each launch.
+      assert.ok(Math.abs(first.expires - (before + 3600_000)) < 5_000, `${first.expires - before} ms`);
+      const me = await user(uid);
+      assert.deepStrictEqual(
+        [me.email, me.verified, me.emailVisibility, me.username, me.name, me.coins, me.welcomeGift],
+        ["ex@test.local", true, false, "", "", 0, false],
+      );
+      const info = await admin.collection("private_info").getOne(uid);
+      assert.deepStrictEqual([info.email, info.provider, info.createdAt], ["ex@test.local", "google.com", me.createdAt]);
+      // The PocketBase token is him, for what the rules let him do. Not refreshable: a refresh gives it back.
+      const pb = new PocketBase(URL_);
+      pb.authStore.save(first.token, first.record);
+      assert.strictEqual((await pb.collection("private_info").getOne(uid)).email, "ex@test.local");
+      assert.strictEqual((await pb.collection("users").authRefresh()).token, first.token);
+      // His next launch: the same account, a new token. His e-mail follows Firebase's.
+      await new Promise((r) => setTimeout(r, 1100)); // (tokens count whole seconds)
+      const next = await accounts.exchangeToken(firebaseToken({ ...google, email: "new@test.local" }));
+      assert.deepStrictEqual([next.record.id, next.expires > first.expires], [uid, true]);
+      assert.deepStrictEqual([(await user(uid)).email, (await admin.collection("private_info").getOne(uid)).email], ["new@test.local", "new@test.local"]);
+      // Two launches at once: one account.
+      const twin = { uid: "TwinLaunchFirebaseUid0000001", email: "twin@test.local" };
+      const both = await Promise.all([1, 2].map(() => accounts.exchangeToken(firebaseToken(twin))));
+      assert.deepStrictEqual(both.map((x) => x.record.id), [twin.uid, twin.uid]);
+      // Refused: no token, or not a Firebase ID token (a PocketBase one neither); a Firebase account without
+      // an e-mail; an e-mail another account has (one deleted from Firebase but not from PocketBase).
+      for (const bad of ["", "garbage", first.token]) await assert.rejects(accounts.exchangeToken(bad), accounts.AuthError);
+      await assert.rejects(accounts.exchangeToken(firebaseToken({ uid: "PhoneFirebaseUid000000000001", email: "" })), accounts.AuthError);
+      const taken = (e: any) => e instanceof accounts.ProfileError && e.status === 409;
+      const stranger = { uid: "TakenFirebaseUid000000000001", email: "new@test.local" };
+      await assert.rejects(accounts.exchangeToken(firebaseToken(stranger)), taken);
+      assert.strictEqual((await admin.collection("users").getList(1, 1, { filter: `id = "${stranger.uid}"` })).totalItems, 0);
+      await assert.rejects(accounts.exchangeToken(firebaseToken({ ...google, email: "twin@test.local" })), taken);
+      assert.strictEqual((await user(uid)).email, "new@test.local");
     });
 
-    it("lets a player change his own password and nothing else on his account", async () => {
+    it("lets nobody log in to PocketBase or sign up on it, and a player change nothing on his account", async () => {
+      const methods = await new PocketBase(URL_).collection("users").listAuthMethods();
+      assert.deepStrictEqual([methods.password.enabled, methods.oauth2.enabled, methods.otp.enabled, methods.mfa.enabled], [false, false, false, false]);
       const p = await player();
       const other = await player();
-      const { fields } = await admin.collections.getOne("users");
-      const sample: Record<string, unknown> = {
-        text: "renamed_1", number: 104, bool: true, json: [601], date: new Date().toISOString(), email: "new@test.local",
-      };
-      const allowed = ["id", "password", "tokenKey", "emailVisibility", "created", "updated"];
-      const guarded = fields.filter((f) => !allowed.includes(f.name));
-      assert.strictEqual(guarded.length, 19);
-      for (const f of guarded) {
-        assert.ok(f.type in sample, `no sample value for ${f.name} (${f.type})`);
-        const change = p.pb.collection("users").update(p.id, { [f.name]: sample[f.type] });
-        if (!f.hidden) {
-          await assert.rejects(change, ClientResponseError, `a player changed his ${f.name}`);
-          continue;
-        }
-        const before = (await user(p.id))[f.name]; // PocketBase ignores hidden fields from players
-        await change;
-        assert.strictEqual((await user(p.id))[f.name], before, `a player changed his ${f.name}`);
+      // No sign-up: not as a guest, not with a player's token.
+      const signUp = { email: "guest@test.local", password: "guest-pass-1", passwordConfirm: "guest-pass-1", username: "guest_1" };
+      await refused(new PocketBase(URL_).collection("users").create(signUp));
+      await refused(p.pb.collection("users").create(signUp));
+      // Nothing on his own account: the game server writes it.
+      for (const change of [
+        { name: "Renamed" }, { avatar: 104 }, { coins: 5 }, { vip: true }, { welcomeGift: false }, { emailVisibility: true },
+        { email: "x@test.local" }, { password: "new-pass-12", passwordConfirm: "new-pass-12" },
+      ]) {
+        await refused(p.pb.collection("users").update(p.id, change));
       }
-      await refused(p.pb.collection("users").update(other.id, { emailVisibility: true }));
-      await p.pb.collection("users").update(p.id, { emailVisibility: true });
-      // Profiles are visible to signed-in players, not their e-mail (unless they chose to show it); not to strangers.
+      await refused(p.pb.collection("users").update(other.id, { name: "Renamed" }));
+      // Profiles are visible to signed-in players, not their e-mail; not to strangers. His own e-mail, he sees.
       const seen = await p.pb.collection("users").getOne(other.id);
       assert.strictEqual(seen.username, other.username);
       assert.ok(!seen.email);
-      assert.strictEqual((await other.pb.collection("users").getOne(p.id)).email, p.email); // he chose to, above
+      assert.strictEqual((await p.pb.collection("users").getOne(p.id)).email, p.email);
       await refused(new PocketBase(URL_).collection("users").getOne(p.id));
-      // His password (his tokens so far stop working).
-      await p.pb.collection("users").update(p.id, { oldPassword: PASSWORD, password: "new-secret-1", passwordConfirm: "new-secret-1" });
-      await new PocketBase(URL_).collection("users").authWithPassword(p.email, "new-secret-1");
-      await refused(p.pb.collection("users").getOne(other.id));
-      // He can delete his account.
-      const leaving = await player();
-      await leaving.pb.collection("users").delete(leaving.id);
+      // No password login, even on an account whose password is known (a superuser set it).
+      const q = await newcomer();
+      await admin.collection("users").update(q.id, { password: "known-pass-1", passwordConfirm: "known-pass-1" });
+      await refused(new PocketBase(URL_).collection("users").authWithPassword(q.email, "known-pass-1"));
+      // He can delete his account (the app deletes his Firebase one next).
+      await p.pb.collection("users").delete(p.id);
+      await refused(user(p.id));
     });
 
-    it("checks the apps' tokens: a PocketBase one is a player; anything else (an old app's Firebase token) is refused", async () => {
+    it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.token), { uid: p.id, name: p.username.replace("player_", "Player_"), avatar: 103, frame: 2, vip: true });
-      const firebaseLike = [{ alg: "RS256", kid: "abc" }, { iss: "https://securetoken.google.com/x", sub: p.id, user_id: p.id }]
-        .map((o) => Buffer.from(JSON.stringify(o)).toString("base64url")).join(".") + ".c2lnbmF0dXJl";
-      for (const bad of ["", "garbage", firebaseLike, p.token.slice(0, -2)]) {
-        await assert.rejects(accounts.accountFor(bad), accounts.AuthError);
-      }
-      // A login lasts 90 days, and each refresh (the app's, at launch) starts 90 more.
-      const days = (token: string) => (JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp - Date.now() / 1000) / 86400;
-      assert.ok(Math.abs(days(p.token) - 90) < 0.1, `${days(p.token)} days`);
-      await new Promise((r) => setTimeout(r, 1100)); // (tokens count whole seconds)
-      const refreshed = await p.pb.collection("users").authRefresh();
-      assert.ok(Math.abs(days(refreshed.token) - 90) < 0.1);
-      assert.ok(days(refreshed.token) > days(p.token) + 0.5 / 86400, "the refresh pushed the end back");
-      const google = await signUp({}); // signed in, no username picked yet
-      await assert.rejects(accounts.accountFor(google.token), /no profile/);
-      process.env.ADMIN_EMAILS = `someone@else.com, ${p.email.toUpperCase()}`;
-      assert.strictEqual(await accounts.isAdmin(p.token), true);
-      assert.strictEqual(await accounts.isAdmin(google.token), false);
-      assert.strictEqual(await accounts.isAdmin(firebaseLike), false);
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true });
+      for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
+      // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
+      const fresh = await newcomer();
+      await assert.rejects(accounts.accountFor(fresh.idToken), /no profile/);
+      const boss = firebaseToken({ uid: "NeverLaunchedFirebaseUid0001", email: "boss@test.local" });
+      await assert.rejects(accounts.accountFor(boss), /no profile/);
+      // Admins: the e-mail in their Firebase ID token, PocketBase account or not.
+      process.env.ADMIN_EMAILS = `someone@else.com, ${p.email.toUpperCase()}, Boss@Test.local`;
+      assert.strictEqual(await accounts.isAdmin(p.idToken), true);
+      assert.strictEqual(await accounts.isAdmin(boss), true);
+      assert.strictEqual(await accounts.isAdmin(fresh.idToken), false);
+      assert.strictEqual(await accounts.isAdmin(p.token), false);
+      assert.strictEqual(await accounts.isAdmin("garbage"), false);
       delete process.env.ADMIN_EMAILS;
     });
 
     it("updates a profile: the name once a day, free or owned avatars and frames, a username only once", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { avatars: [601], frames: [3] });
-      const changed = await accounts.updateProfile(p.token, { name: "  New_Name ", avatar: 601, frame: 3 });
+      const changed = await accounts.updateProfile(p.idToken, { name: "  New_Name ", avatar: 601, frame: 3 });
       assert.deepStrictEqual([changed.name, changed.avatar, changed.frame], ["New_Name", 601, 3]);
-      await assert.rejects(accounts.updateProfile(p.token, { name: "Again" }), /too soon/);
-      await accounts.updateProfile(p.token, { name: "New_Name", avatar: 104, frame: 0 }); // same name: not a change
-      await assert.rejects(accounts.updateProfile(p.token, { avatar: 602 }), /avatar/);
-      await assert.rejects(accounts.updateProfile(p.token, { frame: 4 }), /frame/);
+      await assert.rejects(accounts.updateProfile(p.idToken, { name: "Again" }), /too soon/);
+      await accounts.updateProfile(p.idToken, { name: "New_Name", avatar: 104, frame: 0 }); // same name: not a change
+      await assert.rejects(accounts.updateProfile(p.idToken, { avatar: 602 }), /avatar/);
+      await assert.rejects(accounts.updateProfile(p.idToken, { frame: 4 }), /frame/);
       for (const name of ["", "Al", "x".repeat(17), "Two Words", "dash-ed", "Amélie", 12345, true, ["Bob_1"]]) {
-        await assert.rejects(accounts.updateProfile(p.token, { name }), (e: any) => e instanceof accounts.ProfileError && e.status === 400, String(name));
+        await assert.rejects(accounts.updateProfile(p.idToken, { name }), (e: any) => e instanceof accounts.ProfileError && e.status === 400, String(name));
       }
-      await assert.rejects(accounts.updateProfile(p.token, { username: 12345 }), (e: any) => e.status === 400);
+      await assert.rejects(accounts.updateProfile(p.idToken, { username: 12345 }), (e: any) => e.status === 400);
       // null, like a field left out, stays as it is (a client that sends every field).
-      const kept = await accounts.updateProfile(p.token, { name: null, username: null, frame: null, avatar: 601 });
+      const kept = await accounts.updateProfile(p.idToken, { name: null, username: null, frame: null, avatar: 601 });
       assert.deepStrictEqual([kept.name, kept.username, kept.avatar], ["New_Name", p.username, 601]);
-      await assert.rejects(accounts.updateProfile(p.token, { username: "other_name" }), /username set/);
+      await assert.rejects(accounts.updateProfile(p.idToken, { username: "other_name" }), /username set/);
       await admin.collection("users").update(p.id, { nameChangedAt: new Date(Date.now() - 25 * 3600_000).toISOString() });
-      assert.strictEqual((await accounts.updateProfile(p.token, { name: "Third" })).name, "Third");
-      // A Google player's first username and name (that name isn't a change).
-      const g = await signUp({});
-      await assert.rejects(accounts.updateProfile(g.token, { username: p.username }), /taken/);
-      await assert.rejects(accounts.updateProfile(g.token, { username: "No Spaces" }), /username/);
-      const set = await accounts.updateProfile(g.token, { username: "Gamer_1", name: "Gamer", avatar: 104 });
+      assert.strictEqual((await accounts.updateProfile(p.idToken, { name: "Third" })).name, "Third");
+      // A new player's first username and name (that name isn't a change).
+      const g = await newcomer({ provider: "google.com", emailVerified: true });
+      await assert.rejects(accounts.updateProfile(g.idToken, { username: p.username }), /taken/);
+      await assert.rejects(accounts.updateProfile(g.idToken, { username: "No Spaces" }), /username/);
+      const set = await accounts.updateProfile(g.idToken, { username: "Gamer_1", name: "Gamer", avatar: 104 });
       assert.deepStrictEqual([set.username, set.name, set.nameChangedAt], ["gamer_1", "Gamer", ""]);
-      await accounts.updateProfile(g.token, { name: "Gamer_Two" }); // his first change
-      await assert.rejects(accounts.updateProfile(g.token, { name: "Gamer_Three" }), /too soon/);
-      await assert.rejects(accounts.updateProfile("garbage", { name: "Nope" }), accounts.AuthError);
+      await accounts.updateProfile(g.idToken, { name: "Gamer_Two" }); // his first change
+      await assert.rejects(accounts.updateProfile(g.idToken, { name: "Gamer_Three" }), /too soon/);
+      // Set up before any exchange: his account is made then.
+      const early = firebaseToken({ uid: "ProfileFirstFirebaseUid00001", email: "early@test.local" });
+      assert.strictEqual((await accounts.updateProfile(early, { username: "early_1", name: "Early" })).username, "early_1");
+      assert.strictEqual((await accounts.accountFor(early)).name, "Early");
+      for (const bad of ["garbage", p.token]) await assert.rejects(accounts.updateProfile(bad, { name: "Nope" }), accounts.AuthError);
     });
 
     it("gives each new account its welcome gift once, with its date and private info", async () => {
-      const p = await signUp({ username: `new_${++seq}`, name: "Newbie", avatar: 103 });
+      const p = await newcomer();
       await accounts.giveWelcomeGifts();
       await accounts.giveWelcomeGifts();
       const me = await user(p.id);
-      assert.deepStrictEqual([me.coins, me.diamonds, me.welcomeGift, me.createdAt], [10_000, 1_000, true, me.created]);
+      assert.deepStrictEqual([me.coins, me.diamonds, me.welcomeGift], [10_000, 1_000, true]);
       assert.deepStrictEqual(me.stats, { games: 0, wins: 0, losses: 0 });
+      assert.ok(Math.abs(Date.parse(me.createdAt.replace(" ", "T")) - Date.now()) < 60_000, me.createdAt);
       const info = await p.pb.collection("private_info").getOne(p.id);
-      assert.deepStrictEqual([info.email, info.provider, info.createdAt], [p.email, "password", me.created]);
+      assert.deepStrictEqual([info.email, info.provider, info.createdAt], [p.email, "password", me.createdAt]);
       const other = await player();
       await refused(other.pb.collection("private_info").getOne(p.id));
       await refused(p.pb.collection("private_info").update(p.id, { birthDate: "2000-01-01" }));
@@ -251,30 +283,32 @@ describe("PocketBase", function () {
 
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {
       const p = await player();
-      await assert.rejects(accounts.buyAvatar(p.token, 101), /funds/);
+      await assert.rejects(accounts.buyAvatar(p.idToken, 101), /funds/);
       await admin.collection("users").update(p.id, { coins: 700, diamonds: 200 });
       // Two buys at once, money for one.
-      const buys = await Promise.allSettled([accounts.buyAvatar(p.token, 101), accounts.buyAvatar(p.token, 102)]);
+      const buys = await Promise.allSettled([accounts.buyAvatar(p.idToken, 101), accounts.buyAvatar(p.idToken, 102)]);
       assert.deepStrictEqual(buys.map((b) => b.status).sort(), ["fulfilled", "rejected"]);
       const me = await user(p.id);
       assert.strictEqual(me.coins, 200);
       assert.strictEqual(me.avatars.length, 1);
       assert.strictEqual(me.avatar, me.avatars[0]);
-      await assert.rejects(accounts.buyAvatar(p.token, me.avatar), /owned/);
-      await assert.rejects(accounts.buyAvatar(p.token, 103), /free/);
-      await assert.rejects(accounts.buyAvatar(p.token, 9999), /unknown/);
-      assert.deepStrictEqual(await accounts.buyFrame(p.token, 2), { frame: 2, diamonds: 50 });
+      await assert.rejects(accounts.buyAvatar(p.idToken, me.avatar), /owned/);
+      await assert.rejects(accounts.buyAvatar(p.idToken, 103), /free/);
+      await assert.rejects(accounts.buyAvatar(p.idToken, 9999), /unknown/);
+      assert.deepStrictEqual(await accounts.buyFrame(p.idToken, 2), { frame: 2, diamonds: 50 });
       assert.deepStrictEqual([(await user(p.id)).frames, (await user(p.id)).frame], [[2], 2]);
-      await assert.rejects(accounts.buyAvatar("garbage", 101), accounts.AuthError);
+      for (const bad of ["garbage", p.token]) await assert.rejects(accounts.buyAvatar(bad, 101), accounts.AuthError);
+      await assert.rejects(accounts.buyAvatar(firebaseToken({ uid: "NoAccountFirebaseUid00000001", email: "none@test.local" }), 101), /no profile/);
     });
 
     it("hands out a mission's reward once, when it's done", async () => {
       const p = await player();
-      await assert.rejects(accounts.claimMission(p.token, "d_win1"), /not claimable/);
+      await assert.rejects(accounts.claimMission(p.idToken, "d_win1"), /not claimable/);
       await accounts.recordResults([result(p.id, true)]);
-      assert.deepStrictEqual(await accounts.claimMission(p.token, "d_win1"), { coins: 40, xp: 20, diamonds: 0 });
-      await assert.rejects(accounts.claimMission(p.token, "d_win1"), /not claimable/);
-      await assert.rejects(accounts.claimMission(p.token, "nope"), /unknown/);
+      assert.deepStrictEqual(await accounts.claimMission(p.idToken, "d_win1"), { coins: 40, xp: 20, diamonds: 0 });
+      await assert.rejects(accounts.claimMission(p.idToken, "d_win1"), /not claimable/);
+      await assert.rejects(accounts.claimMission(p.idToken, "nope"), /unknown/);
+      await assert.rejects(accounts.claimMission(p.token, "d_win1"), accounts.AuthError);
       const me = await user(p.id);
       assert.deepStrictEqual([me.xp, me.coins], [30 + 20, 30 + 40]);
       const today = await admin.collection("missions").getOne(`${p.id}_${dayKey()}`);
@@ -332,6 +366,21 @@ describe("PocketBase", function () {
       assert.strictEqual((await user(p.id)).vip, true);
       await accounts.setVip(p.username.toUpperCase(), false);
       assert.strictEqual((await user(p.id)).vip, false);
+    });
+
+    it("runs the admin tools without FIREBASE_PROJECT_ID, where players are only guests", async () => {
+      const p = await player();
+      try {
+        accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password, null); // (as the scripts may run)
+        assert.strictEqual(accounts.accountsEnabled, false);
+        assert.strictEqual(await accounts.setVip(p.username, true), p.username);
+        assert.strictEqual((await accounts.grantCurrency(p.username, 5, 0)).coins, 5);
+        await assert.rejects(accounts.accountFor(p.idToken), accounts.AuthError);
+        await assert.rejects(accounts.exchangeToken(p.idToken), accounts.AuthError);
+      } finally {
+        accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password, firebase);
+      }
+      assert.strictEqual(accounts.accountsEnabled, true);
     });
   });
 
@@ -460,11 +509,11 @@ describe("PocketBase", function () {
       return (await admin.collection("presence").getOne(p.id).catch((): null => null))?.state ?? "none";
     };
 
-    it("lets a signed-in player into a game as himself, and refuses a token PocketBase doesn't know with 4401", async () => {
+    it("lets a player into a game as himself by his Firebase ID token, and refuses any other token with 4401", async () => {
       const p = await player();
       const room: any = await colyseus.createRoom("rummy", {});
-      const client = await colyseus.connectTo(room, { idToken: p.token });
-      await assert.rejects(colyseus.connectTo(room, { idToken: "an old app's Firebase token" }), /auth/);
+      const client = await colyseus.connectTo(room, { idToken: p.idToken });
+      await assert.rejects(colyseus.connectTo(room, { idToken: p.token }), /auth/); // his PocketBase token isn't one
       const seat = room.seats.find((s: any) => s.uid === p.id);
       assert.strictEqual(seat?.name, `Player_${p.username.slice(7)}`);
       await until(async () => (await state(p)) === "in_game");
@@ -478,13 +527,13 @@ describe("PocketBase", function () {
       const p = await player();
       await assert.rejects(colyseus.sdk.joinOrCreate("presence", { idToken: "garbage" }), /auth/);
       await assert.rejects(colyseus.sdk.joinOrCreate("presence", {}), /auth/);
-      const app = await colyseus.sdk.joinOrCreate("presence", { idToken: p.token });
+      const app = await colyseus.sdk.joinOrCreate("presence", { idToken: p.idToken });
       await until(async () => (await state(p)) === "online");
       await app.leave();
       await until(async () => (await state(p)) === "offline");
     });
 
-    it("answers /api/profile and /api/auth/legacy-login", async () => {
+    it("answers /api/auth/exchange and /api/profile", async () => {
       const p = await player();
       const post = (path: string, body: unknown, token?: string) =>
         fetch(`http://127.0.0.1:${GAME_PORT}${path}`, {
@@ -492,21 +541,27 @@ describe("PocketBase", function () {
           headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify(body),
         });
-      const ok = await post("/api/profile", { avatar: 104 }, p.token);
+      const exchanged = await post("/api/auth/exchange", { idToken: p.idToken });
+      assert.strictEqual(exchanged.status, 200);
+      const { token, expires, record } = await exchanged.json();
+      assert.deepStrictEqual([record.id, record.username, expires > Date.now() + 3500_000], [p.id, p.username, true]);
+      const pb = new PocketBase(URL_);
+      pb.authStore.save(token, record);
+      assert.strictEqual((await pb.collection("private_info").getOne(p.id)).email, p.email);
+      for (const body of [{}, { idToken: "" }, { idToken: 42 }]) assert.strictEqual((await post("/api/auth/exchange", body)).status, 400);
+      assert.strictEqual((await post("/api/auth/exchange", { idToken: "garbage" })).status, 401);
+      assert.strictEqual((await post("/api/auth/exchange", { idToken: token })).status, 401); // a PocketBase token
+      const sameEmail = firebaseToken({ uid: "SameEmailFirebaseUid00000001", email: p.email });
+      assert.strictEqual((await post("/api/auth/exchange", { idToken: sameEmail })).status, 409);
+      const ok = await post("/api/profile", { avatar: 104 }, p.idToken);
       assert.strictEqual(ok.status, 200);
       assert.strictEqual((await ok.json()).avatar, 104);
-      assert.strictEqual((await post("/api/profile", { avatar: 601 }, p.token)).status, 409);
-      assert.strictEqual((await post("/api/profile", { name: "" }, p.token)).status, 400);
+      assert.strictEqual((await post("/api/profile", { avatar: 601 }, p.idToken)).status, 409);
+      assert.strictEqual((await post("/api/profile", { name: "" }, p.idToken)).status, 400);
       assert.strictEqual((await post("/api/profile", { avatar: 104 }, "garbage")).status, 401);
+      assert.strictEqual((await post("/api/profile", { avatar: 104 }, p.token)).status, 401);
       assert.strictEqual((await post("/api/profile", { avatar: 104 })).status, 400);
       assert.strictEqual((await post("/api/avatars/buy", { id: 101 }, "garbage")).status, 401);
-      assert.strictEqual((await post("/api/auth/legacy-login", {})).status, 400);
-      // No FIREBASE_WEB_API_KEY here: an account still waiting for its password can't move.
-      const waiting = { email: `w_${++seq}@test.local` }; // copied from Firebase, still waiting for his password
-      await admin.collection("users").create({ email: waiting.email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" });
-      delete process.env.FIREBASE_WEB_API_KEY;
-      assert.strictEqual((await post("/api/auth/legacy-login", { email: waiting.email, password: "whatever" })).status, 503);
-      assert.strictEqual((await post("/api/auth/legacy-login", { email: p.email, password: "whatever" })).status, 409); // has his own
     });
   });
 
@@ -518,9 +573,9 @@ describe("PocketBase", function () {
     const chatId = [A, G].sort().join("_");
     const exported = (): FirebaseExport => ({
       authUsers: [
-        { uid: A, email: "Anna@Example.com", emailVerified: false, password: true, googleId: null, created: t(0) },
-        { uid: G, email: "gus@example.com", emailVerified: true, password: false, googleId: "100000000000000000001", created: t(1) },
-        { uid: N, email: "nora@example.com", emailVerified: false, password: true, googleId: null, created: t(2) },
+        { uid: A, email: "Anna@Example.com", emailVerified: false, provider: "password", created: t(0) },
+        { uid: G, email: "gus@example.com", emailVerified: true, provider: "google.com", created: t(1) },
+        { uid: N, email: "nora@example.com", emailVerified: false, provider: "password", created: t(2) },
       ],
       users: [
         { id: A, data: {
@@ -573,17 +628,17 @@ describe("PocketBase", function () {
       const problems = await importFirebase(admin, exported(), { voice, log: quiet });
       const anna = await user(A);
       assert.deepStrictEqual(
-        [anna.email, anna.username, anna.name, anna.avatars, anna.coins, anna.vip, anna.room, anna.welcomeGift, /^[A-Za-z0-9]{50}$/.test(anna.legacyKey), anna.verified],
-        ["anna@example.com", "anna", "Anna", [101, 601], 3400, true, "", true, true, false],
+        [anna.email, anna.username, anna.name, anna.avatars, anna.coins, anna.vip, anna.room, anna.welcomeGift, anna.verified],
+        ["anna@example.com", "anna", "Anna", [101, 601], 3400, true, "", true, false],
       );
       assert.deepStrictEqual([anna.createdAt, anna.nameChangedAt], [t(0).toISOString().replace("T", " "), t(5).toISOString().replace("T", " ")]);
       const gus = await user(G);
-      assert.deepStrictEqual([gus.name, gus.coins, gus.legacyKey, gus.verified], ["gus", 0, "", true]); // his name didn't fit
+      assert.deepStrictEqual([gus.name, gus.coins, gus.verified], ["gus", 0, true]); // his name didn't fit
       assert.strictEqual(gus.nameChangedAt, ""); // so he may pick another at once
       const nora = await user(N);
-      assert.deepStrictEqual([nora.username, !!nora.legacyKey, nora.welcomeGift], ["", true, true]);
-      const link = await admin.collection("_externalAuths").getFirstListItem(`recordRef = "${G}"`);
-      assert.deepStrictEqual([link.provider, link.providerId], ["google", "100000000000000000001"]);
+      assert.deepStrictEqual([nora.username, nora.welcomeGift], ["", true]);
+      // Nothing to log in to PocketBase with: no Google link (and a random password, with password login off).
+      assert.strictEqual((await admin.collection("_externalAuths").getList(1, 1, { filter: `recordRef = "${G}"` })).totalItems, 0);
       const info = await admin.collection("private_info").getOne(A);
       assert.deepStrictEqual([info.birthDate, info.provider], ["1999-05-04", "password"]);
       assert.strictEqual((await admin.collection("private_info").getOne(G)).provider, "google.com");
@@ -621,270 +676,37 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("messages").getFullList({ filter: `from = "${A}" || from = "${G}"` })).length, 3);
     });
 
-    it("signs Google players in: a copied one finds his account, a new one gets a fresh one", async () => {
-      // A stand-in for Google's token and userinfo endpoints (PocketBase's google provider, pointed at it).
-      const people: Record<string, Record<string, unknown>> = {
-        gus: { sub: "100000000000000000001", email: "gus@example.com" }, // copied from Firebase, linked
-        newbie: { sub: "200000000000000000002", email: "newbie@gmail.com" },
-        same: { sub: "300000000000000000003", email: "same.email@gmail.com" }, // an e-mail account's address
-        unverified: { sub: "400000000000000000004", email: "unverified.copy@gmail.com" }, // a copied, unverified one
-      };
-      const google = createServer((req, res) => {
-        const who = req.url === "/token" ? null : String(req.headers.authorization ?? "").replace("Bearer token-", "");
-        let body = "";
-        req.on("data", (c) => (body += c)).on("end", () => {
-          res.setHeader("content-type", "application/json");
-          if (req.url === "/token") {
-            const code = new URLSearchParams(body).get("code");
-            return res.end(JSON.stringify({ access_token: `token-${code}`, token_type: "Bearer", expires_in: 3600 }));
-          }
-          const p = people[who!];
-          res.end(JSON.stringify({ ...p, id: p.sub, email_verified: true, verified_email: true, name: "Google Name That Is Far Too Long For Us", picture: "" }));
-        });
-      }).listen(8095);
-      try {
-        const users = await admin.collections.getOne("users");
-        await admin.collections.update("users", { oauth2: { ...users.oauth2, enabled: true, providers: [{
-          name: "google", clientId: "id", clientSecret: "secret",
-          authURL: "http://127.0.0.1:8095/auth", tokenURL: "http://127.0.0.1:8095/token", userInfoURL: "http://127.0.0.1:8095/userinfo",
-        }] } });
-        const signIn = (code: string) => new PocketBase(URL_).collection("users").authWithOAuth2Code("google", code, "verifier-0123456789", "http://localhost/cb");
-        const gus = await signIn("gus");
-        assert.deepStrictEqual([gus.record.id, gus.record.username, gus.meta?.isNew], [G, "gus", false]);
-        const fresh = await signIn("newbie");
-        assert.deepStrictEqual([fresh.record.username, fresh.record.name, fresh.record.avatar, fresh.record.verified, fresh.meta?.isNew], ["", "", 0, true, true]);
-        await assert.rejects(accounts.accountFor(fresh.token), /no profile/); // until he picks his username
-        await accounts.updateProfile(fresh.token, { username: "newbie", name: "Newbie", avatar: 104 });
-        assert.strictEqual((await accounts.accountFor(fresh.token)).name, "Newbie");
-        assert.strictEqual((await signIn("newbie")).record.id, fresh.record.id);
-        // An e-mail account, then Google with the same address: PocketBase links them.
-        const mail = await signUp({ username: `same_${++seq}`, name: "Same" }, "same.email@gmail.com");
-        assert.strictEqual((await signIn("same")).record.id, mail.id);
-        // A copied e-mail player whose address Firebase never verified, then Google with that address:
-        // PocketBase links them and replaces the password (whoever made that account may not own the
-        // address). His move from Firebase is over: the old password must not take the account back.
-        const copied = "UnverifiedFirebaseUid0000010";
-        await admin.collection("users").create({
-          id: copied, email: "unverified.copy@gmail.com", password: "copy-random-1", passwordConfirm: "copy-random-1",
-          legacyKey: "copy", verified: false, welcomeGift: true, username: "unverified_copy", name: "Unverified",
-        });
-        const linked = await signIn("unverified");
-        assert.deepStrictEqual([linked.record.id, linked.record.verified], [copied, true]);
-        const firebase = async (email: string, password: string) => (password === "old-firebase-pass" ? copied : null);
-        await assert.rejects(legacyLogin("unverified.copy@gmail.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-      } finally {
-        google.close();
-      }
+    it("lands a copied player on his copied account at his first launch, and makes one for a later sign-up", async () => {
+      const anna = { uid: A, email: "anna@example.com" }; // (Firebase still has her, logins and all)
+      const { token, record } = await accounts.exchangeToken(firebaseToken(anna));
+      assert.deepStrictEqual([record.id, record.username, record.coins], [A, "anna", 3400]);
+      const pb = new PocketBase(URL_);
+      pb.authStore.save(token, record);
+      assert.deepStrictEqual((await pb.collection("friends").getFullList({ filter: `user = "${A}"` })).map((f) => f.friend), [G]);
+      assert.strictEqual((await pb.collection("private_info").getOne(A)).birthDate, "1999-05-04");
+      assert.strictEqual((await accounts.accountFor(firebaseToken(anna))).name, "Anna");
+      await accounts.giveWelcomeGifts(); // she had hers on Firebase
+      assert.strictEqual((await user(A)).coins, 3400);
+      // Firebase verified her e-mail since the copy: her account follows.
+      await accounts.exchangeToken(firebaseToken({ ...anna, emailVerified: true }));
+      assert.strictEqual((await user(A)).verified, true);
+      // Signed up on Firebase after the copy: his account is made at his first launch.
+      const late = await accounts.exchangeToken(firebaseToken({ uid: "LateFirebaseUid0000000000005", email: "late@example.com" }));
+      assert.deepStrictEqual([late.record.id, late.record.username], ["LateFirebaseUid0000000000005", ""]);
     });
+  });
+});
 
-    it("refuses the legacy login once his PocketBase password was reset or changed: his old one never comes back", async () => {
-      // A stand-in SMTP server, to get the "forgot password" e-mail and the link in it.
-      const mails: string[] = [];
-      const smtp = createTcpServer((socket) => {
-        let buffer = "", data = false;
-        socket.write("220 test\r\n");
-        socket.on("data", (chunk) => {
-          buffer += chunk.toString();
-          for (;;) {
-            if (data) {
-              const end = buffer.indexOf("\r\n.\r\n");
-              if (end < 0) return;
-              mails.push(buffer.slice(0, end));
-              buffer = buffer.slice(end + 5);
-              data = false;
-              socket.write("250 OK\r\n");
-              continue;
-            }
-            const end = buffer.indexOf("\r\n");
-            if (end < 0) return;
-            const command = buffer.slice(0, 4).toUpperCase();
-            buffer = buffer.slice(end + 2);
-            if (command === "DATA") (data = true), socket.write("354 go on\r\n");
-            else if (command === "QUIT") socket.end("221 bye\r\n");
-            else socket.write("250 OK\r\n");
-          }
-        });
-      }).listen(2526);
-      try {
-        await admin.settings.update({
-          smtp: { enabled: true, host: "127.0.0.1", port: 2526, tls: false },
-          meta: { senderAddress: "noreply@test.local", senderName: "PlayRoom" },
-        });
-        // Copied e-mail players whose Firebase password is "old-firebase-pass".
-        const copiedUids = new Map<string, string>(); // e-mail → uid
-        const firebase = async (email: string, password: string) => (password === "old-firebase-pass" ? copiedUids.get(email) ?? null : null);
-        const copy = async (id: string, email: string) => {
-          copiedUids.set(email, id);
-          await admin.collection("users").create({
-            id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy", welcomeGift: true,
-            username: `copied_${++seq}`, name: "Copied",
-          });
-        };
-        const resetLink = async (email: string) => {
-          const before = mails.length;
-          await new PocketBase(URL_).collection("users").requestPasswordReset(email);
-          for (let i = 0; i < 50 && mails.length === before; i++) await new Promise((r) => setTimeout(r, 100));
-          const mail = (mails[mails.length - 1] ?? "").replace(/=\r\n/g, "").replace(/=3D/g, "=");
-          const token = mail.match(/confirm-password-reset\/([\w-]+\.[\w-]+\.[\w-]+)/)?.[1];
-          assert.ok(token, "the reset e-mail has its link");
-          return token!;
-        };
-        const [R, S, K] = ["ResetFirebaseUid000000000007", "SetFirebaseUid00000000000008", "KeptFirebaseUid0000000000009"];
-        await copy(R, "reset@example.com");
-        await copy(S, "admin@example.com");
-        await copy(K, "kept@example.com");
-        // What the game server writes doesn't end the move.
-        const keyK = (await user(K)).legacyKey;
-        await accounts.recordResults([result(K, true)]);
-        await accounts.savePresence(K, { state: "in_game", game: "ludo", room: "R1" });
-        assert.strictEqual((await user(K)).legacyKey, keyK);
-        const staleR = (await user(R)).legacyKey; // (what a dashboard form opened now would hold)
-        // He forgot his password and reset it by e-mail.
-        await new PocketBase(URL_).collection("users").confirmPasswordReset(await resetLink("reset@example.com"), "brand-new-pass", "brand-new-pass");
-        await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-        const login = (email: string, password: string) => new PocketBase(URL_).collection("users").authWithPassword(email, password);
-        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
-        await refused(login("reset@example.com", "old-firebase-pass"));
-        // A superuser set it (the dashboard): the same.
-        await admin.collection("users").update(S, { password: "set-by-admin-1", passwordConfirm: "set-by-admin-1" });
-        await assert.rejects(legacyLogin("admin@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-        await login("admin@example.com", "set-by-admin-1");
-        // The legacy login's own write is checked inside the write too (a reset a moment before it can't slip
-        // in between): the Firebase password for an account no longer waiting for it is refused.
-        assert.strictEqual(await accounts.giveFirebasePassword(R, "reset@example.com", "old-firebase-pass"), "already moved");
-        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
-        // A dashboard form saved with stale values (his old legacyKey in it) doesn't bring the move back.
-        await admin.collection("users").update(R, { legacyKey: staleR, vip: true });
-        await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
-        // Nobody else sets it: "copy" is for new accounts only.
-        await assert.rejects(admin.collection("users").update(S, { legacyKey: "copy" }));
-        // Overlapping writes: the reset form sent twice at once, and a reset racing the legacy login's own
-        // write. Whatever the order, his reset password stays and the old Firebase password can't come back.
-        for (let round = 0; round < 3; round++) {
-          const [D, E] = [`DoubleSubmitUid0000000000${round}a`, `ResetRacesMoveUid000000000${round}b`];
-          const [mailD, mailE] = [`double${round}@example.com`, `race${round}@example.com`];
-          await copy(D, mailD);
-          await copy(E, mailE);
-          const linkD = await resetLink(mailD);
-          const twice = await Promise.allSettled([1, 2].map(() =>
-            new PocketBase(URL_).collection("users").confirmPasswordReset(linkD, "double-reset-1", "double-reset-1")));
-          assert.ok(twice.some((r) => r.status === "fulfilled"));
-          await assert.rejects(legacyLogin(mailD, "old-firebase-pass", firebase), (e: any) => e.status === 409);
-          assert.strictEqual((await login(mailD, "double-reset-1")).record.id, D);
-          const linkE = await resetLink(mailE);
-          const [moved, reset] = await Promise.allSettled([
-            accounts.giveFirebasePassword(E, mailE, "old-firebase-pass"),
-            new PocketBase(URL_).collection("users").confirmPasswordReset(linkE, "race-reset-1", "race-reset-1"),
-          ]);
-          assert.strictEqual(moved.status, "fulfilled");
-          if (reset.status === "fulfilled") {
-            // The reset went through: it's his password now, and the move is over.
-            assert.strictEqual((await login(mailE, "race-reset-1")).record.id, E);
-            await assert.rejects(legacyLogin(mailE, "old-firebase-pass", firebase), (e: any) => e.status === 409);
-            assert.strictEqual((await login(mailE, "race-reset-1")).record.id, E);
-          }
-        }
-        // Untouched: he still moves.
-        await legacyLogin("kept@example.com", "old-firebase-pass", firebase);
-        assert.strictEqual((await login("kept@example.com", "old-firebase-pass")).record.id, K);
-        assert.strictEqual((await user(K)).legacyKey, "");
-      } finally {
-        smtp.close();
-      }
-    });
-
-    it("fails closed when PocketBase runs without its hook (--hooksDir), and a reset made meanwhile still counts", async () => {
-      // A PocketBase of its own, started with the hook, without it, then with it again (same data).
-      const other = mkdtempSync(join(tmpdir(), "pb-nohooks-"));
-      const OTHER = "http://127.0.0.1:8096";
-      execFileSync(BIN!, ["migrate", "up", "--dir", other, "--migrationsDir", MIGRATIONS], { stdio: "ignore" });
-      execFileSync(BIN!, ["superuser", "upsert", SUPERUSER.email, SUPERUSER.password, "--dir", other], { stdio: "ignore" });
-      let pb: ChildProcess | undefined;
-      const start = async (hooks: boolean) => {
-        pb = spawn(BIN!, [
-          "serve", "--http", "127.0.0.1:8096", "--dir", other, "--migrationsDir", MIGRATIONS, "--automigrate=false",
-          "--hooksDir", hooks ? HOOKS : join(other, "no-hooks"), "--hooksWatch=false",
-        ], { stdio: "ignore" });
-        for (let i = 0; i < 100 && !(await fetch(`${OTHER}/api/health`).then((r) => r.ok, () => false)); i++) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-      };
-      const stop = () => new Promise((done) => (pb!.once("exit", done), pb!.kill()));
-      const errors: unknown[] = [];
-      const consoleError = console.error;
-      const [W, V] = ["WaitingFirebaseUid0000000011", "ResetMeanwhileUid00000000012"];
-      const firebase = async (email: string, password: string) =>
-        password === "old-firebase-pass" ? { "waiting@example.com": W, "meanwhile@example.com": V }[email] ?? null : null;
-      const login = (email: string, password: string) => new PocketBase(OTHER).collection("users").authWithPassword(email, password);
-      try {
-        await start(true);
-        accounts.connectAccounts(OTHER, SUPERUSER.email, SUPERUSER.password);
-        const otherAdmin = new PocketBase(OTHER);
-        await otherAdmin.collection("_superusers").authWithPassword(SUPERUSER.email, SUPERUSER.password);
-        for (const [id, email] of [[W, "waiting@example.com"], [V, "meanwhile@example.com"]]) {
-          await otherAdmin.collection("users").create({ id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" });
-        }
-        await stop();
-        await start(false); // the hook forgotten
-        // The copy can't make waiting accounts, and the legacy login writes nothing (503, and says why).
-        await assert.rejects(otherAdmin.collection("users").create({ email: "late@example.com", password: "copy-random-1", passwordConfirm: "copy-random-1", legacyKey: "copy" }));
-        console.error = (...args: unknown[]) => void errors.push(args);
-        await assert.rejects(legacyLogin("waiting@example.com", "old-firebase-pass", firebase), (e: any) => e instanceof LegacyLoginError && e.status === 503);
-        console.error = consoleError;
-        assert.ok(errors.some((e) => String(e).includes("pb_hooks")), "it says why");
-        assert.strictEqual((await login("waiting@example.com", "copy-random-1")).record.id, W); // nothing written
-        // Meanwhile, a player resets his password (here: a superuser sets it).
-        await otherAdmin.collection("users").update(V, { password: "set-meanwhile-1", passwordConfirm: "set-meanwhile-1" });
-        await stop();
-        await start(true); // the hook back
-        await assert.rejects(legacyLogin("meanwhile@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
-        assert.strictEqual((await login("meanwhile@example.com", "set-meanwhile-1")).record.id, V);
-        await legacyLogin("waiting@example.com", "old-firebase-pass", firebase); // untouched: he moves
-        assert.strictEqual((await login("waiting@example.com", "old-firebase-pass")).record.id, W);
-      } finally {
-        console.error = consoleError;
-        accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password);
-        if (pb) await stop();
-        rmSync(other, { recursive: true, force: true });
-      }
-    });
-
-    it("moves an e-mail player's password from Firebase at his first login, once", async () => {
-      let asked = 0;
-      const firebase = async (email: string, password: string) => {
-        asked++;
-        const known: Record<string, [string, string]> = {
-          "anna@example.com": [A, "hunter2"], // 7 characters: Firebase allowed 6
-          "late@example.com": ["LateFirebaseUid0000000000005", "late-pass"],
-          "nora@example.com": ["SomeoneElseUid00000000000006", "nora-pass"],
-        };
-        return known[email]?.[1] === password ? known[email][0] : null;
-      };
-      const login = (email: string, password: string) => new PocketBase(URL_).collection("users").authWithPassword(email, password);
-      await assert.rejects(login("anna@example.com", "hunter2"), (e: any) => e.status === 400); // the app's cue to try the legacy login
-      await assert.rejects(legacyLogin("anna@example.com", "wrong", firebase), (e: any) => e instanceof LegacyLoginError && e.status === 401);
-      await legacyLogin(" Anna@Example.com ", "hunter2", firebase);
-      const { record, token } = await login("anna@example.com", "hunter2");
-      assert.strictEqual(record.id, A);
-      assert.strictEqual((await accounts.accountFor(token)).name, "Anna");
-      assert.strictEqual((await user(A)).legacyKey, "");
-      // Moved: never again, and Firebase isn't even asked.
-      asked = 0;
-      await assert.rejects(legacyLogin("anna@example.com", "hunter2", firebase), (e: any) => e.status === 409);
-      assert.strictEqual(asked, 0);
-      // A Google player has nothing to move.
-      await assert.rejects(legacyLogin("gus@example.com", "x", firebase), (e: any) => e.status === 409);
-      // Firebase's uid for this e-mail isn't the account's: refused.
-      await assert.rejects(legacyLogin("nora@example.com", "nora-pass", firebase), (e: any) => e.status === 409);
-      // Signed up on Firebase after the copy: an empty account under his uid, for him to set up.
-      await legacyLogin("late@example.com", "late-pass", firebase);
-      const late = await login("late@example.com", "late-pass");
-      assert.deepStrictEqual([late.record.id, late.record.username, late.record.welcomeGift], ["LateFirebaseUid0000000000005", "", true]);
-      assert.strictEqual((await admin.collection("private_info").getOne("LateFirebaseUid0000000000005")).provider, "password");
-      // Five wrong tries, then it waits.
-      for (let i = 0; i < 4; i++) await assert.rejects(legacyLogin("nora@example.com", "bad", firebase), (e: any) => e.status === 401);
-      await assert.rejects(legacyLogin("nora@example.com", "bad", firebase), (e: any) => e.status === 429);
-    });
+describe("Firebase ID tokens", () => {
+  it("are checked with the project id alone, and what isn't one of its own is refused before any key is needed", async () => {
+    const verify = accounts.firebaseVerifier("demo-playroom");
+    const now = Math.floor(Date.now() / 1000);
+    const claims = { iss: "https://securetoken.google.com/demo-playroom", aud: "demo-playroom", sub: "SomeFirebaseUid", iat: now, exp: now + 3600, auth_time: now };
+    const other = { ...claims, iss: "https://securetoken.google.com/another-project", aud: "another-project" };
+    const jwt = (header: object, payload: object) =>
+      [header, payload].map((o) => Buffer.from(JSON.stringify(o)).toString("base64url")).join(".") + ".c2lnbmF0dXJl";
+    for (const bad of ["", "garbage", jwt({ alg: "HS256", kid: "k" }, claims), jwt({ alg: "RS256" }, claims), jwt({ alg: "RS256", kid: "k" }, other)]) {
+      await assert.rejects(verify(bad), Error, bad);
+    }
   });
 });

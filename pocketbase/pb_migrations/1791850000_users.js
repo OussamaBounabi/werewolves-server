@@ -1,38 +1,23 @@
 /**
  * Player accounts: PocketBase's own `users` auth collection, reshaped to hold the profile Firestore kept in
- * users/{uid}. Accounts copied from Firebase keep their Firebase uid as id (28 letters and digits); new ones
- * get PocketBase's usual 15-character id.
+ * users/{uid}. The id is the player's Firebase uid (28 letters and digits).
  *
- * Players sign up here directly (e-mail + password, or Google). Everything else on the profile is written
- * by the game server, signed in as a superuser: the rules below only let a player set his starting
- * username, name and free avatar, and later change his own password. Name, avatar, frame and a Google
- * player's first username go through the game server's POST /api/profile (it checks the 24 h rule and
- * what he owns).
+ * PocketBase is the database only: players sign up and log in with Firebase Auth, as before. Nobody logs
+ * in to PocketBase or signs up on it: password and OAuth2 login are off, and only the game server (a
+ * superuser) creates and updates accounts. The game server exchanges an app's Firebase ID token for a
+ * PocketBase token (POST /api/auth/exchange) that the app uses to read and write what the rules allow.
+ * Name, avatar, frame and the first username go through the game server's POST /api/profile.
  */
-
-/** Written by the game server only (or chosen through it): a player may never set them himself. */
-const SERVER_FIELDS = [
-  "nameChangedAt", "frame", "avatars", "frames", "xp", "coins", "diamonds", "rankPoints", "stats",
-  "room", "vip", "welcomeGift", "createdAt", "legacyKey",
-];
-/** Set once at sign-up, then only through the game server. */
-const PROFILE_FIELDS = ["username", "name", "avatar"];
-/** The two avatars everyone has (FREE_AVATARS in src/avatars.ts): a new account starts with one of them. */
-const FREE_AVATARS = [103, 104];
-
-const absent = (fields) => fields.map((f) => `@request.body.${f}:isset = false`).join(" && ");
 
 migrate((app) => {
   const users = app.findCollectionByNameOrId("users");
 
-  // Firebase uids are kept as ids (mixed case, 28 characters).
+  // Firebase uids are the ids (mixed case, 28 characters).
   const id = users.fields.getByName("id");
   id.pattern = "^[A-Za-z0-9]+$";
   id.min = 1;
   id.max = 36;
-  // Firebase accepted 6-character passwords: those players' passwords move here as they are.
-  users.fields.getByName("password").min = 6;
-  // Display names: 3 to 16 letters, digits or _ (a Google player has none until he sets up his profile).
+  // Display names: 3 to 16 letters, digits or _ (empty until the player sets up his profile).
   const name = users.fields.getByName("name");
   name.max = 16;
   name.pattern = "^[A-Za-z0-9_]{3,16}$";
@@ -54,46 +39,30 @@ migrate((app) => {
     new BoolField({ name: "vip" }),
     new BoolField({ name: "welcomeGift" }),
     new DateField({ name: "createdAt" }),
-    // A copied e-mail player still waiting for his Firebase password: his login key as it was when copied
-    // (pocketbase/pb_hooks/legacy_auth.pb.js). Only the hook fills it, from "copy" and "move", which the
-    // pattern refuses: without the hook, the copy and the legacy login fail instead of going ahead.
-    new TextField({ name: "legacyKey", hidden: true, max: 60, pattern: "^[A-Za-z0-9]{30,60}$" }),
   );
-  // Unique usernames; a Google player has none until he picks it.
+  // Unique usernames; a new player has none until he picks it.
   users.addIndex("idx_users_username", true, "username", "username != ''");
   users.addIndex("idx_users_welcome", false, "welcomeGift", "");
 
   users.listRule = '@request.auth.id != ""';
   users.viewRule = '@request.auth.id != ""';
-  users.createRule = [
-    "@request.body.id:isset = false",
-    "@request.body.verified:isset = false",
-    absent(SERVER_FIELDS),
-    `(@request.body.avatar:isset = false || ${FREE_AVATARS.map((a) => `@request.body.avatar = ${a}`).join(" || ")})`,
-  ].join(" && ");
-  // His own password (with oldPassword) and emailVisibility: nothing else.
-  users.updateRule = [
-    "id = @request.auth.id",
-    "@request.body.email:isset = false",
-    "@request.body.verified:isset = false",
-    absent(PROFILE_FIELDS),
-    absent(SERVER_FIELDS),
-  ].join(" && ");
+  users.createRule = null; // the game server only
+  users.updateRule = null; // the game server only
   users.deleteRule = "id = @request.auth.id"; // deleting his account takes everything of his with it
 
-  // Google's name and picture don't fit our name (3 to 16 letters, digits or _) and avatar (a number).
-  users.oauth2.mappedFields.name = "";
-  users.oauth2.mappedFields.avatarURL = "";
-  // New-device e-mails need SMTP; turn them back on once it's set up, if wanted.
-  users.authAlert.enabled = false;
-  // A login lasts 90 days (PocketBase's default is 5): the app refreshes it at each launch, so a player
-  // is only signed out after 90 days without opening it.
-  users.authToken.duration = 90 * 24 * 60 * 60;
+  // No login on PocketBase itself: its tokens come from the game server's exchange.
+  users.passwordAuth.enabled = false;
+  users.oauth2.enabled = false;
+  users.otp.enabled = false;
+  users.mfa.enabled = false;
 
   app.save(users);
 }, (app) => {
   const users = app.findCollectionByNameOrId("users");
-  for (const f of [...SERVER_FIELDS, "username", "avatar"]) users.fields.removeByName(f);
+  for (const f of [
+    "username", "nameChangedAt", "avatar", "frame", "avatars", "frames", "xp", "coins", "diamonds", "rankPoints",
+    "stats", "room", "vip", "welcomeGift", "createdAt",
+  ]) users.fields.removeByName(f);
   users.fields.add(new FileField({ name: "avatar", maxSelect: 1, mimeTypes: ["image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"] }));
   const name = users.fields.getByName("name");
   name.max = 255;
@@ -105,9 +74,6 @@ migrate((app) => {
   users.createRule = "";
   users.updateRule = "id = @request.auth.id";
   users.deleteRule = "id = @request.auth.id";
-  users.oauth2.mappedFields.name = "name";
-  users.oauth2.mappedFields.avatarURL = "avatar";
-  users.authAlert.enabled = true;
-  users.authToken.duration = 5 * 24 * 60 * 60;
+  users.passwordAuth.enabled = true;
   app.save(users);
 });

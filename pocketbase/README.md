@@ -1,8 +1,9 @@
 # PocketBase: the apps' database
 
-Player accounts, friends, chat, missions and the leaderboard live in a self-hosted
-[PocketBase](https://pocketbase.io) (v0.40.5) on the game server's VPS. It replaces Firebase (Auth,
-Firestore and the Realtime Database).
+Player profiles, friends, chat, missions and the leaderboard live in a self-hosted
+[PocketBase](https://pocketbase.io) (v0.40.5) on the game server's VPS. It replaces Firestore and the
+Realtime Database. PocketBase is the database only: players sign up and log in with Firebase Auth, as
+before.
 
 | Who | Reaches it at |
 |---|---|
@@ -10,19 +11,18 @@ Firestore and the Realtime Database).
 | The game server | `http://127.0.0.1:8090`, signed in as a superuser |
 
 The collections and their access rules are the migration files in [`pb_migrations/`](pb_migrations).
-PocketBase applies them when it starts. To change a collection, add a new migration file here.
+PocketBase applies them when it starts. To change a collection, add a new migration file here. There
+are no hooks: PocketBase holds no game logic.
 
-There is one hook, [`pb_hooks/legacy_auth.pb.js`](pb_hooks/legacy_auth.pb.js), and it holds no game
-logic. It lets a copied player bring his Firebase password only while his PocketBase password is still
-the one the copy gave him (`legacyKey`, below). PocketBase must run with `--hooksDir` pointing at that
-folder. Without the hook nothing goes through: the copy can't create e-mail accounts, and every legacy
-login answers 503 and is logged.
+**Logins.** Nobody logs in to PocketBase or signs up on it: password, OAuth2 and one-time-code logins
+are off. An app gets its PocketBase token from the game server, for its Firebase ID token
+(`POST /api/auth/exchange`, below). The token is good for an hour, and the app exchanges again when it
+expires.
 
-**Who writes what.** The apps write directly only what a player may change himself: signing up, his
-password, friend requests and friendships, messages, read markers and reports. Everything that touches
-the game goes through the game server: XP, coins, diamonds, stats, purchases, missions, the welcome gift,
-presence, the room a player is in, his name, avatar and frame. The game server writes as a superuser,
-and PocketBase holds no game logic.
+**Who writes what.** The apps write directly only what a player may change himself: friend requests
+and friendships, messages, read markers and reports, and deleting his account. Everything else goes
+through the game server: accounts, XP, coins, diamonds, stats, purchases, missions, the welcome gift,
+presence, the room a player is in, his name, avatar and frame. The game server writes as a superuser.
 
 **Dates.** `created` is PocketBase's own date, in server time (`"2026-10-12 21:04:05.123Z"`). Rows
 copied from Firebase also carry their original date in `firebaseAt`. Show `firebaseAt || created`.
@@ -33,8 +33,8 @@ order, so this gives the same order as before.
 
 | Firebase | PocketBase |
 |---|---|
-| Auth (e-mail + password, Google) | the `users` auth collection (Google: its OAuth2 provider) |
-| `users/{uid}` | `users`, id = the Firebase uid (accounts made on PocketBase get 15-character ids) |
+| Auth (e-mail + password, Google) | stays on Firebase Auth |
+| `users/{uid}` | `users`, id = the Firebase uid |
 | `users/{uid}/private/info` | `private_info`, id = uid |
 | `users/{uid}/missions/{period}` | `missions`, id = `<uid>_<period>` |
 | `users/{uid}/friends/{fid}` | `friends` (`user` = uid, `friend` = fid): one row per side, as before |
@@ -50,20 +50,24 @@ order, so this gives the same order as before.
 
 ## Collections
 
-"Signed in" means any player with a valid token. "Server" means only superusers, which is the game
-server. Every relation to `users` has cascade delete: deleting an account deletes everything of his.
+"Signed in" means any player with a valid PocketBase token (from the exchange). "Server" means only
+superusers, which is the game server. Every relation to `users` has cascade delete: deleting an account
+deletes everything of his.
 
 ### `users` (auth collection)
 
+One per player, made by the game server the first time it sees him (his first exchange or profile
+setup), or by the copy from Firebase.
+
 | Field | Type | Notes |
 |---|---|---|
-| `id` | text | the Firebase uid for players copied from Firebase (28 characters), else 15 characters |
-| `email` | email | hidden from other players unless `emailVisibility` |
-| `emailVisibility` | bool | the player's choice |
-| `verified` | bool | e-mail verified (Google accounts are) |
-| `password` | password | 6 characters at least (as Firebase) |
-| `username` | text | unique, lowercase, `^[a-z0-9_]{3,16}$`; empty for a Google player until he picks one |
-| `name` | text | display name: 3 to 16 of `[A-Za-z0-9_]` (the username's characters, any case); empty for a Google player until he sets up his profile |
+| `id` | text | his Firebase uid (28 characters) |
+| `email` | email | his Firebase e-mail, kept in step at each exchange. Other players never see it. |
+| `emailVisibility` | bool | always false |
+| `verified` | bool | Firebase's "e-mail verified" |
+| `password` | password | a random one nobody knows: PocketBase wants one, and password login is off |
+| `username` | text | unique, lowercase, `^[a-z0-9_]{3,16}$`; empty for a new player until he picks one |
+| `name` | text | display name: 3 to 16 of `[A-Za-z0-9_]` (the username's characters, any case); empty for a new player until he sets up his profile |
 | `nameChangedAt` | date | the last name change (empty: never changed) |
 | `avatar` | number | the avatar worn (0 = none yet; 103 and 104 are free for everyone) |
 | `frame` | number | the frame worn, 0 = none |
@@ -71,24 +75,20 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `frames` | json | frame ids owned |
 | `xp`, `coins`, `diamonds` | number | never below 0 |
 | `rankPoints` | number | |
-| `stats` | json | `{ games, wins, losses, minutes, wolfGames, wolfWins, villageGames, villageWins, soloGames, soloWins, roles: { <role>: { games, wins } } }` (null until his welcome gift, a few seconds after sign-up) |
+| `stats` | json | `{ games, wins, losses, minutes, wolfGames, wolfWins, villageGames, villageWins, soloGames, soloWins, roles: { <role>: { games, wins } } }` (null until his welcome gift, a few seconds after his first exchange) |
 | `room` | text | the game room he's in, "" if none (the server keeps it; the chat rule uses it) |
 | `vip` | bool | a VIP werewolf host picks his own role |
-| `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of sign-up |
+| `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of the account's creation |
 | `createdAt` | date | when the account was made (Firebase's date for copied players) |
-| `legacyKey` | text, hidden | set on a copied e-mail player still waiting for his Firebase password (see Log in): his login key as the copy left it. PocketBase gives an account a new login key when its password or e-mail changes, hook or not: a reset by e-mail, a change by the player, a superuser, or PocketBase itself when a Google sign-in links his unverified account. The legacy login writes only while `legacyKey` still matches, so his old Firebase password can never replace a newer one. Emptied when he moves, and by any write that brings a new password or e-mail, so two overlapping writes (a reset form sent twice) can't make it match again. Only the hook fills it; don't edit it. |
 | `created`, `updated` | autodate | |
 
 Rules:
-- **list / view:** signed in.
-- **create (sign-up):** any of `email`, `password`, `passwordConfirm`, `username`, `name`, `avatar`
-  (103 or 104 only) and `emailVisibility`. Not `id`, `verified`, nor any field the server writes.
-  Don't send `xp: 0` and the like: they start at 0.
-- **update:** his own record only, and only `password` (with `oldPassword` and `passwordConfirm`) and
-  `emailVisibility`. Changing the password signs him out everywhere, this app included: sign in again
-  with the new password. Hidden fields sent by a player are ignored.
+- **list / view:** signed in. A player sees his own e-mail, nobody else's.
+- **create / update:** server only.
 - **delete:** his own account.
-- Name, avatar, frame, and a Google player's first username go through the game server's
+- **Logins:** none. Password, OAuth2, one-time-code and MFA logins are off. Tokens come from the game
+  server's exchange.
+- Name, avatar, frame, and a new player's first username go through the game server's
   `POST /api/profile` (below).
 
 ### `private_info` — server writes, owner reads
@@ -97,12 +97,12 @@ Rules:
 |---|---|---|
 | `id` | text | = the player's id |
 | `user` | relation → users | |
-| `email` | text | |
-| `provider` | select | `password` \| `google.com` |
+| `email` | text | his Firebase e-mail, like `users.email` |
+| `provider` | select | `password` \| `google.com`: his Firebase sign-in when the account was made |
 | `birthDate` | text | `YYYY-MM-DD`, old accounts only |
 | `createdAt` | date | |
 
-The server creates it with the welcome gift. Read it with `getOne(myId)`.
+The server creates it with his account. Read it with `getOne(myId)`.
 
 ### `friend_requests`
 
@@ -233,45 +233,45 @@ No row means he's never been online since the move. Treat that as `offline`.
 `pb` is the PocketBase SDK client for `https://pb.werewolf-server.duckdns.org`, and `server` is the
 game server. The examples use the JS SDK; the Dart SDK has the same calls.
 
-**Sign up** (e-mail):
-`pb.collection("users").create({ email, password, passwordConfirm, username, name, avatar: 103 })`,
-then `authWithPassword(email, password)`. If the username is taken, the error is
-`data.username.code = "validation_not_unique"`.
+**Sign up, log in, forgot password, e-mail verification:** Firebase Auth, as before (e-mail +
+password, Google).
 
-**Log in** (e-mail):
-1. Try `pb.collection("users").authWithPassword(email, password)`.
-2. If it fails with 400, the player may not have brought his password over from Firebase yet. Call
-   `POST server/api/auth/legacy-login` with `{ email, password }` and handle the answer:
+**The PocketBase token:** after logging in, at each launch, and when it expires, exchange the Firebase
+ID token for it:
+```js
+const idToken = await firebaseUser.getIdToken();
+const res = await fetch(`${server}/api/auth/exchange`, {
+  method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken }),
+});
+const { token, expires, record } = await res.json(); // expires: epoch ms, an hour from now
+pb.authStore.save(token, record);
+```
+- The first exchange makes the player's account, with his Firebase uid as its id. Players copied from
+  Firebase land on their copied account.
+- If `record.username` is empty (a new player), show the profile screen, then
+  `POST server/api/profile { username, name, avatar }`.
+- Exchange again a few minutes before `expires`. Don't wait for an error: PocketBase doesn't answer 401
+  to an expired token. It treats the request as a guest's, so lists come back empty and the rest is
+  refused. `pb.authStore.isValid` turns false once the token has expired.
+- The token can't be refreshed: `authRefresh()` gives the same one back.
 
 | Answer | Meaning | Then |
 |---|---|---|
-| 200 | his password is now on PocketBase | `authWithPassword` again |
-| 401 | wrong e-mail or password | show it |
-| 409 | nothing to move (already moved, password or e-mail changed in PocketBase since the copy, or a Google account) | show the usual wrong-password message |
-| 422 | PocketBase doesn't accept that password (over 71 characters) | ask him to reset it ("Forgot password") |
-| 429 | too many tries | ask to wait 15 minutes |
-| 503 | the server can't move passwords right now (a setup problem on our side) | show a generic error, try again later |
+| 200 | `{ token, expires, record }` | `pb.authStore.save(token, record)` |
+| 400 | no `idToken` | |
+| 401 | not a valid Firebase ID token (expired, another project's…), or a Firebase account without an e-mail | get a fresh ID token and try again, else log in again |
+| 409 | `e-mail taken by another account`: another PocketBase account still has his e-mail (deleted from Firebase but not from PocketBase) | show a generic error. An admin deletes that account, or changes its e-mail, in the dashboard. |
 
-**Google:** `pb.collection("users").authWithOAuth2({ provider: "google" })` opens a browser tab.
-Players who used Google on Firebase land on their old account, with the same id and profile.
-If `record.username` is empty (a new player), show the profile screen, then
-`POST server/api/profile { username, name, avatar }`.
+**Delete my account:** `pb.collection("users").delete(me)` deletes everything of his on PocketBase.
+Then delete the Firebase account (`firebaseUser.delete()`). If that fails (Firebase may want a recent
+login), his next exchange makes him a new, empty account.
 
-**Forgot password:** `pb.collection("users").requestPasswordReset(email)` (needs SMTP set up in PocketBase).
-A player copied from Firebase who resets his password this way has moved for good: his old Firebase
-password no longer works anywhere.
-
-**Staying signed in:** a login token lasts 90 days. Call `pb.collection("users").authRefresh()` at
-each launch: it returns a new token, good for 90 more days. A player is signed out only after 90 days
-without opening the app, or when he changes his password.
-
-**Delete my account:** `pb.collection("users").delete(me)`.
-
-**The game server:**
-- Send `pb.authStore.token` as `idToken` when joining any room.
-- Send it as `Authorization: Bearer <token>` on `/api/missions/claim`, `/api/avatars/buy`,
+**The game server** takes the Firebase ID token, as before (not the PocketBase one):
+- Send it as `idToken` when joining any room: `await firebaseUser.getIdToken()`, which renews it when
+  needed.
+- Send it as `Authorization: Bearer <ID token>` on `/api/missions/claim`, `/api/avatars/buy`,
   `/api/frames/buy`, `/api/profile` and `/api/admin/*`.
-- A token PocketBase doesn't accept is refused with 4401 "auth" (401 over HTTP).
+- A token that isn't a valid Firebase ID token is refused with 4401 "auth" (401 over HTTP).
 
 **Profile:** `POST server/api/profile` with any of `{ name, avatar, frame, username }`. A field left
 out, or null, stays as it is. It answers the profile as it is now:

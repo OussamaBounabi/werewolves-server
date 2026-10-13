@@ -23,7 +23,6 @@
     "@colyseus/testing": "^0.18.5",
     "@types/express": "^5.0.6",
     "@types/mocha": "^10.0.1",
-    "firebase-admin": "^14.5.0",
     "mocha": "^11.7.5",
     "rimraf": "^5.0.0",
     "tsx": "^4.21.0",
@@ -34,6 +33,7 @@
     "@colyseus/tools": "^0.18.1",
     "colyseus": "^0.18.2",
     "express": "^5.2.1",
+    "firebase-admin": "^14.5.0",
     "livekit-server-sdk": "^2.19.1",
     "pocketbase": "^0.28.1"
   }

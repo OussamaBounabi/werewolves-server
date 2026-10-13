@@ -249,7 +249,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * Runs when the client's socket connects (not on reconnects): the player's account (from his app's
-   * PocketBase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
+   * Firebase login token), bans, spectators, and the player limit. Returns what onJoin gets as client.auth.
    */
   async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null; admin?: boolean }> {
     // God view: the admin app's login, any room, any phase, invisible.
