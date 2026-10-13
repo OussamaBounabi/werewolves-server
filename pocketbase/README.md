@@ -13,8 +13,9 @@ The collections and their access rules are the migration files in [`pb_migration
 PocketBase applies them when it starts. To change a collection, add a new migration file here.
 
 There is one hook, [`pb_hooks/legacy_auth.pb.js`](pb_hooks/legacy_auth.pb.js), and it holds no game
-logic. When a copied player's password is reset or changed in PocketBase, it ends his move from Firebase
-(`legacyAuth`, below). PocketBase must run with `--hooksDir` pointing at that folder.
+logic. When a copied player's password changes in PocketBase in any way, it ends his move from Firebase
+(`legacyAuth`, below). PocketBase must run with `--hooksDir` pointing at that folder. Without the hook,
+the game server refuses every legacy login (503) and logs why.
 
 **Who writes what.** The apps write directly only what a player may change himself: signing up, his
 password, friend requests and friendships, messages, read markers and reports. Everything that touches
@@ -74,7 +75,7 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `vip` | bool | a VIP werewolf host picks his own role |
 | `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of sign-up |
 | `createdAt` | date | when the account was made (Firebase's date for copied players) |
-| `legacyAuth` | bool, hidden | the player still has to bring his password from Firebase (see Log in). Cleared when he does, and by the hook as soon as his PocketBase password is reset or changed: from then on the legacy login refuses him, so his old Firebase password can never replace a newer one. |
+| `legacyAuth` | bool, hidden | the player still has to bring his password from Firebase (see Log in). Cleared when he does. The hook also clears it as soon as his PocketBase password changes in any way: reset by e-mail, changed by him, set by a superuser, or replaced by PocketBase itself when a Google sign-in links his unverified account. Once false it never goes back to true, not even from the dashboard. From then on the legacy login refuses him, so his old Firebase password can never replace a newer one. |
 | `created`, `updated` | autodate | |
 
 Rules:
@@ -83,8 +84,8 @@ Rules:
   (103 or 104 only) and `emailVisibility`. Not `id`, `verified`, nor any field the server writes.
   Don't send `xp: 0` and the like: they start at 0.
 - **update:** his own record only, and only `password` (with `oldPassword` and `passwordConfirm`) and
-  `emailVisibility`. Changing the password ends his other sessions. Hidden fields sent by a player are
-  ignored.
+  `emailVisibility`. Changing the password signs him out everywhere, this app included: sign in again
+  with the new password. Hidden fields sent by a player are ignored.
 - **delete:** his own account.
 - Name, avatar, frame, and a Google player's first username go through the game server's
   `POST /api/profile` (below).
@@ -247,6 +248,7 @@ then `authWithPassword(email, password)`. If the username is taken, the error is
 | 401 | wrong e-mail or password | show it |
 | 409 | nothing to move (already moved, password reset or changed in PocketBase, or a Google account) | show the usual wrong-password message |
 | 429 | too many tries | ask to wait 15 minutes |
+| 503 | the server can't move passwords right now (a setup problem on our side) | show a generic error, try again later |
 
 **Google:** `pb.collection("users").authWithOAuth2({ provider: "google" })` opens a browser tab.
 Players who used Google on Firebase land on their old account, with the same id and profile.

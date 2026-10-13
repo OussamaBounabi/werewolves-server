@@ -24,6 +24,7 @@ export function connectAccounts(url: string, email: string, password: string) {
   pb.autoCancellation(false); // the server sends the same request for many players at once
   superuser = { email, password };
   signingIn = null;
+  guardCheckedAt = 0;
   accountsEnabled = true;
 }
 
@@ -509,24 +510,64 @@ export async function moveFromFirebase(uid: string, email: string, password: str
     const client = await db();
     const user = await maybe(client.collection("users").getOne(uid));
     if (user && !user.legacyAuth) return false;
-    const login = { email, password, passwordConfirm: password };
-    const batch = client.createBatch(); // (read inside the write: see pocketbase/pb_hooks/legacy_auth.pb.js)
-    if (user) {
-      // legacyAuth: true = "the password from Firebase": PocketBase's hook takes it only if the account is
-      // still waiting for it at the moment of writing (a reset may have just happened), and stores false.
-      batch.collection("users").update(uid, { ...login, legacyAuth: true });
-    } else {
-      const createdAt = new Date().toISOString();
-      batch.collection("users").create({ id: uid, ...login, legacyAuth: false, welcomeGift: true, createdAt }); // a Firebase player had his gift
-      batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
-    }
-    try {
-      await batch.send();
-    } catch (e) {
-      // (PocketBase words it "Already moved.")
-      if (e instanceof ClientResponseError && /already moved/i.test(JSON.stringify(e.response))) return false;
-      throw e;
-    }
+    if (user) return giveFirebasePassword(uid, email, password);
+    const createdAt = new Date().toISOString();
+    const batch = client.createBatch();
+    batch.collection("users").create({ id: uid, email, password, passwordConfirm: password, legacyAuth: false, welcomeGift: true, createdAt }); // a Firebase player had his gift
+    batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
+    await batch.send();
     return true;
   });
+}
+
+const alreadyMoved = (e: unknown) => e instanceof ClientResponseError && /already moved/i.test(JSON.stringify(e.response)); // (PocketBase words it "Already moved.")
+
+/**
+ * The write of the legacy login, on its own for the tests: an account still waiting for its Firebase
+ * password gets it. False if, by the time of writing, it no longer waits (a reset may have just
+ * happened): PocketBase's hook (pocketbase/pb_hooks/legacy_auth.pb.js) checks that inside the write.
+ */
+export async function giveFirebasePassword(uid: string, email: string, password: string): Promise<boolean> {
+  const client = await db();
+  const batch = client.createBatch(); // a batch reads the account inside the write transaction
+  // legacyAuth: true = "the password from Firebase": the hook takes it only from an account still
+  // waiting for it, and stores false. The second write stores false even if the hook were missing.
+  batch.collection("users").update(uid, { email, password, passwordConfirm: password, legacyAuth: true });
+  batch.collection("users").update(uid, { legacyAuth: false });
+  try {
+    await batch.send();
+    return true;
+  } catch (e) {
+    if (alreadyMoved(e)) return false;
+    throw e;
+  }
+}
+
+let guardCheckedAt = 0;
+const GUARD_CHECK_EVERY_MS = 10 * 60_000;
+
+/**
+ * Whether PocketBase runs with its hook (pocketbase/pb_hooks): without it, nothing ends a copied player's
+ * move when his password is reset, so the legacy login must not run. The check: on any account, set
+ * legacyAuth to the other value and back, in one batch. The hook refuses the step from false to true and
+ * nothing changes; without the hook both steps pass, and the account ends as it was. Checked again every
+ * 10 minutes.
+ */
+export async function legacyGuardLoaded(): Promise<boolean> {
+  if (Date.now() - guardCheckedAt < GUARD_CHECK_EVERY_MS) return true;
+  const client = await db();
+  const { items } = await client.collection("users").getList(1, 1, { fields: "id,legacyAuth", skipTotal: true });
+  if (!items.length) return true; // no player: nobody to protect
+  const { id, legacyAuth } = items[0];
+  const batch = client.createBatch();
+  batch.collection("users").update(id, { legacyAuth: !legacyAuth });
+  batch.collection("users").update(id, { legacyAuth });
+  try {
+    await batch.send();
+    return false; // both passed: no hook
+  } catch (e) {
+    if (!alreadyMoved(e)) throw e;
+    guardCheckedAt = Date.now();
+    return true;
+  }
 }

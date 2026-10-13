@@ -1,5 +1,5 @@
 import { ClientResponseError } from "pocketbase";
-import { accountByEmail, moveFromFirebase } from "./accounts.js";
+import { accountByEmail, legacyGuardLoaded, moveFromFirebase } from "./accounts.js";
 
 /**
  * E-mail players moving from Firebase, at their first login on the new app. Firebase never gives out
@@ -60,6 +60,10 @@ export async function legacyLogin(emailIn: unknown, passwordIn: unknown, check: 
   const password = String(passwordIn ?? "");
   if (!email.includes("@") || !password || password.length > 4096) throw new LegacyLoginError("missing e-mail or password", 400);
   countTry(email);
+  if (!(await legacyGuardLoaded())) {
+    console.error("legacy login refused: PocketBase runs without pocketbase/pb_hooks (--hooksDir); see README");
+    throw new LegacyLoginError("not configured", 503);
+  }
   const account = await accountByEmail(email);
   if (account && !account.legacyAuth) throw new LegacyLoginError("already moved", 409); // Firebase isn't asked
   const uid = await check(email, password);

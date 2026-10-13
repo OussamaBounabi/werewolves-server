@@ -165,8 +165,10 @@ describe("PocketBase", function () {
       // A login lasts 90 days, and each refresh (the app's, at launch) starts 90 more.
       const days = (token: string) => (JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp - Date.now() / 1000) / 86400;
       assert.ok(Math.abs(days(p.token) - 90) < 0.1, `${days(p.token)} days`);
+      await new Promise((r) => setTimeout(r, 1100)); // (tokens count whole seconds)
       const refreshed = await p.pb.collection("users").authRefresh();
       assert.ok(Math.abs(days(refreshed.token) - 90) < 0.1);
+      assert.ok(days(refreshed.token) > days(p.token) + 0.5 / 86400, "the refresh pushed the end back");
       const google = await signUp({}); // signed in, no username picked yet
       await assert.rejects(accounts.accountFor(google.token), /no profile/);
       process.env.ADMIN_EMAILS = `someone@else.com, ${p.email.toUpperCase()}`;
@@ -500,8 +502,8 @@ describe("PocketBase", function () {
       assert.strictEqual((await post("/api/avatars/buy", { id: 101 }, "garbage")).status, 401);
       assert.strictEqual((await post("/api/auth/legacy-login", {})).status, 400);
       // No FIREBASE_WEB_API_KEY here: an account still waiting for its password can't move.
-      const waiting = await signUp({ username: `w_${++seq}`, name: "Waiting" });
-      await admin.collection("users").update(waiting.id, { legacyAuth: true });
+      const waiting = { email: `w_${++seq}@test.local` }; // copied from Firebase, still waiting for his password
+      await admin.collection("users").create({ email: waiting.email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true });
       delete process.env.FIREBASE_WEB_API_KEY;
       assert.strictEqual((await post("/api/auth/legacy-login", { email: waiting.email, password: "whatever" })).status, 503);
       assert.strictEqual((await post("/api/auth/legacy-login", { email: p.email, password: "whatever" })).status, 409); // has his own
@@ -625,6 +627,7 @@ describe("PocketBase", function () {
         gus: { sub: "100000000000000000001", email: "gus@example.com" }, // copied from Firebase, linked
         newbie: { sub: "200000000000000000002", email: "newbie@gmail.com" },
         same: { sub: "300000000000000000003", email: "same.email@gmail.com" }, // an e-mail account's address
+        unverified: { sub: "400000000000000000004", email: "unverified.copy@gmail.com" }, // a copied, unverified one
       };
       const google = createServer((req, res) => {
         const who = req.url === "/token" ? null : String(req.headers.authorization ?? "").replace("Bearer token-", "");
@@ -657,6 +660,19 @@ describe("PocketBase", function () {
         // An e-mail account, then Google with the same address: PocketBase links them.
         const mail = await signUp({ username: `same_${++seq}`, name: "Same" }, "same.email@gmail.com");
         assert.strictEqual((await signIn("same")).record.id, mail.id);
+        // A copied e-mail player whose address Firebase never verified, then Google with that address:
+        // PocketBase links them and replaces the password (whoever made that account may not own the
+        // address). His move from Firebase is over: the old password must not take the account back.
+        const copied = "UnverifiedFirebaseUid0000010";
+        await admin.collection("users").create({
+          id: copied, email: "unverified.copy@gmail.com", password: "copy-random-1", passwordConfirm: "copy-random-1",
+          legacyAuth: true, verified: false, welcomeGift: true, username: "unverified_copy", name: "Unverified",
+        });
+        const linked = await signIn("unverified");
+        assert.deepStrictEqual([linked.record.id, linked.record.verified], [copied, true]);
+        assert.strictEqual((await user(copied)).legacyAuth, false);
+        const firebase = async (email: string, password: string) => (password === "old-firebase-pass" ? copied : null);
+        await assert.rejects(legacyLogin("unverified.copy@gmail.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
       } finally {
         google.close();
       }
@@ -733,11 +749,11 @@ describe("PocketBase", function () {
         await login("admin@example.com", "set-by-admin-1");
         // The legacy login's own write is checked inside the write too (a reset a moment before it can't slip
         // in between): the Firebase password for an account no longer waiting for it is refused.
-        const late = admin.createBatch();
-        late.collection("users").update(R, { password: "old-firebase-pass", passwordConfirm: "old-firebase-pass", legacyAuth: true });
-        await assert.rejects(late.send(), (e: any) => /already moved/i.test(JSON.stringify(e.response)));
+        assert.strictEqual(await accounts.giveFirebasePassword(R, "reset@example.com", "old-firebase-pass"), false);
         assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
-        assert.strictEqual((await user(R)).legacyAuth, false);
+        // A dashboard form saved with stale values (legacyAuth still true in it) can't bring the move back.
+        await assert.rejects(admin.collection("users").update(R, { legacyAuth: true, vip: true }), (e: any) => /already moved/i.test(JSON.stringify(e.response)));
+        assert.deepStrictEqual([(await user(R)).legacyAuth, (await user(R)).vip], [false, false]);
         // Untouched: he still moves.
         await legacyLogin("kept@example.com", "old-firebase-pass", firebase);
         assert.strictEqual((await login("kept@example.com", "old-firebase-pass")).record.id, K);
@@ -745,6 +761,44 @@ describe("PocketBase", function () {
       } finally {
         smtp.close();
       }
+    });
+
+    it("refuses every legacy login when PocketBase runs without its hook (--hooksDir), and says so", async () => {
+      const other = mkdtempSync(join(tmpdir(), "pb-nohooks-"));
+      execFileSync(BIN!, ["migrate", "up", "--dir", other, "--migrationsDir", MIGRATIONS], { stdio: "ignore" });
+      execFileSync(BIN!, ["superuser", "upsert", SUPERUSER.email, SUPERUSER.password, "--dir", other], { stdio: "ignore" });
+      const bare = spawn(BIN!, ["serve", "--http", "127.0.0.1:8096", "--dir", other, "--migrationsDir", MIGRATIONS, "--automigrate=false"], { stdio: "ignore" });
+      const errors: unknown[] = [];
+      const consoleError = console.error;
+      try {
+        for (let i = 0; i < 100 && !(await fetch("http://127.0.0.1:8096/api/health").then((r) => r.ok, () => false)); i++) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        accounts.connectAccounts("http://127.0.0.1:8096", SUPERUSER.email, SUPERUSER.password);
+        const bareAdmin = new PocketBase("http://127.0.0.1:8096");
+        await bareAdmin.collection("_superusers").authWithPassword(SUPERUSER.email, SUPERUSER.password);
+        const W = "WaitingFirebaseUid0000000011";
+        await bareAdmin.collection("users").create({ id: W, email: "waiting@example.com", password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true });
+        assert.strictEqual(await accounts.legacyGuardLoaded(), false);
+        assert.strictEqual((await bareAdmin.collection("users").getOne(W)).legacyAuth, true); // (the check changed nothing)
+        let asked = 0;
+        console.error = (...args: unknown[]) => void errors.push(args);
+        await assert.rejects(
+          legacyLogin("waiting@example.com", "old-firebase-pass", async () => (asked++, W)),
+          (e: any) => e instanceof LegacyLoginError && e.status === 503,
+        );
+        assert.strictEqual(asked, 0);
+        assert.ok(errors.some((e) => String(e).includes("pb_hooks")), "it says why");
+        // Even so, the move's own write would leave legacyAuth false.
+        assert.strictEqual(await accounts.giveFirebasePassword(W, "waiting@example.com", "old-firebase-pass"), true);
+        assert.strictEqual((await bareAdmin.collection("users").getOne(W)).legacyAuth, false);
+      } finally {
+        console.error = consoleError;
+        accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password);
+        bare.kill();
+        rmSync(other, { recursive: true, force: true });
+      }
+      assert.strictEqual(await accounts.legacyGuardLoaded(), true); // back on the PocketBase with its hook
     });
 
     it("moves an e-mail player's password from Firebase at his first login, once", async () => {

@@ -98,7 +98,8 @@ They use the PocketBase superuser from `.env`. On the VPS, or anywhere with
      --migrationsDir /path/to/werewolves-server/pocketbase/pb_migrations --automigrate=false --dev=false \
      --hooksDir /path/to/werewolves-server/pocketbase/pb_hooks --hooksWatch=false
    ```
-   It applies new migration files when it starts. Restart it after pulling new ones.
+   It applies new migration files when it starts. Restart it after pulling new migrations or hooks.
+   Without `--hooksDir`, the game server logs an error at start and refuses every legacy login (503).
 3. Create two superusers: one for you (the dashboard) and one for the game server (`.env`):
    `/opt/pocketbase/pocketbase superuser upsert <email> <password> --dir /var/lib/pocketbase`
 4. HTTPS: proxy `https://pb.werewolf-server.duckdns.org` to `127.0.0.1:8090`. If the proxy is nginx:
