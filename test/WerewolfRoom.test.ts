@@ -1383,4 +1383,121 @@ describe("WerewolfRoom", () => {
     (small as any).assignRoles();
     assert.deepStrictEqual([...(small as any).roles.values()].sort(), ["seer", "villager", "werewolf", "werewolf"]);
   });
+
+  it("the policeman's cage: no power for the caged player, a caged wolf sits the hunt out, nothing bites him", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, policeman: true, seer: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [policeman, seer] = [byRole("policeman"), byRole("seer")];
+    const [caged, free] = clients.filter((_: any, i: number) => roles[i] === "werewolf");
+    assert.strictEqual(room.state.nightStep, "policeman"); // before the powers and the hunt
+    policeman.send("cage", { targetId: policeman.sessionId }); // never himself
+    const told = caged.waitForMessage("caged");
+    policeman.send("cage", { targetId: caged.sessionId });
+    await told;
+    await waitFor(() => room.state.nightStep === "wolves");
+
+    // The caged wolf's vote doesn't count; nothing can bite (or infect) him tonight.
+    caged.send("wolf_target", { targetId: seer.sessionId });
+    free.send("wolf_target", { targetId: policeman.sessionId });
+    await waitFor(() => r.wolfVotes.size === 1);
+    assert.ok(!r.wolfVotes.has(caged.sessionId));
+    assert.ok(!r.holders("werewolf").includes(caged.sessionId));
+    assert.strictEqual(r.bites(caged.sessionId), false);
+    assert.deepStrictEqual(r.nightNews, ["caged"]);
+
+    // The next night: out of the cage, and never the same player twice in a row.
+    r.startNight();
+    assert.strictEqual(room.state.nightStep, "policeman");
+    assert.ok(r.holders("werewolf").includes(caged.sessionId));
+    const refused = policeman.waitForMessage("error");
+    policeman.send("cage", { targetId: caged.sessionId });
+    assert.deepStrictEqual(await refused, { code: "same_cage" });
+  });
+
+  it("the cat dies at a wolf's house; the little girl shows the hunter a side; the shepherd counts sheep, the rabbit chocolates", async () => {
+    const mix = {
+      ...NO_SPECIALS, wolves: 1, villagers: 1, cat: true, littlegirl: true, shepherd: true, rabbit: true, hunter: true,
+      talkingShepherd: true, mayor: false,
+    };
+    const { room, byRole } = await startGame(mix, 7);
+    const r = room as any;
+    const [cat, girl, shepherd, rabbit, hunter, wolf, villager] =
+      ["cat", "littlegirl", "shepherd", "rabbit", "hunter", "werewolf", "villager"].map(byRole);
+    const state = (c: any) => room.state.players.get(c.sessionId)!;
+    assert.strictEqual(room.state.extraOptions, "talkingShepherd");
+
+    r.startWitchSeerStep();
+    for (const c of [cat, girl, shepherd, rabbit]) assert.ok(r.awake.has(c.sessionId));
+    // The hunter (and only he) learns which side the little girl's pick is on.
+    const shown = hunter.waitForMessage("girl_known");
+    girl.send("girl_pick", { targetId: wolf.sessionId });
+    assert.deepStrictEqual(await shown, { [wolf.sessionId]: true });
+    // Three sheep, two chocolates, each to a different player; the cat picks the wrong house.
+    shepherd.send("gifts", { targets: [wolf.sessionId, villager.sessionId] }); // not three: refused
+    shepherd.send("gifts", { targets: [wolf.sessionId, villager.sessionId, hunter.sessionId] });
+    rabbit.send("gifts", { targets: [wolf.sessionId, villager.sessionId] });
+    cat.send("cat_sleep", { targetId: wolf.sessionId });
+    await waitFor(() => !state(cat).alive); // everyone done: dawn
+
+    const log = r.publicLog as any[];
+    const death = log.find((e) => e.type === "death" && e.cause === "cat");
+    assert.strictEqual(death.house, state(wolf).name); // everyone learns whose house it was
+    // The wolf kept one sheep: the village hears the shepherd's count (a room setting), not the rabbit's.
+    assert.deepStrictEqual(log.filter((e) => e.type === "gifts_public").map((e) => [e.role, e.count]), [["shepherd", 2]]);
+    const mine = (c: any) => r.privateLogs.get(c.sessionId).find((e: any) => e.type === "gifts_back");
+    assert.deepStrictEqual([mine(shepherd).count, mine(shepherd).lost, mine(rabbit).count], [2, false, 1]);
+
+    // All three sheep back: no wolf found, and the shepherd's power is gone. No living hunter: the little girl sleeps.
+    r.gifts = [{ by: shepherd.sessionId, role: "shepherd", count: 3 }];
+    r.catVisits.clear();
+    r.resolveNight();
+    assert.ok(r.spent.has(shepherd.sessionId));
+    state(hunter).alive = false;
+    r.startWitchSeerStep();
+    assert.ok(!r.awake.has(girl.sessionId) && !r.awake.has(shepherd.sessionId) && r.awake.has(rabbit.sessionId));
+  });
+
+  it("the priest's holy water kills a wolf or the priest; the alchemist's poison; the mirror sends a villager's attack back", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, priest: true, alchemist: true, mirror: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [priest, alchemist, mirror, wolf, villager] = ["priest", "alchemist", "mirror", "werewolf", "villager"].map(byRole);
+    const state = (c: any) => room.state.players.get(c.sessionId)!;
+    const causes = () => Object.fromEntries((r.publicLog as any[]).filter((e) => e.type === "death").map((e) => [e.name, e.cause]));
+
+    // Never on the first night.
+    r.startWitchSeerStep();
+    assert.ok(!r.awake.has(priest.sessionId) && !r.awake.has(alchemist.sessionId));
+
+    // Night 2. The alchemist poisons the mirror: it comes back at him. The priest throws at a villager: the priest dies.
+    room.state.dayNumber = 2;
+    r.startWitchSeerStep();
+    assert.ok(r.awake.has(priest.sessionId) && r.awake.has(alchemist.sessionId));
+    alchemist.send("flask", { targetId: mirror.sessionId });
+    priest.send("flask", { targetId: villager.sessionId });
+    await waitFor(() => !state(priest).alive);
+    assert.deepStrictEqual([state(alchemist).alive, state(mirror).alive, state(villager).alive], [false, true, true]);
+    assert.strictEqual(causes()[state(alchemist).name], "mirror");
+    assert.strictEqual(causes()[state(priest).name], "priest_fail");
+    assert.ok(r.spent.has(mirror.sessionId) && r.spent.has(priest.sessionId)); // one reflection, one flask
+
+    // (Both back on their feet, to try the other outcomes.)
+    state(alchemist).alive = state(priest).alive = true;
+    // On a wolf, the holy water kills. A protector's ward stops the alchemist's poison.
+    r.protects = new Map([["someone", villager.sessionId]]);
+    r.flasks = [
+      { by: priest.sessionId, target: wolf.sessionId, role: "priest" },
+      { by: alchemist.sessionId, target: villager.sessionId, role: "alchemist" },
+    ];
+    r.resolveNight();
+    assert.deepStrictEqual([state(wolf).alive, state(priest).alive, state(villager).alive], [false, true, true]);
+    assert.strictEqual(causes()[state(wolf).name], "priest");
+    // The wild hunter's trap on the poisoned player: the alchemist dies instead.
+    r.protects = new Map();
+    r.traps = new Set([villager.sessionId]);
+    r.flasks = [{ by: alchemist.sessionId, target: villager.sessionId, role: "alchemist" }];
+    r.resolveNight();
+    assert.deepStrictEqual([state(alchemist).alive, state(villager).alive], [false, true]);
+  });
 });
