@@ -894,16 +894,20 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.mayor, false); // no election in this room
   });
 
-  it("talking seer tells the village the role (not the player); barbé's innocent shows as a villager", async () => {
-    const { room, clients, byRole } = await startGame({ ...SIX, seer: true, talkingSeer: true, maxPlayers: 9 }, 9);
+  it("talking seer tells the village the role (not the player), at dawn; barbé's innocent shows as a villager", async () => {
+    const { room, byRole } = await startGame({ ...SIX, seer: true, talkingSeer: true, maxPlayers: 9 }, 9);
     const r = room as any;
     const [seer, judge, barbe] = [byRole("seer"), byRole("judge"), byRole("barbe")];
     room.state.nightStep = "witch_seer";
     r.awake = new Set([seer.sessionId, "someone"]);
-    const heard = clients.find((c) => c !== seer).waitForMessage("event");
     seer.send("seer_peek", { targetId: judge.sessionId });
-    const e: any = await heard;
-    assert.deepStrictEqual([e.type, e.role, e.name], ["seer_public", "judge", undefined]);
+    await waitFor(() => r.seerNews.length === 1);
+    const types = () => (r.publicLog as any[]).map((e) => e.type);
+    assert.ok(!types().includes("seer_public")); // not during the night
+    r.resolveNight();
+    assert.deepStrictEqual(types().slice(types().indexOf("day"), types().indexOf("day") + 3), ["day", "village_wakes", "seer_public"]);
+    const told = (r.publicLog as any[]).find((e) => e.type === "seer_public");
+    assert.deepStrictEqual([told.role, told.name], ["judge", undefined]);
 
     room.state.phase = "day";
     barbe.send("barbe_ask", { targetId: judge.sessionId });

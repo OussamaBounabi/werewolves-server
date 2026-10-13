@@ -142,6 +142,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
   private spokeAt = new Map<string, number>(); // VIP spectators: when their last "is speaking" line was written
   private nightNews: string[] = []; // what the narrator tells at dawn: "protected" | "redhood" | "ancient" | "infection"
+  private seerNews: Role[] = []; // the talking seer's finds of the night (the role, not who), told at dawn
   private detectiveNews: boolean[] = []; // the talking detective's verdicts of the night, told at dawn
   private phaseTimer: { clear(): void } | null = null;
   private lastSnapshot = "";
@@ -869,6 +870,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     this.voteMarks = [];
     this.nightNews = [];
+    this.seerNews = [];
     this.detectiveNews = [];
     this.lastParalysed = this.paralysed;
     this.paralysed = new Map();
@@ -1420,7 +1422,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (seen) this.known.set(id, { ...this.known.get(id), [target]: seen });
     client.send("seer_result", { targetId: target, role: seen, isWerewolf: !!seen && WOLF_ROLES.has(seen) });
     this.logEvent("seer_saw", { name: this.nameOf(target), role: seen, ...(wolf ? { by: "seerwolf" } : {}) }, id);
-    if (this.state.talkingSeer && !wolf) this.logEvent("seer_public", { role: seen }); // the role, not who
+    if (this.state.talkingSeer && !wolf && seen) this.seerNews.push(seen); // told at dawn, under the day's title
     this.maybeEndWitchSeer();
   }
 
@@ -1612,6 +1614,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // The log reads: "Day N", "the village wakes up", then one line per death (who killed whom).
     this.logEvent("day", { day: this.state.dayNumber });
     this.logEvent("village_wakes", { deaths: deaths.size });
+    for (const role of this.seerNews) this.logEvent("seer_public", { role }); // the role, not who
     for (const same of this.detectiveNews) this.logEvent("detective_public", { same }); // the verdict, not who
     // The narrator tells what the night hid (without him it all stays secret): the witch's save, an attack that
     // came to nothing (a protected player, Red Hood, the ancient), an infection. Never who.
