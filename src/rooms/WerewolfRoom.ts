@@ -4,6 +4,7 @@ import { randomAvatar, randomFrame } from "../avatars.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, type Account, type GameResult } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
+import { Abandon } from "./abandoned.js";
 
 /** The first roles: each has its own switch in the room state. */
 const CLASSIC = [
@@ -145,6 +146,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private deadChatLog: ChatLine[] = [];
   private graveChatSent = new Set<string>(); // given the graveyard's chat so far
   private closeTimer: { clear(): void } | null = null;
+  // Nobody left to play (every player's app gone for a minute, or no player at all): no winner, and the room closes.
+  private abandon = new Abandon(this, () => {
+    this.expire();
+    void this.disconnect().catch(() => {});
+  });
   private testHostRole: Role | null = null; // a VIP host picks his own role
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
   private spokeAt = new Map<string, number>(); // VIP spectators: when their last "is speaking" line was written
@@ -371,6 +377,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (ghost === undefined) this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId || wasHost) this.setHost(client.sessionId);
     this.updateListing();
+    this.abandon.check(this.state.players.values());
   }
 
   /** During a game: the seat of this account (or device) if he's dead and no longer connected. */
@@ -426,6 +433,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.sendHistory(client); // with his private lines, now under his new id
     if (this.lovers?.includes(id)) this.clients.getById(id)?.send("lovers", { ids: this.lovers });
     this.updateListing();
+    this.abandon.check(this.state.players.values());
   }
 
   /** Quietly removes an older seat of a player who just joined again (lobby only). */
@@ -541,6 +549,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.heldSeats.set(client.sessionId, seat);
     // Rejects when the seat expires (onLeave then runs), on a kick, or if the client never finished joining.
     Promise.resolve(seat).catch(() => {});
+    this.abandon.check(this.state.players.values());
   }
 
   onReconnect(client: Client) {
@@ -574,6 +583,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.wildModel.has(id)) client.send("wild_model", { targetId: this.wildModel.get(id) });
     this.sendHistory(client);
     client.send("state", { ...this.state.toJSON(), serverNow: Date.now() });
+    this.abandon.check(this.state.players.values());
   }
 
   onLeave(client: Client) {
@@ -605,6 +615,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.passHostIfGone();
     }
     this.updateListing();
+    this.abandon.check(this.state.players.values());
   }
 
   private removeFromLobby(id: string, kicked = false) {
@@ -1341,7 +1352,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!id || !this.isAlive(target) || this.isPack(target) || !STEALABLE.includes(guess)) return;
     const left = (this.greenLeft.get(id) ?? 1) - 1;
     this.greenLeft.set(id, left);
-    const right = this.powerOf(target) === guess;
+    // In the policeman's cage nothing is stolen: the guess is spent, and he doesn't learn whether it was right.
+    const caged = this.isCaged(target) ? { caged: true } : {};
+    const right = !this.isCaged(target) && this.powerOf(target) === guess;
     if (right) {
       this.powers.set(id, guess);
       this.powers.set(target, "villager");
@@ -1356,8 +1369,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.sendRole(id);
       this.sendRole(target); // he sleeps tonight: his app shows him a simple villager now (the panel comes at dawn)
     }
-    client.send("green_result", { targetId: target, role: guess, right, left });
-    this.logEvent("green_guessed", { name: this.nameOf(target), role: guess, right }, id);
+    client.send("green_result", { targetId: target, role: guess, right, left, ...caged });
+    this.logEvent("green_guessed", { name: this.nameOf(target), role: guess, right, ...caged }, id);
     this.acted(id);
   }
 
@@ -1633,14 +1646,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   /**
-   * The little girl points at a player for the hunter: every living hunter learns that player's side (with the
-   * wolves or not: a loner looks like a villager). She learns nothing herself.
+   * The little girl points at a player for the hunter: every living hunter learns that player's side: a wolf (the
+   * white wolf too, infected players, anyone who hunts with the pack) or not. She learns nothing herself.
    */
   private handleGirl(client: Client, msg: { targetId: string }) {
     const pick = this.picks(client, "littlegirl", msg?.targetId);
     if (!pick) return;
     const [id, target] = pick;
-    const wolf = this.teamOf(target) === "wolves";
+    const wolf = this.isPack(target);
     this.logEvent("girl_chose", { name: this.nameOf(target) }, id);
     for (const hunter of this.idsWithRole("hunter").filter((h) => this.isAlive(h))) {
       this.girlKnown.set(hunter, { ...this.girlKnown.get(hunter), [target]: wolf });
@@ -1652,7 +1665,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * The shepherd's three sheep, the rabbit's two chocolates, each to a different player. A sheep sent to a wolf
-   * (an infected player too) never comes back; a wolf doesn't eat his chocolate. The count is told at dawn.
+   * (the white wolf and infected players too) never comes back; a wolf doesn't eat his chocolate. Told at dawn.
    */
   private handleGifts(client: Client, msg: { targets: string[] }) {
     const id = this.awakeActor(client);
@@ -1660,7 +1673,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!id || (role !== "shepherd" && role !== "rabbit") || this.spent.has(id)) return;
     const targets = [...new Set(Array.isArray(msg?.targets) ? msg.targets : [])];
     if (targets.length !== (role === "shepherd" ? 3 : 2) || targets.some((t) => !this.isAlive(t) || t === id)) return;
-    const count = targets.filter((t) => this.teamOf(t) !== "wolves").length;
+    const count = targets.filter((t) => !this.isPack(t)).length;
     this.gifts.push({ by: id, role, count });
     this.logEvent("gifts_sent", { role, names: targets.map((t) => this.nameOf(t)) }, id);
     this.rested(id);
@@ -1680,9 +1693,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.rested(id);
   }
 
-  /** The mirror's one reflection: a night attack from a village player turns back on that player. */
+  /**
+   * The mirror's one reflection: a potion or a fire thrown at him at night turns back on whoever threw it — the
+   * witch, the dragon, the alchemist, the priest, infected or not. (The pack's bite and the white wolf's kill are
+   * no potions: they kill him.)
+   */
   private mirrors(by: string, target: string): boolean {
-    if (this.powerOf(target) !== "mirror" || this.spent.has(target) || this.teamOf(by) !== "village") return false;
+    if (this.powerOf(target) !== "mirror" || this.spent.has(target)) return false;
     this.spent.add(target);
     this.sendRole(target);
     this.logEvent("mirror_used", { name: this.nameOf(by) }, target);
@@ -1749,7 +1766,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const victim of this.bigBadVictims) dies(victim, "wolves");
     /**
      * A potion or a fire thrown by [by] at [target]. The cage keeps everything out; a potion on the trapped player
-     * kills the one who threw it; the mirror sends a villager's attack back at him.
+     * kills the one who threw it; the mirror sends it back at him.
      */
     const strike = (by: string, target: string, cause: DeathCause, potion: boolean): void => {
       if (!this.isAlive(target) || this.isCaged(target)) return;
@@ -1768,7 +1785,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       else if (this.isAlive(target) && !this.isCaged(target)) dies(by, trapped(target) ? "trap" : "priest_fail");
     }
     // The cat who went to sleep at a wolf's house.
-    for (const [cat, house] of this.catVisits) if (this.isAlive(cat) && this.teamOf(house) === "wolves") dies(cat, "cat");
+    for (const [cat, house] of this.catVisits) if (this.isAlive(cat) && this.isPack(house)) dies(cat, "cat");
     // The knight's rusty sword: the wolves killed him, and the first living wolf after him round the table (on his
     // left) dies of it the same morning.
     for (const [id, cause] of [...deaths]) {

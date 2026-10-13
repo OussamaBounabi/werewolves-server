@@ -6,6 +6,7 @@ import {
   botMove, ends, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line,
 } from "../domino.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
+import { Abandon } from "./abandoned.js";
 
 /**
  * Dominoes, 2–4 players (bots included), double six: 7 tiles each; with fewer than 4 players the rest
@@ -58,6 +59,7 @@ const CLOSE_AFTER_GAME_MS = 60_000;
 const MAX_SPECTATORS = 20;
 
 export class DominoRoom extends Room<{ metadata: Meta }> {
+  private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static botSpeed = 1; // tests: bots think faster
   maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
@@ -241,6 +243,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       this.updateListing();
       return this.sync();
     }
+    if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.becomeBot(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
@@ -552,6 +555,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const table = {
       phase: this.phase,

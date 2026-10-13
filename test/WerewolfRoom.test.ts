@@ -183,6 +183,25 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(dropper.sessionId)?.alive, true); // seat held for 10 minutes
   });
 
+  it("closes by itself a minute after every player's app is gone, with no winner; not while one is still here", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const clients: any[] = [];
+    for (let i = 0; i < 2; i++) clients.push(await colyseus.connectTo(room));
+    const r = room as any;
+    const drop = async (c: any) => {
+      c.reconnection.enabled = false; // like a killed app
+      await c.leave(false);
+      await waitFor(() => room.state.players.get(c.sessionId)?.connected === false);
+    };
+    await drop(clients[0]);
+    assert.strictEqual(r.abandon.timer, null); // one player is still here
+    await drop(clients[1]);
+    assert.notStrictEqual(r.abandon.timer, null); // nobody: the minute starts
+    r.abandon.end(); // …and it's up
+    assert.strictEqual(room.state.phase, "gameover");
+    assert.strictEqual(room.state.winner, "none");
+  });
+
   it("gives a VIP host the role he picked", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
     const clients: any[] = [];
@@ -642,9 +661,17 @@ describe("WerewolfRoom", () => {
     const turn = green.waitForMessage("green_turn");
     r.startGreenWolfStep(); // first of the night from night 2
     assert.deepStrictEqual(await turn, { left: 3 });
+    // In the policeman's cage nothing is stolen: the guess is spent, and he doesn't learn if it was right.
+    r.cages.set("a policeman", seer.sessionId);
+    const kept = green.waitForMessage("green_result");
+    green.send("green_guess", { targetId: seer.sessionId, role: "seer" });
+    assert.deepStrictEqual(await kept, { targetId: seer.sessionId, role: "seer", right: false, left: 2, caged: true });
+    assert.strictEqual(r.powerOf(seer.sessionId), "seer");
+    r.cages.clear();
+    r.startGreenWolfStep();
     const result = green.waitForMessage("green_result");
     green.send("green_guess", { targetId: seer.sessionId, role: "seer" });
-    assert.deepStrictEqual(await result, { targetId: seer.sessionId, role: "seer", right: true, left: 2 });
+    assert.deepStrictEqual(await result, { targetId: seer.sessionId, role: "seer", right: true, left: 1 });
     assert.strictEqual(r.powerOf(green.sessionId), "seer"); // wakes as the seer from now on…
     assert.strictEqual(r.teamOf(green.sessionId), "wolves"); // …still a wolf
     assert.strictEqual(r.roles.get(seer.sessionId), "villager");
@@ -1418,31 +1445,31 @@ describe("WerewolfRoom", () => {
   it("the cat dies at a wolf's house; the little girl shows the hunter a side; the shepherd counts sheep, the rabbit chocolates", async () => {
     const mix = {
       ...NO_SPECIALS, wolves: 1, villagers: 1, cat: true, littlegirl: true, shepherd: true, rabbit: true, hunter: true,
-      talkingShepherd: true, mayor: false,
+      whitewolf: true, talkingShepherd: true, mayor: false,
     };
-    const { room, byRole } = await startGame(mix, 7);
+    const { room, byRole } = await startGame(mix, 8);
     const r = room as any;
-    const [cat, girl, shepherd, rabbit, hunter, wolf, villager] =
-      ["cat", "littlegirl", "shepherd", "rabbit", "hunter", "werewolf", "villager"].map(byRole);
+    const [cat, girl, shepherd, rabbit, hunter, wolf, villager, white] =
+      ["cat", "littlegirl", "shepherd", "rabbit", "hunter", "werewolf", "villager", "whitewolf"].map(byRole);
     const state = (c: any) => room.state.players.get(c.sessionId)!;
     assert.strictEqual(room.state.extraOptions, "talkingShepherd");
 
     r.startWitchSeerStep();
     for (const c of [cat, girl, shepherd, rabbit]) assert.ok(r.awake.has(c.sessionId));
-    // The hunter (and only he) learns which side the little girl's pick is on.
+    // The hunter (and only he) learns which side the little girl's pick is on. For these four, the white wolf is a wolf.
     const shown = hunter.waitForMessage("girl_known");
-    girl.send("girl_pick", { targetId: wolf.sessionId });
-    assert.deepStrictEqual(await shown, { [wolf.sessionId]: true });
+    girl.send("girl_pick", { targetId: white.sessionId });
+    assert.deepStrictEqual(await shown, { [white.sessionId]: true });
     // Three sheep, two chocolates, each to a different player; the cat picks the wrong house.
-    shepherd.send("gifts", { targets: [wolf.sessionId, villager.sessionId] }); // not three: refused
-    shepherd.send("gifts", { targets: [wolf.sessionId, villager.sessionId, hunter.sessionId] });
+    shepherd.send("gifts", { targets: [white.sessionId, villager.sessionId] }); // not three: refused
+    shepherd.send("gifts", { targets: [white.sessionId, villager.sessionId, hunter.sessionId] });
     rabbit.send("gifts", { targets: [wolf.sessionId, villager.sessionId] });
-    cat.send("cat_sleep", { targetId: wolf.sessionId });
+    cat.send("cat_sleep", { targetId: white.sessionId });
     await waitFor(() => !state(cat).alive); // everyone done: dawn
 
     const log = r.publicLog as any[];
     const death = log.find((e) => e.type === "death" && e.cause === "cat");
-    assert.strictEqual(death.house, state(wolf).name); // everyone learns whose house it was
+    assert.strictEqual(death.house, state(white).name); // everyone learns whose house it was
     // The wolf kept one sheep: the village hears the shepherd's count (a room setting), not the rabbit's.
     assert.deepStrictEqual(log.filter((e) => e.type === "gifts_public").map((e) => [e.role, e.count]), [["shepherd", 2]]);
     const mine = (c: any) => r.privateLogs.get(c.sessionId).find((e: any) => e.type === "gifts_back");
@@ -1474,6 +1501,7 @@ describe("WerewolfRoom", () => {
     room.state.dayNumber = 2;
     r.startWitchSeerStep();
     assert.ok(r.awake.has(priest.sessionId) && r.awake.has(alchemist.sessionId));
+    r.infected.add(alchemist.sessionId); // (a wolf now: the mirror sends his poison back all the same)
     alchemist.send("flask", { targetId: mirror.sessionId });
     priest.send("flask", { targetId: villager.sessionId });
     await waitFor(() => !state(priest).alive);

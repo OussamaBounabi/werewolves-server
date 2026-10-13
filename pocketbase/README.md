@@ -135,7 +135,7 @@ The server creates it with his account. Read it with `getOne(myId)`.
 |---|---|---|
 | `id` | text | Firestore's id on copied messages |
 | `from`, `to` | relation → users | |
-| `type` | select | `text` (or empty), `invite`, `voice` |
+| `type` | select | `text` (or empty), `invite`, `voice`, `deleted` (its writer deleted it for both players: only this mark is left) |
 | `text` | text | required, 1–500 characters; a voice message's fallback line, e.g. "🎤 Voice message (0:07)" |
 | `roomId`, `roomHost` | text | invite: required `roomId` |
 | `seconds` | number | voice: 1–60 |
@@ -146,7 +146,10 @@ The server creates it with his account. Read it with `getOne(myId)`.
 
 - **list / view:** sender and recipient.
 - **create:** `from` = me; `to` is my friend; and we're not both in the same game room (anti-cheat).
-- **update / delete:** nobody.
+- **update:** only its writer, and only to delete it for everyone: `type` = `"deleted"` with `text` = `"-"`
+  (send `voice: null`, `wave: ""`, `seconds: 0`, `roomId: ""`, `roomHost: ""` with it). Once: a mark can't be
+  changed again. `from`, `to` and `firebaseAt` can't be sent.
+- **delete:** nobody. The mark stays, so the other player sees that a message was removed.
 
 ### `chat_reads`
 
@@ -306,6 +309,8 @@ player is in a game room he shows `in_game`, with the game. Friends' presence:
   - Invite: add `type: "invite", roomId, roomHost`.
   - Voice: `type: "voice", seconds, wave, voice: <File/Blob of the .m4a>` (multipart).
 - **History:** `messages.getList(page, 30, { filter: '(from = "<me>" && to = "<him>") || (from = "<him>" && to = "<me>")', sort: "-created,-firebaseAt" })`.
+- **Delete for everyone (mine only):** `messages.update(id, { type: "deleted", text: "-", voice: null, wave: "", seconds: 0, roomId: "", roomHost: "" })`.
+  Show a `deleted` message as "This message was deleted"; the other app gets the change as a realtime `update`.
 - **Play a voice message:** `pb.files.getURL(msg, msg.voice, { token: await pb.files.getToken() })`.
 - **Mark read:** the first time `chat_reads.create({ user: me, friend: him })`, after that
   `chat_reads.update(id, {})`.

@@ -4,6 +4,7 @@ import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../acc
 import { enterRoom, leaveRoom } from "../presence.js";
 import { CATEGORIES, WORDS, wordsOf, type Word } from "../imposterWords.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
+import { Abandon } from "./abandoned.js";
 
 /**
  * Imposter: everyone gets the same secret word, except one or two imposters who only know its category. They
@@ -53,6 +54,7 @@ const GUESS_MS = 25_000;
 const RECONNECT_SECONDS = 600;
 
 export class ImposterRoom extends Room<{ metadata: Meta }> {
+  private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static pace = 1; // tests: every timer shorter
   maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
@@ -237,6 +239,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       this.updateListing();
       return this.sync();
     }
+    if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     const leaving = this.seat(id);
     if (leaving && this.phase === "lobby") this.note("left", leaving.name);
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
@@ -501,6 +504,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const over = this.phase === "result";
     const counts: Record<string, number> = {};

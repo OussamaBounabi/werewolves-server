@@ -7,6 +7,7 @@ import {
   type Answer, type Match, type Question,
 } from "../guess.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
+import { Abandon } from "./abandoned.js";
 
 /**
  * Guess Who, football edition. Each player has a secret footballer; turn by turn they ask about the other's
@@ -56,6 +57,7 @@ const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Wali
 const MAX_SPECTATORS = 20;
 
 export class GuessRoom extends Room<{ metadata: Meta }> {
+  private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static botSpeed = 1; // tests: bots think faster
   static pace = 1; // tests: every pause shorter
 
@@ -239,6 +241,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       this.updateListing();
       return this.sync();
     }
+    if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.quit(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && !s.quit && this.connectionOf(s.id))?.id ?? "";
@@ -528,6 +531,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const turnSide = this.side(this.turn);
     const table = {

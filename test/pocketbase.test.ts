@@ -472,6 +472,21 @@ describe("PocketBase", function () {
       await new Promise((r) => setTimeout(r, 5));
       await b.pb.collection("chat_reads").update(read.id, {}); // read again: an empty update moves `at`
       assert.deepStrictEqual([(await list(b))[0].unread, (await list(a))[0].seen], [0, true]);
+      // Deleting a message for everyone: its writer turns it into a "deleted" mark, the sound gone with it.
+      // Nobody else can, nothing else can be changed, and the mark stays (the other player sees one was removed).
+      const gone: Record<string, unknown> = { type: "deleted", text: "-", voice: null, wave: "", seconds: 0 };
+      await refused(b.pb.collection("messages").update(voice.id, gone)); // not his
+      await refused(a.pb.collection("messages").update(voice.id, { text: "edited" }));
+      await refused(a.pb.collection("messages").update(voice.id, { ...gone, text: "something else" }));
+      await refused(a.pb.collection("messages").update(voice.id, { ...gone, to: c.id }));
+      const mark = await a.pb.collection("messages").update(voice.id, gone);
+      assert.deepStrictEqual([mark.type, mark.text, mark.voice, mark.wave], ["deleted", "-", "", ""]);
+      await refused(a.pb.collection("messages").update(voice.id, gone)); // once
+      await refused(a.pb.collection("messages").delete(voice.id));
+      assert.strictEqual((await b.pb.collection("messages").getOne(voice.id)).type, "deleted");
+      const oops = await send(a, b, { text: "oops" });
+      await a.pb.collection("messages").update(oops.id, { type: "deleted", text: "-" });
+      assert.deepStrictEqual([(await list(b))[0].lastType, (await list(b))[0].unread], ["deleted", 1]);
     });
 
     it("takes one report per reporter and target, never about oneself, and lets no player read them", async () => {

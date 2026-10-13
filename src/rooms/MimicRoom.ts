@@ -5,6 +5,7 @@ import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../acc
 import { enterRoom, leaveRoom } from "../presence.js";
 import { MIMIC_SOUNDS } from "../mimicSounds.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
+import { Abandon } from "./abandoned.js";
 
 /**
  * Mimic Party: each round everyone hears a well-known sound (a cow, a siren, a sneeze…) at the same moment, then
@@ -58,6 +59,7 @@ const RECONNECT_SECONDS = 600;
 const MAX_SPECTATORS = 20;
 
 export class MimicRoom extends Room<{ metadata: Meta }> {
+  private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static pace = 1; // tests: every timer shorter
   maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
@@ -235,6 +237,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       this.updateListing();
       return this.sync();
     }
+    if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     const seat = this.seat(id);
     if (this.phase === "lobby" || this.phase === "result") this.removeSeat(id);
     else if (seat) {
@@ -450,6 +453,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     // A score shows once its take is being played (the phones hold it back until the take has been heard).
     const shown = (s: Seat) =>

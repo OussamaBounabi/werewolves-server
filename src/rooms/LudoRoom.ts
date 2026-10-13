@@ -4,6 +4,7 @@ import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../acc
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
+import { Abandon } from "./abandoned.js";
 
 /**
  * Ludo, 2–4 players (bots included), 4 pawns each (or 2: quick game). A 6 takes a pawn out of the base
@@ -54,6 +55,7 @@ export const colorsFor = (n: number) => (n === 2 ? [0, 2] : [0, 1, 2, 3].slice(0
 const MAX_SPECTATORS = 20;
 
 export class LudoRoom extends Room<{ metadata: Meta }> {
+  private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static botSpeed = 1; // tests: bots think (and the dice roll) faster
   maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
@@ -233,6 +235,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       this.updateListing();
       return this.sync();
     }
+    if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.phase !== "gameover") this.becomeBot(id);
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
@@ -535,6 +538,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   }
 
   private sync() {
+    this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing(); // the list learns the game began, or ended
     const lobbyColors = colorsFor(Math.max(2, this.seats.length));
     const turnSeat = this.seat(this.turn);
