@@ -1,6 +1,7 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, firebaseEnabled, isFriendOfAny, setRoom, type Account } from "../firebase.js";
+import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../accounts.js";
+import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
@@ -121,7 +122,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null }> {
     let account: Account | null = null;
-    if (options.idToken && firebaseEnabled) {
+    if (options.idToken && accountsEnabled) {
       try {
         account = await accountFor(String(options.idToken));
       } catch {
@@ -152,7 +153,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
     if (account) {
       this.members.set(this.idOf(client), account.uid);
-      setRoom(account.uid, this.roomId).catch(() => {});
+      enterRoom(account.uid, this.roomName, this.roomId);
     }
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
@@ -232,7 +233,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
     this.members.delete(id);
-    if (uid) setRoom(uid, "", this.roomId).catch(() => {});
+    if (uid) leaveRoom(uid, this.roomId);
     if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();

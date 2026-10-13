@@ -1,6 +1,7 @@
 // Makes an account VIP (a VIP host picks his own role in a werewolf room), or takes it back:
 //   npx tsx scripts/set-vip.ts <e-mail | username> [off]
-import { setVip } from "../src/firebase.js";
+// Needs the PocketBase superuser in .env (POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD).
+import { setVip } from "../src/accounts.js";
 
 const who = process.argv[2];
 if (!who) {

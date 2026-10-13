@@ -1,11 +1,11 @@
 /**
- * Adds coins and diamonds to a player's account, by username (negative numbers take away):
+ * Adds coins and diamonds to a player's account, by username (negative numbers take away, down to 0 at most):
  *   npx tsx scripts/grant-coins.ts <username> <coins> <diamonds>
  * or to every player (add --dry to only count them):
  *   npx tsx scripts/grant-coins.ts --all <coins> <diamonds> [--dry]
- * Needs the service account (service-account.json next to package.json).
+ * Needs the PocketBase superuser in .env (POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL, POCKETBASE_SUPERUSER_PASSWORD).
  */
-import { grantCurrency, grantCurrencyToAll } from "../src/firebase.js";
+import { grantCurrency, grantCurrencyToAll } from "../src/accounts.js";
 
 const [username, coins, diamonds] = [process.argv[2], Number(process.argv[3]), Number(process.argv[4])];
 if (!username || !Number.isInteger(coins) || !Number.isInteger(diamonds)) {
