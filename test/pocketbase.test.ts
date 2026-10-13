@@ -175,9 +175,13 @@ describe("PocketBase", function () {
       await accounts.updateProfile(p.token, { name: "New_Name", avatar: 104, frame: 0 }); // same name: not a change
       await assert.rejects(accounts.updateProfile(p.token, { avatar: 602 }), /avatar/);
       await assert.rejects(accounts.updateProfile(p.token, { frame: 4 }), /frame/);
-      for (const name of ["", "Al", "x".repeat(17), "Two Words", "dash-ed", "Amélie"]) {
-        await assert.rejects(accounts.updateProfile(p.token, { name }), (e: any) => e instanceof accounts.ProfileError && e.status === 400, name);
+      for (const name of ["", "Al", "x".repeat(17), "Two Words", "dash-ed", "Amélie", 12345, true, ["Bob_1"]]) {
+        await assert.rejects(accounts.updateProfile(p.token, { name }), (e: any) => e instanceof accounts.ProfileError && e.status === 400, String(name));
       }
+      await assert.rejects(accounts.updateProfile(p.token, { username: 12345 }), (e: any) => e.status === 400);
+      // null, like a field left out, stays as it is (a client that sends every field).
+      const kept = await accounts.updateProfile(p.token, { name: null, username: null, frame: null, avatar: 601 });
+      assert.deepStrictEqual([kept.name, kept.username, kept.avatar], ["New_Name", p.username, 601]);
       await assert.rejects(accounts.updateProfile(p.token, { username: "other_name" }), /username set/);
       await admin.collection("users").update(p.id, { nameChangedAt: new Date(Date.now() - 25 * 3600_000).toISOString() });
       assert.strictEqual((await accounts.updateProfile(p.token, { name: "Third" })).name, "Third");
@@ -508,13 +512,13 @@ describe("PocketBase", function () {
       ],
       users: [
         { id: A, data: {
-          username: "Anna", usernameLower: "anna", name: "Anna", avatar: 103, frame: 2, avatars: [101, 601], frames: [2],
+          username: "Anna", usernameLower: "anna", name: " Anna ", avatar: 103, frame: 2, avatars: [101, 601], frames: [2],
           xp: 120, coins: 3400, diamonds: 50, rankPoints: 7, stats: { games: 9, wins: 4, losses: 5 }, room: "OLD",
           vip: true, welcomeGift: true, nameChangedAt: t(5), createdAt: t(0),
         } },
         { id: G, data: {
           username: "gus", usernameLower: "gus", name: "Gus, whose name is far too long", avatar: 104, xp: 0, coins: -5,
-          diamonds: 0, rankPoints: 0, stats: { games: 0, wins: 0, losses: 0 }, createdAt: t(1),
+          diamonds: 0, rankPoints: 0, stats: { games: 0, wins: 0, losses: 0 }, nameChangedAt: t(6), createdAt: t(1),
         } },
         { id: "OrphanProfile000000000000004", data: { username: "ghost", usernameLower: "ghost" } },
       ],
@@ -536,6 +540,8 @@ describe("PocketBase", function () {
       leaderboard: [
         { week: "w-2026-08-31", id: A, data: { xp: 300, name: "Anna", avatar: 103, frame: 2 } },
         { week: "w-2026-08-31", id: G, data: { xp: 10, name: "Gus, whose name is far too long", avatar: 104, frame: 0 } },
+        { week: "w-2026-09-07", id: G, data: { xp: 5, name: "🔥".repeat(17), avatar: 104, frame: 0 } }, // 17 characters
+        { week: "w-2026-09-07", id: A, data: { xp: 5, name: "abcdefghijklmno🔥", avatar: 103, frame: 0 } }, // 16
       ],
       reports: [
         { id: `${G}_${A}`, data: { target: G, reporter: A, reason: "insults", context: "bad words", createdAt: t(16) } },
@@ -561,6 +567,7 @@ describe("PocketBase", function () {
       assert.deepStrictEqual([anna.createdAt, anna.nameChangedAt], [t(0).toISOString().replace("T", " "), t(5).toISOString().replace("T", " ")]);
       const gus = await user(G);
       assert.deepStrictEqual([gus.name, gus.coins, gus.legacyAuth, gus.verified], ["gus", 0, false, true]); // his name didn't fit
+      assert.strictEqual(gus.nameChangedAt, ""); // so he may pick another at once
       const nora = await user(N);
       assert.deepStrictEqual([nora.username, nora.legacyAuth, nora.welcomeGift], ["", true, true]);
       const link = await admin.collection("_externalAuths").getFirstListItem(`recordRef = "${G}"`);
@@ -571,6 +578,9 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("missions").getOne(`${A}_d-2026-09-01`)).games, 3);
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${A}_w-2026-08-31`)).xp, 300);
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${G}_w-2026-08-31`)).name, "Gus, whose name ");
+      assert.strictEqual((await admin.collection("leaderboard").getOne(`${G}_w-2026-09-07`)).name, "🔥".repeat(16));
+      assert.strictEqual((await admin.collection("leaderboard").getOne(`${A}_w-2026-09-07`)).name, "abcdefghijklmno🔥");
+      assert.ok(!problems.some((p) => p.includes(`players/${A}: name`)), "a 16-character name with an emoji isn't cut");
       assert.strictEqual((await admin.collection("friends").getFullList({ filter: `user = "${A}" || user = "${G}"` })).length, 2);
       const requests = await admin.collection("friend_requests").getFullList({ filter: `to = "${A}" || to = "${G}"` });
       assert.deepStrictEqual(requests.map((r) => [r.from, r.to]), [[N, A]]);
@@ -587,7 +597,7 @@ describe("PocketBase", function () {
       assert.deepStrictEqual([(await conv(A)).unread, (await conv(A)).seen], [0, false]);
       for (const expected of [
         "OrphanProfile", `users/${G}: name "Gus, whose name is far too long" isn't 3 to 16 letters, digits or _: his username "gus" instead`,
-        "cut to 16 characters", "coins -5 raised to 0", "usernames/gus", 'reason "weird"',
+        "cut to 16 characters", `users/${A}: name " Anna " had spaces around it: "Anna"`, "coins -5 raised to 0", "usernames/gus", 'reason "weird"',
       ]) {
         assert.ok(problems.some((p) => p.includes(expected)), `missing problem: ${expected}`);
       }

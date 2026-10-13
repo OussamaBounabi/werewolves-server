@@ -145,11 +145,16 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       username = "";
     }
     if (username) usernames.add(username);
-    let name = String(p.name ?? "").trim();
+    const firebaseName = String(p.name ?? "");
+    let name = firebaseName.trim();
+    let nameChangedAt = date(p.nameChangedAt);
     if (profiles.has(u.uid) && !NAME.test(name)) {
       const instead = username ? `his username "${username}" instead` : "left empty (he picks one in the app)";
-      report.problem(`users/${u.uid}: name "${name}" isn't 3 to 16 letters, digits or _: ${instead}`);
+      report.problem(`users/${u.uid}: name "${firebaseName}" isn't 3 to 16 letters, digits or _: ${instead}`);
       name = username;
+      nameChangedAt = ""; // he didn't pick this one: he may change it at once
+    } else if (name !== firebaseName) {
+      report.problem(`users/${u.uid}: name "${firebaseName}" had spaces around it: "${name}"`);
     }
     const natural = (field: string) => {
       const n = int(p[field]);
@@ -167,7 +172,7 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       legacyAuth: u.password, // his Firebase password comes at his first login
       username,
       name,
-      nameChangedAt: date(p.nameChangedAt),
+      nameChangedAt,
       avatar: Math.max(0, int(p.avatar)),
       frame: Math.max(0, int(p.frame)),
       avatars: ints(p.avatars),
@@ -237,11 +242,11 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       report.problem(`leaderboard/${r.week}/players/${r.id}: unknown player or week, not copied`);
       continue;
     }
-    const name = String(r.data.name ?? "");
-    if (name.length > 16) report.problem(`leaderboard/${r.week}/players/${r.id}: name "${name}" cut to 16 characters`);
+    const name = [...String(r.data.name ?? "")]; // characters, as PocketBase counts them (an emoji is one)
+    if (name.length > 16) report.problem(`leaderboard/${r.week}/players/${r.id}: name "${name.join("")}" cut to 16 characters`);
     ranks.push({
       id: `${r.id}_${r.week}`, week: r.week, user: r.id, xp: Math.max(0, int(r.data.xp)),
-      name: name.slice(0, 16), avatar: Math.max(0, int(r.data.avatar)), frame: Math.max(0, int(r.data.frame)),
+      name: name.slice(0, 16).join(""), avatar: Math.max(0, int(r.data.avatar)), frame: Math.max(0, int(r.data.frame)),
     });
   }
   await create("leaderboard", ranks.filter((r) => !knownRanks.has(r.id)), ranks.filter((r) => knownRanks.has(r.id)).length);

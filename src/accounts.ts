@@ -401,14 +401,19 @@ export async function updateProfile(idToken: string, changes: ProfileChanges) {
     const user = await client.collection("users").getOne(uid);
     const update: Record<string, unknown> = {};
     const settingUp = !user.username;
-    if (changes.username !== undefined) {
-      const username = String(changes.username).trim().toLowerCase();
+    // A field left out, or null, stays as it is. A name or a username must be text.
+    const text = (value: unknown, field: string) => {
+      if (typeof value !== "string") throw new ProfileError(field, 400);
+      return value.trim();
+    };
+    if (changes.username != null) {
+      const username = text(changes.username, "username").toLowerCase();
       if (!USERNAME.test(username)) throw new ProfileError("username", 400);
       if (!settingUp && username !== user.username) throw new ProfileError("username set", 409);
       if (settingUp) update.username = username;
     }
-    if (changes.name !== undefined) {
-      const name = String(changes.name).trim();
+    if (changes.name != null) {
+      const name = text(changes.name, "name");
       if (!NAME.test(name)) throw new ProfileError("name", 400);
       if (name !== user.name) {
         if (!settingUp && Date.now() - parseDate(user.nameChangedAt) < NAME_EVERY_MS) throw new ProfileError("too soon", 409);
@@ -416,13 +421,13 @@ export async function updateProfile(idToken: string, changes: ProfileChanges) {
         if (!settingUp) update.nameChangedAt = new Date().toISOString();
       }
     }
-    if (changes.avatar !== undefined) {
+    if (changes.avatar != null) {
       const avatar = Number(changes.avatar);
       const mine = [...FREE_AVATARS, ...(Array.isArray(user.avatars) ? user.avatars : []), Number(user.avatar) || 0];
       if (!Number.isInteger(avatar) || !mine.includes(avatar)) throw new ProfileError("avatar", 409);
       update.avatar = avatar;
     }
-    if (changes.frame !== undefined) {
+    if (changes.frame != null) {
       const frame = Number(changes.frame);
       const mine = [0, ...(Array.isArray(user.frames) ? user.frames : []), Number(user.frame) || 0];
       if (!Number.isInteger(frame) || !mine.includes(frame)) throw new ProfileError("frame", 409);

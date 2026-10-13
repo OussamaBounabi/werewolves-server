@@ -259,8 +259,9 @@ If `record.username` is empty (a new player), show the profile screen, then
   `/api/frames/buy`, `/api/profile` and `/api/admin/*`.
 - A token PocketBase doesn't accept is refused with 4401 "auth" (401 over HTTP).
 
-**Profile:** `POST server/api/profile` with any of `{ name, avatar, frame, username }`. It answers
-the profile as it is now: `{ username, name, nameChangedAt, avatar, frame }`. Errors:
+**Profile:** `POST server/api/profile` with any of `{ name, avatar, frame, username }`. A field left
+out, or null, stays as it is. It answers the profile as it is now:
+`{ username, name, nameChangedAt, avatar, frame }`. Errors:
 
 | Status | `error` |
 |---|---|

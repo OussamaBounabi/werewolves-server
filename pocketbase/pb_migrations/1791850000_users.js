@@ -89,6 +89,9 @@ migrate((app) => {
   const users = app.findCollectionByNameOrId("users");
   for (const f of [...SERVER_FIELDS, "username", "avatar"]) users.fields.removeByName(f);
   users.fields.add(new FileField({ name: "avatar", maxSelect: 1, mimeTypes: ["image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"] }));
+  const name = users.fields.getByName("name");
+  name.max = 255;
+  name.pattern = "";
   users.removeIndex("idx_users_username");
   users.removeIndex("idx_users_welcome");
   users.listRule = "id = @request.auth.id";
