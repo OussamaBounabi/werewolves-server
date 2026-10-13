@@ -57,7 +57,7 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `verified` | bool | e-mail verified (Google accounts are) |
 | `password` | password | 6 characters at least (as Firebase) |
 | `username` | text | unique, lowercase, `^[a-z0-9_]{3,16}$`; empty for a Google player until he picks one |
-| `name` | text | display name, up to 24 characters |
+| `name` | text | display name: 3 to 16 of `[A-Za-z0-9_]` (the username's characters, any case); empty for a Google player until he sets up his profile |
 | `nameChangedAt` | date | the last name change (empty: never changed) |
 | `avatar` | number | the avatar worn (0 = none yet; 103 and 104 are free for everyone) |
 | `frame` | number | the frame worn, 0 = none |
@@ -195,7 +195,7 @@ with `POST /api/missions/claim`.
 | `week` | text | `w-YYYY-MM-DD` |
 | `user` | relation → users | |
 | `xp` | number | XP earned that week |
-| `name`, `avatar`, `frame` | | his look when he last scored |
+| `name`, `avatar`, `frame` | | his display name (up to 16 characters) and look when he last scored |
 
 ### `presence` — server writes, signed in reads
 
@@ -264,7 +264,7 @@ the profile as it is now: `{ username, name, nameChangedAt, avatar, frame }`. Er
 
 | Status | `error` |
 |---|---|
-| 400 | `name` (1–24 characters), `username` (invalid) |
+| 400 | `name` (not 3 to 16 of `[A-Za-z0-9_]`), `username` (not 3 to 16 of `[a-z0-9_]`) |
 | 409 | `too soon` (a name change within 24 h), `avatar` / `frame` (not owned), `username set`, `username taken` |
 
 **Online / in a game:** while the app is open, stay in the presence room:

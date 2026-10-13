@@ -32,7 +32,10 @@ migrate((app) => {
   id.max = 36;
   // Firebase accepted 6-character passwords: those players' passwords move here as they are.
   users.fields.getByName("password").min = 6;
-  users.fields.getByName("name").max = 24;
+  // Display names: 3 to 16 letters, digits or _ (a Google player has none until he sets up his profile).
+  const name = users.fields.getByName("name");
+  name.max = 16;
+  name.pattern = "^[A-Za-z0-9_]{3,16}$";
   users.fields.removeByName("avatar"); // PocketBase's picture upload: ours is a number
 
   users.fields.add(
@@ -75,7 +78,7 @@ migrate((app) => {
   ].join(" && ");
   users.deleteRule = "id = @request.auth.id"; // deleting his account takes everything of his with it
 
-  // Google's name and picture don't fit our name (24 characters) and avatar (a number).
+  // Google's name and picture don't fit our name (3 to 16 letters, digits or _) and avatar (a number).
   users.oauth2.mappedFields.name = "";
   users.oauth2.mappedFields.avatarURL = "";
   // New-device e-mails need SMTP; turn them back on once it's set up, if wanted.

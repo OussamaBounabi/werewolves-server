@@ -72,7 +72,7 @@ describe("PocketBase", function () {
   /** A player as most are: a username, a name, a free avatar (and his welcome gift already had). */
   async function player(): Promise<Player> {
     const username = `player_${++seq}`;
-    const p = await signUp({ username, name: `Player ${seq}`, avatar: 103 });
+    const p = await signUp({ username, name: `Player_${seq}`, avatar: 103 });
     await admin.collection("users").update(p.id, { welcomeGift: true });
     return { ...p, username };
   }
@@ -95,13 +95,19 @@ describe("PocketBase", function () {
       const me = await user(p.id);
       assert.deepStrictEqual([me.username, me.name, me.avatar, me.coins, me.xp, me.vip], ["alice_1", "Alice", 104, 0, 0, false]);
       for (const extra of [{ coins: 5 }, { xp: 1 }, { vip: true }, { avatars: [601] }, { welcomeGift: true }, { room: "R" }, { avatar: 601 }, { id: "Chosen0000000000001" }]) {
-        await refused(signUp({ username: `x_${++seq}`, name: "X", ...extra }));
+        await refused(signUp({ username: `x_${++seq}`, name: "Xavier", ...extra }));
       }
-      const sneaky = await signUp({ username: `x_${++seq}`, name: "X", legacyAuth: true }); // hidden: ignored
+      const sneaky = await signUp({ username: `x_${++seq}`, name: "Xavier", legacyAuth: true }); // hidden: ignored
       assert.strictEqual((await user(sneaky.id)).legacyAuth, false);
       await assert.rejects(signUp({ username: "alice_1", name: "Another" }), (e: any) => e.response.data.username.code === "validation_not_unique");
       await refused(signUp({ username: "Bad Name", name: "Bad" }));
       await refused(signUp({ username: "ab", name: "Short" }));
+      // Display names: 3 to 16 of [A-Za-z0-9_], any case.
+      for (const name of ["Al", "x".repeat(17), "Bad Name", "Bad-Name", "Amélie", "علي"]) {
+        await assert.rejects(signUp({ username: `n_${++seq}`, name }), (e: any) => !!e.response?.data?.name, name); // refused for its name
+      }
+      assert.strictEqual((await user((await signUp({ username: `n_${++seq}`, name: "Exactly_16_chars" })).id)).name, "Exactly_16_chars");
+      assert.strictEqual((await user((await signUp({ username: `n_${++seq}`, name: "ABC" })).id)).name, "ABC");
     });
 
     it("lets a player change his own password and nothing else on his account", async () => {
@@ -145,7 +151,7 @@ describe("PocketBase", function () {
     it("checks the apps' tokens: a PocketBase one is a player; anything else (an old app's Firebase token) is refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.token), { uid: p.id, name: p.username.replace("player_", "Player "), avatar: 103, frame: 2, vip: true });
+      assert.deepStrictEqual(await accounts.accountFor(p.token), { uid: p.id, name: p.username.replace("player_", "Player_"), avatar: 103, frame: 2, vip: true });
       const firebaseLike = [{ alg: "RS256", kid: "abc" }, { iss: "https://securetoken.google.com/x", sub: p.id, user_id: p.id }]
         .map((o) => Buffer.from(JSON.stringify(o)).toString("base64url")).join(".") + ".c2lnbmF0dXJl";
       for (const bad of ["", "garbage", firebaseLike, p.token.slice(0, -2)]) {
@@ -163,13 +169,15 @@ describe("PocketBase", function () {
     it("updates a profile: the name once a day, free or owned avatars and frames, a username only once", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { avatars: [601], frames: [3] });
-      const changed = await accounts.updateProfile(p.token, { name: "  New Name ", avatar: 601, frame: 3 });
-      assert.deepStrictEqual([changed.name, changed.avatar, changed.frame], ["New Name", 601, 3]);
+      const changed = await accounts.updateProfile(p.token, { name: "  New_Name ", avatar: 601, frame: 3 });
+      assert.deepStrictEqual([changed.name, changed.avatar, changed.frame], ["New_Name", 601, 3]);
       await assert.rejects(accounts.updateProfile(p.token, { name: "Again" }), /too soon/);
-      await accounts.updateProfile(p.token, { name: "New Name", avatar: 104, frame: 0 }); // same name: not a change
+      await accounts.updateProfile(p.token, { name: "New_Name", avatar: 104, frame: 0 }); // same name: not a change
       await assert.rejects(accounts.updateProfile(p.token, { avatar: 602 }), /avatar/);
       await assert.rejects(accounts.updateProfile(p.token, { frame: 4 }), /frame/);
-      await assert.rejects(accounts.updateProfile(p.token, { name: "x".repeat(25) }), /name/);
+      for (const name of ["", "Al", "x".repeat(17), "Two Words", "dash-ed", "Amélie"]) {
+        await assert.rejects(accounts.updateProfile(p.token, { name }), (e: any) => e instanceof accounts.ProfileError && e.status === 400, name);
+      }
       await assert.rejects(accounts.updateProfile(p.token, { username: "other_name" }), /username set/);
       await admin.collection("users").update(p.id, { nameChangedAt: new Date(Date.now() - 25 * 3600_000).toISOString() });
       assert.strictEqual((await accounts.updateProfile(p.token, { name: "Third" })).name, "Third");
@@ -179,8 +187,8 @@ describe("PocketBase", function () {
       await assert.rejects(accounts.updateProfile(g.token, { username: "No Spaces" }), /username/);
       const set = await accounts.updateProfile(g.token, { username: "Gamer_1", name: "Gamer", avatar: 104 });
       assert.deepStrictEqual([set.username, set.name, set.nameChangedAt], ["gamer_1", "Gamer", ""]);
-      await accounts.updateProfile(g.token, { name: "Gamer Two" }); // his first change
-      await assert.rejects(accounts.updateProfile(g.token, { name: "Gamer Three" }), /too soon/);
+      await accounts.updateProfile(g.token, { name: "Gamer_Two" }); // his first change
+      await assert.rejects(accounts.updateProfile(g.token, { name: "Gamer_Three" }), /too soon/);
       await assert.rejects(accounts.updateProfile("garbage", { name: "Nope" }), accounts.AuthError);
     });
 
@@ -294,7 +302,7 @@ describe("PocketBase", function () {
     it("runs the admin tools: coins by username or for everyone, every avatar, VIP", async () => {
       const p = await player();
       const before = (await user(p.id)).coins;
-      assert.deepStrictEqual(await accounts.grantCurrency(p.username, 100, 5), { name: `Player ${p.username.slice(7)}`, coins: before + 100, diamonds: 5 });
+      assert.deepStrictEqual(await accounts.grantCurrency(p.username, 100, 5), { name: `Player_${p.username.slice(7)}`, coins: before + 100, diamonds: 5 });
       await assert.rejects(accounts.grantCurrency(p.username, -1_000_000, 0));
       await assert.rejects(accounts.grantCurrency("nobody_here", 1, 1), /no player/);
       const count = await accounts.grantCurrencyToAll(1, 0, true);
@@ -442,7 +450,7 @@ describe("PocketBase", function () {
       const client = await colyseus.connectTo(room, { idToken: p.token });
       await assert.rejects(colyseus.connectTo(room, { idToken: "an old app's Firebase token" }), /auth/);
       const seat = room.seats.find((s: any) => s.uid === p.id);
-      assert.strictEqual(seat?.name, `Player ${p.username.slice(7)}`);
+      assert.strictEqual(seat?.name, `Player_${p.username.slice(7)}`);
       await until(async () => (await state(p)) === "in_game");
       assert.deepStrictEqual([(await admin.collection("presence").getOne(p.id)).game, (await user(p.id)).room], ["rummy", room.roomId]);
       await client.leave();
@@ -478,7 +486,7 @@ describe("PocketBase", function () {
       assert.strictEqual((await post("/api/avatars/buy", { id: 101 }, "garbage")).status, 401);
       assert.strictEqual((await post("/api/auth/legacy-login", {})).status, 400);
       // No FIREBASE_WEB_API_KEY here: an account still waiting for its password can't move.
-      const waiting = await signUp({ username: `w_${++seq}`, name: "W" });
+      const waiting = await signUp({ username: `w_${++seq}`, name: "Waiting" });
       await admin.collection("users").update(waiting.id, { legacyAuth: true });
       delete process.env.FIREBASE_WEB_API_KEY;
       assert.strictEqual((await post("/api/auth/legacy-login", { email: waiting.email, password: "whatever" })).status, 503);
@@ -525,7 +533,10 @@ describe("PocketBase", function () {
         { chatId, id: "msg1aaaaaaaaaaaaaaaa", data: { from: A, text: "hi Gus", at: t(10) } },
         { chatId, id: "msg2aaaaaaaaaaaaaaaa", data: { from: G, text: "🎤 Voice message (0:07)", type: "voice", seconds: 7, wave: "0123", at: t(11) } },
       ],
-      leaderboard: [{ week: "w-2026-08-31", id: A, data: { xp: 300, name: "Anna", avatar: 103, frame: 2 } }],
+      leaderboard: [
+        { week: "w-2026-08-31", id: A, data: { xp: 300, name: "Anna", avatar: 103, frame: 2 } },
+        { week: "w-2026-08-31", id: G, data: { xp: 10, name: "Gus, whose name is far too long", avatar: 104, frame: 0 } },
+      ],
       reports: [
         { id: `${G}_${A}`, data: { target: G, reporter: A, reason: "insults", context: "bad words", createdAt: t(16) } },
         { id: `${A}_${G}`, data: { target: A, reporter: G, reason: "weird", context: "", createdAt: t(17) } },
@@ -549,7 +560,7 @@ describe("PocketBase", function () {
       );
       assert.deepStrictEqual([anna.createdAt, anna.nameChangedAt], [t(0).toISOString().replace("T", " "), t(5).toISOString().replace("T", " ")]);
       const gus = await user(G);
-      assert.deepStrictEqual([gus.name, gus.coins, gus.legacyAuth, gus.verified], ["Gus, whose name is far t", 0, false, true]);
+      assert.deepStrictEqual([gus.name, gus.coins, gus.legacyAuth, gus.verified], ["gus", 0, false, true]); // his name didn't fit
       const nora = await user(N);
       assert.deepStrictEqual([nora.username, nora.legacyAuth, nora.welcomeGift], ["", true, true]);
       const link = await admin.collection("_externalAuths").getFirstListItem(`recordRef = "${G}"`);
@@ -559,6 +570,7 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("private_info").getOne(G)).provider, "google.com");
       assert.strictEqual((await admin.collection("missions").getOne(`${A}_d-2026-09-01`)).games, 3);
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${A}_w-2026-08-31`)).xp, 300);
+      assert.strictEqual((await admin.collection("leaderboard").getOne(`${G}_w-2026-08-31`)).name, "Gus, whose name ");
       assert.strictEqual((await admin.collection("friends").getFullList({ filter: `user = "${A}" || user = "${G}"` })).length, 2);
       const requests = await admin.collection("friend_requests").getFullList({ filter: `to = "${A}" || to = "${G}"` });
       assert.deepStrictEqual(requests.map((r) => [r.from, r.to]), [[N, A]]);
@@ -573,7 +585,10 @@ describe("PocketBase", function () {
       const conv = async (who: string) => (await admin.collection("conversations").getFirstListItem(`user = "${who}"`));
       assert.deepStrictEqual([(await conv(G)).unread, (await conv(G)).lastMessage, (await conv(G)).updatedAt], [1, "join me", t(15).toISOString().replace("T", " ")]);
       assert.deepStrictEqual([(await conv(A)).unread, (await conv(A)).seen], [0, false]);
-      for (const expected of ["OrphanProfile", "cut to 24", "coins -5 raised to 0", "usernames/gus", 'reason "weird"']) {
+      for (const expected of [
+        "OrphanProfile", `users/${G}: name "Gus, whose name is far too long" isn't 3 to 16 letters, digits or _: his username "gus" instead`,
+        "cut to 16 characters", "coins -5 raised to 0", "usernames/gus", 'reason "weird"',
+      ]) {
         assert.ok(problems.some((p) => p.includes(expected)), `missing problem: ${expected}`);
       }
       // Run again (after a failure): nothing twice.

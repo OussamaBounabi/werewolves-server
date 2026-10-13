@@ -61,7 +61,7 @@ migrate((app) => {
       { name: "week", type: "text", required: true, pattern: "^w-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
       player("user"),
       counter("xp"),
-      { name: "name", type: "text", max: 24 },
+      { name: "name", type: "text", max: 16 }, // his display name then
       { name: "avatar", type: "number", onlyInt: true, min: 0 },
       { name: "frame", type: "number", onlyInt: true, min: 0 },
     ],

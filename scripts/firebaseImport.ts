@@ -49,6 +49,7 @@ export type ImportOptions = { dry?: boolean; voice?: VoiceLoader; log?: (line: s
 
 const ID = /^[A-Za-z0-9]{1,36}$/; // users and messages keep their Firebase ids
 const USERNAME = /^[a-z0-9_]{3,16}$/;
+const NAME = /^[A-Za-z0-9_]{3,16}$/; // display names
 const PERIOD = /^[dw]-\d{4}-\d{2}-\d{2}$/;
 const BIRTH_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const REASONS = ["cheating", "insults", "bad_name", "spam", "afk", "other"];
@@ -145,9 +146,10 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
     }
     if (username) usernames.add(username);
     let name = String(p.name ?? "").trim();
-    if (name.length > 24) {
-      report.problem(`users/${u.uid}: name "${name}" cut to 24 characters`);
-      name = name.slice(0, 24);
+    if (profiles.has(u.uid) && !NAME.test(name)) {
+      const instead = username ? `his username "${username}" instead` : "left empty (he picks one in the app)";
+      report.problem(`users/${u.uid}: name "${name}" isn't 3 to 16 letters, digits or _: ${instead}`);
+      name = username;
     }
     const natural = (field: string) => {
       const n = int(p[field]);
@@ -235,9 +237,11 @@ export async function importFirebase(pb: PocketBase | null, data: FirebaseExport
       report.problem(`leaderboard/${r.week}/players/${r.id}: unknown player or week, not copied`);
       continue;
     }
+    const name = String(r.data.name ?? "");
+    if (name.length > 16) report.problem(`leaderboard/${r.week}/players/${r.id}: name "${name}" cut to 16 characters`);
     ranks.push({
       id: `${r.id}_${r.week}`, week: r.week, user: r.id, xp: Math.max(0, int(r.data.xp)),
-      name: String(r.data.name ?? "").slice(0, 24), avatar: Math.max(0, int(r.data.avatar)), frame: Math.max(0, int(r.data.frame)),
+      name: name.slice(0, 16), avatar: Math.max(0, int(r.data.avatar)), frame: Math.max(0, int(r.data.frame)),
     });
   }
   await create("leaderboard", ranks.filter((r) => !knownRanks.has(r.id)), ranks.filter((r) => knownRanks.has(r.id)).length);

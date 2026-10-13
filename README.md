@@ -129,8 +129,9 @@ The order, on the day:
    settings → Service accounts → Generate new private key, saved as `service-account.json` next to
    `package.json`. It's git-ignored. Delete it afterwards.
 3. Check: `npx tsx scripts/migrate-from-firebase.ts --dry`. It reads everything and lists what it
-   would copy and what's wrong: invalid or duplicate usernames, names over 24 characters, a profile
-   without an account… These are fixed by the copy (left empty, or cut), not by hand.
+   would copy and what's wrong: invalid or duplicate usernames, display names that aren't 3 to 16 of
+   `[A-Za-z0-9_]`, a profile without an account… The copy fixes these, not you: a bad username is left
+   empty (the player picks one), and a bad name is replaced by the player's username.
 4. Stop writes to Firebase, so the copy is complete: take the old app versions out, or make the
    Firestore rules read-only.
 5. Copy: `npx tsx scripts/migrate-from-firebase.ts`. If it stops halfway, run it again: it carries on

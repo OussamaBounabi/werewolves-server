@@ -384,14 +384,14 @@ export class ProfileError extends Error {
 export type ProfileChanges = { username?: unknown; name?: unknown; avatar?: unknown; frame?: unknown };
 
 const USERNAME = /^[a-z0-9_]{3,16}$/;
-const NAME_MAX = 24;
+const NAME = /^[A-Za-z0-9_]{3,16}$/; // a display name: the username's characters, in any case
 const NAME_EVERY_MS = 24 * 60 * 60_000;
 const parseDate = (d: unknown) => (d ? Date.parse(String(d).replace(" ", "T")) : NaN);
 
 /**
- * What a player changes on his own profile (POST /api/profile): his name (once per 24 hours), the avatar
- * and frame he wears (free or owned ones), and his username once, if he has none yet (a Google player
- * setting up his account; that first name doesn't count as a change).
+ * What a player changes on his own profile (POST /api/profile): his name (3 to 16 letters, digits or _,
+ * once per 24 hours), the avatar and frame he wears (free or owned ones), and his username once, if he has
+ * none yet (a Google player setting up his account; that first name doesn't count as a change).
  */
 export async function updateProfile(idToken: string, changes: ProfileChanges) {
   if (!pb) throw new ProfileError("accounts disabled", 409);
@@ -409,7 +409,7 @@ export async function updateProfile(idToken: string, changes: ProfileChanges) {
     }
     if (changes.name !== undefined) {
       const name = String(changes.name).trim();
-      if (!name || name.length > NAME_MAX) throw new ProfileError("name", 400);
+      if (!NAME.test(name)) throw new ProfileError("name", 400);
       if (name !== user.name) {
         if (!settingUp && Date.now() - parseDate(user.nameChangedAt) < NAME_EVERY_MS) throw new ProfileError("too soon", 409);
         update.name = name;
