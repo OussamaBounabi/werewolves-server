@@ -712,6 +712,91 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(r.teamOf(child.sessionId), "wolves");
   });
 
+  it("the protector's shield breaks the red wolf's spell and stops an infection; a silenced player can't write", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 0, villagers: 2, fatherwolf: true, redwolf: true, protector: true, mayor: false };
+    const { room, clients, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [father, protector, villager] = [byRole("fatherwolf"), byRole("protector"), byRole("villager")];
+    assert.strictEqual(room.state.protectorShield, true); // on unless the host turns it off
+
+    // The red wolf's spell on the player the protector then shields: gone, he plays tonight after all.
+    r.paralysed = villager.sessionId;
+    room.state.nightStep = "protector";
+    protector.send("protect", { targetId: villager.sessionId });
+    await waitFor(() => r.protectTarget === villager.sessionId);
+    assert.strictEqual(r.paralysed, null);
+
+    // The father bites the shielded player: no infection, and his one infection is spent.
+    r.wolfTarget = villager.sessionId;
+    room.state.nightStep = "wolf_powers";
+    r.powerActors = new Set([father.sessionId]);
+    father.send("infect", { infect: true });
+    await waitFor(() => r.infectionUsed === true);
+    assert.strictEqual(r.infected.has(villager.sessionId), false);
+    assert.strictEqual(r.wolfVictim, null); // (and he wasn't bitten either)
+
+    // The black wolf's victim: no voice, no vote, and no writing in the chat.
+    room.state.phase = "day";
+    room.state.players.get(clients[0].sessionId)!.silenced = true;
+    const refused = clients[0].waitForMessage("error");
+    clients[0].send("chat", { text: "hello" });
+    assert.deepStrictEqual(await refused, { code: "silenced_chat" });
+    assert.strictEqual(r.chatLog.length, 0);
+  });
+
+  it("the dragon's fire comes back after a wolf; a dead mayor stands until his successor is named", async () => {
+    const { room, clients, byRole } = await startGame(SIX, 8);
+    const r = room as any;
+    const [dragon, wolf, villager] = [byRole("dragon"), byRole("werewolf"), byRole("villager")];
+    const state = (c: any) => room.state.players.get(c.sessionId)!;
+
+    // A dead mayor keeps standing (as the hunter does until his shot) while he names his successor.
+    room.state.mayorId = villager.sessionId;
+    r.kill(villager.sessionId, "wolves");
+    assert.deepStrictEqual([state(villager).alive, state(villager).aiming], [false, true]);
+    r.revealsPending = 0;
+    r.afterDeaths(() => {});
+    assert.strictEqual(room.state.phase, "succession");
+    assert.strictEqual(state(villager).aiming, true);
+    const heir = clients.find((c: any) => c !== villager && c !== wolf && c !== dragon);
+    villager.send("mayor_successor", { targetId: heir.sessionId });
+    await waitFor(() => room.state.mayorId === heir.sessionId);
+    assert.strictEqual(state(villager).aiming, false);
+
+    // The dragon burns a wolf: his fire comes back.
+    room.state.phase = "night";
+    room.state.nightStep = "witch_seer";
+    r.awake = new Set([dragon.sessionId, "someone"]);
+    dragon.send("dragon_fire", { targetId: wolf.sessionId });
+    await waitFor(() => r.dragonTarget === wolf.sessionId);
+    assert.ok(r.spent.has(dragon.sessionId));
+    r.resolveNight();
+    assert.strictEqual(state(wolf).alive, false);
+    assert.ok(!r.spent.has(dragon.sessionId));
+  });
+
+  it("watching: not a game my own living seat is in; a VIP talking to the dead leaves a line in their chat", async () => {
+    const { room, clients } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 4, mayor: false }, 5);
+    const r = room as any;
+    // My seat is alive in this game: I come back to it, I don't watch (a living player would hear the dead).
+    const mine = r.playerIds.get(clients[0].sessionId);
+    await assert.rejects(colyseus.connectTo(room, { playerId: mine, spectator: true }), /seated/);
+
+    const watcher = await colyseus.connectTo(room, { spectator: true });
+    await waitFor(() => r.spectators.has(watcher.sessionId));
+    watcher.send("spectator_speaking"); // not a VIP: nothing
+    await new Promise((done) => setTimeout(done, 100));
+    assert.strictEqual(r.deadChatLog.length, 0);
+    r.vips.add(watcher.sessionId);
+    const heard = watcher.waitForMessage("chat");
+    watcher.send("spectator_speaking");
+    const line: any = await heard;
+    assert.deepStrictEqual([line.speaking, line.dead, line.text], [true, true, ""]);
+    watcher.send("spectator_speaking"); // again within the minute: no second line
+    await new Promise((done) => setTimeout(done, 100));
+    assert.strictEqual(r.deadChatLog.length, 1);
+  });
+
   it("the dragon burns once, at dawn", async () => {
     const { room, byRole } = await startGame(SIX, 8);
     const r = room as any;
@@ -935,6 +1020,9 @@ describe("WerewolfRoom", () => {
     const { room, clients, byRole } = await startGame(SIX_MORE, 9);
     const r = room as any;
     const [doubler, seer] = [byRole("doubler"), byRole("seer")];
+    // He wakes first, with his own half minute to decide (the room's step time is 10 seconds here).
+    assert.strictEqual(room.state.nightStep, "doubler");
+    assert.ok(room.state.phaseEndsAt - Date.now() > 20_000);
     room.state.nightStep = "doubler";
     const copied = doubler.waitForMessage("doubler_result");
     doubler.send("copy", { targetId: seer.sessionId });

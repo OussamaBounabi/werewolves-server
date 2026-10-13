@@ -199,15 +199,27 @@ export const EXCHANGE_TOKEN_SECONDS = 60 * 60;
  * account is made at his first exchange), good for an hour and not refreshable: the app exchanges again
  * at each launch and when it expires. [expires] in epoch ms.
  */
-export async function exchangeToken(idToken: string) {
+export async function exchangeToken(idToken: string, appVersion?: unknown) {
   const user = await signedIn(idToken);
   await ensurePlayer(user);
   const client = await db();
+  // The version of the app he opened, kept on his account: the owner sees who is still on an old one.
+  if (typeof appVersion === "string" && /^[0-9A-Za-z.+-]{1,20}$/.test(appVersion)) {
+    await client.collection("users").update(user.uid, { appVersion }).catch(() => {});
+  }
   const { token, record } = await client.send(`/api/collections/users/impersonate/${encodeURIComponent(user.uid)}`, {
     method: "POST",
     body: { duration: EXCHANGE_TOKEN_SECONDS },
   });
   return { token: String(token), expires: Number(getTokenPayload(token).exp) * 1000, record: record as RecordModel };
+}
+
+/** A message from support to every player, in the three languages: the apps show the newest one, once. */
+export async function announce(texts: { ar?: unknown; en?: unknown; fr?: unknown }) {
+  const text = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 1000) : "");
+  const message = { ar: text(texts.ar), en: text(texts.en), fr: text(texts.fr) };
+  if (!message.ar && !message.en && !message.fr) throw new Error("empty");
+  return (await db()).collection("announcements").create(message);
 }
 
 /** The account with this e-mail, or this username (admin tools). */

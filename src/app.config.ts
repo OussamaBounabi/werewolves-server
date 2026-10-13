@@ -24,7 +24,7 @@ import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
 import {
-  AuthError, buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin, ProfileError, StoreError, updateProfile,
+  announce, AuthError, buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin, ProfileError, StoreError, updateProfile,
   type ProfileChanges,
 } from "./accounts.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
@@ -159,9 +159,19 @@ const server = defineServer({
       const idToken = (ctx.body as { idToken?: unknown } | undefined)?.idToken;
       if (typeof idToken !== "string" || !idToken) throw ctx.error(400, { error: "missing idToken" });
       try {
-        return await exchangeToken(idToken);
+        return await exchangeToken(idToken, (ctx.body as { version?: unknown }).version);
       } catch (e) {
         throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // Admins only: a message from support to every player, body { ar, en, fr } (at least one).
+    api_admin_announce: createEndpoint("/api/admin/announce", { method: "POST" }, async (ctx) => {
+      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+      try {
+        const sent = await announce((ctx.body ?? {}) as { ar?: unknown; en?: unknown; fr?: unknown });
+        return { id: sent.id };
+      } catch (e) {
+        throw ctx.error(400, { error: (e as Error).message });
       }
     }),
     // Admins only (Authorization: Bearer <ID token>): every room, private ones included.
