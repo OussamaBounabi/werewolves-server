@@ -2,6 +2,7 @@ import assert from "assert";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.j
  */
 const BIN = process.env.POCKETBASE_BIN;
 const MIGRATIONS = fileURLToPath(new URL("../pocketbase/pb_migrations", import.meta.url));
+const HOOKS = fileURLToPath(new URL("../pocketbase/pb_hooks", import.meta.url));
 const PORT = 8097;
 const URL_ = `http://127.0.0.1:${PORT}`;
 const SUPERUSER = { email: "server@test.local", password: "server-pass-123" };
@@ -42,7 +44,10 @@ describe("PocketBase", function () {
     execFileSync(BIN, ["migrate", "up", "--dir", dir, "--migrationsDir", MIGRATIONS], { stdio: "ignore" });
     execFileSync(BIN, ["superuser", "upsert", SUPERUSER.email, SUPERUSER.password, "--dir", dir], { stdio: "ignore" });
     // (--automigrate=false: the tests change collections, which must not write migration files into the repo)
-    server = spawn(BIN, ["serve", "--http", `127.0.0.1:${PORT}`, "--dir", dir, "--migrationsDir", MIGRATIONS, "--automigrate=false"], { stdio: "ignore" });
+    server = spawn(BIN, [
+      "serve", "--http", `127.0.0.1:${PORT}`, "--dir", dir, "--migrationsDir", MIGRATIONS, "--automigrate=false",
+      "--hooksDir", HOOKS, "--hooksWatch=false",
+    ], { stdio: "ignore" });
     for (let i = 0; i < 100; i++) {
       if (await fetch(`${URL_}/api/health`).then((r) => r.ok, () => false)) break;
       await new Promise((r) => setTimeout(r, 100));
@@ -157,6 +162,11 @@ describe("PocketBase", function () {
       for (const bad of ["", "garbage", firebaseLike, p.token.slice(0, -2)]) {
         await assert.rejects(accounts.accountFor(bad), accounts.AuthError);
       }
+      // A login lasts 90 days, and each refresh (the app's, at launch) starts 90 more.
+      const days = (token: string) => (JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp - Date.now() / 1000) / 86400;
+      assert.ok(Math.abs(days(p.token) - 90) < 0.1, `${days(p.token)} days`);
+      const refreshed = await p.pb.collection("users").authRefresh();
+      assert.ok(Math.abs(days(refreshed.token) - 90) < 0.1);
       const google = await signUp({}); // signed in, no username picked yet
       await assert.rejects(accounts.accountFor(google.token), /no profile/);
       process.env.ADMIN_EMAILS = `someone@else.com, ${p.email.toUpperCase()}`;
@@ -649,6 +659,91 @@ describe("PocketBase", function () {
         assert.strictEqual((await signIn("same")).record.id, mail.id);
       } finally {
         google.close();
+      }
+    });
+
+    it("refuses the legacy login once his PocketBase password was reset or changed: his old one never comes back", async () => {
+      // A stand-in SMTP server, to get the "forgot password" e-mail and the link in it.
+      const mails: string[] = [];
+      const smtp = createTcpServer((socket) => {
+        let buffer = "", data = false;
+        socket.write("220 test\r\n");
+        socket.on("data", (chunk) => {
+          buffer += chunk.toString();
+          for (;;) {
+            if (data) {
+              const end = buffer.indexOf("\r\n.\r\n");
+              if (end < 0) return;
+              mails.push(buffer.slice(0, end));
+              buffer = buffer.slice(end + 5);
+              data = false;
+              socket.write("250 OK\r\n");
+              continue;
+            }
+            const end = buffer.indexOf("\r\n");
+            if (end < 0) return;
+            const command = buffer.slice(0, 4).toUpperCase();
+            buffer = buffer.slice(end + 2);
+            if (command === "DATA") (data = true), socket.write("354 go on\r\n");
+            else if (command === "QUIT") socket.end("221 bye\r\n");
+            else socket.write("250 OK\r\n");
+          }
+        });
+      }).listen(2526);
+      try {
+        await admin.settings.update({
+          smtp: { enabled: true, host: "127.0.0.1", port: 2526, tls: false },
+          meta: { senderAddress: "noreply@test.local", senderName: "PlayRoom" },
+        });
+        // Three copied e-mail players whose Firebase password is "old-firebase-pass".
+        const [R, S, K] = ["ResetFirebaseUid000000000007", "SetFirebaseUid00000000000008", "KeptFirebaseUid0000000000009"];
+        let asked = 0;
+        const firebase = async (email: string, password: string) => {
+          asked++;
+          return password === "old-firebase-pass" ? { "reset@example.com": R, "admin@example.com": S, "kept@example.com": K }[email] ?? null : null;
+        };
+        for (const [id, email] of [[R, "reset@example.com"], [S, "admin@example.com"], [K, "kept@example.com"]]) {
+          await admin.collection("users").create({
+            id, email, password: "copy-random-1", passwordConfirm: "copy-random-1", legacyAuth: true, welcomeGift: true,
+            username: `u${id.slice(0, 12).toLowerCase()}`, name: id.slice(0, 12),
+          });
+        }
+        // What the game server writes doesn't end the move.
+        await accounts.recordResults([result(K, true)]);
+        await accounts.savePresence(K, { state: "in_game", game: "ludo", room: "R1" });
+        assert.strictEqual((await user(K)).legacyAuth, true);
+        // He forgot his password and reset it by e-mail.
+        await new PocketBase(URL_).collection("users").requestPasswordReset("reset@example.com");
+        for (let i = 0; i < 50 && !mails.length; i++) await new Promise((r) => setTimeout(r, 100));
+        const mail = mails.join("").replace(/=\r\n/g, "").replace(/=3D/g, "=");
+        const token = mail.match(/confirm-password-reset\/([\w-]+\.[\w-]+\.[\w-]+)/)?.[1];
+        assert.ok(token, "the reset e-mail has its link");
+        await new PocketBase(URL_).collection("users").confirmPasswordReset(token!, "brand-new-pass", "brand-new-pass");
+        assert.strictEqual((await user(R)).legacyAuth, false);
+        asked = 0;
+        await assert.rejects(legacyLogin("reset@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
+        assert.strictEqual(asked, 0); // Firebase isn't even asked
+        const login = (email: string, password: string) => new PocketBase(URL_).collection("users").authWithPassword(email, password);
+        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
+        await refused(login("reset@example.com", "old-firebase-pass"));
+        // A superuser set it (the dashboard): the same.
+        await admin.collection("users").update(S, { password: "set-by-admin-1", passwordConfirm: "set-by-admin-1" });
+        assert.strictEqual((await user(S)).legacyAuth, false);
+        await assert.rejects(legacyLogin("admin@example.com", "old-firebase-pass", firebase), (e: any) => e.status === 409);
+        await login("admin@example.com", "set-by-admin-1");
+        // The legacy login's own write is checked inside the write too (a reset a moment before it can't slip
+        // in between): the Firebase password for an account no longer waiting for it is refused.
+        const late = admin.createBatch();
+        late.collection("users").update(R, { password: "old-firebase-pass", passwordConfirm: "old-firebase-pass", legacyAuth: true });
+        await assert.rejects(late.send(), (e: any) => /already moved/i.test(JSON.stringify(e.response)));
+        assert.strictEqual((await login("reset@example.com", "brand-new-pass")).record.id, R);
+        assert.strictEqual((await user(R)).legacyAuth, false);
+        // Untouched: he still moves.
+        await legacyLogin("kept@example.com", "old-firebase-pass", firebase);
+        assert.strictEqual((await login("kept@example.com", "old-firebase-pass")).record.id, K);
+        assert.strictEqual((await user(K)).legacyAuth, false);
+      } finally {
+        smtp.close();
       }
     });
 

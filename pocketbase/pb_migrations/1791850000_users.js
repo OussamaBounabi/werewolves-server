@@ -83,6 +83,9 @@ migrate((app) => {
   users.oauth2.mappedFields.avatarURL = "";
   // New-device e-mails need SMTP; turn them back on once it's set up, if wanted.
   users.authAlert.enabled = false;
+  // A login lasts 90 days (PocketBase's default is 5): the app refreshes it at each launch, so a player
+  // is only signed out after 90 days without opening it.
+  users.authToken.duration = 90 * 24 * 60 * 60;
 
   app.save(users);
 }, (app) => {
@@ -102,5 +105,6 @@ migrate((app) => {
   users.oauth2.mappedFields.name = "name";
   users.oauth2.mappedFields.avatarURL = "avatar";
   users.authAlert.enabled = true;
+  users.authToken.duration = 5 * 24 * 60 * 60;
   app.save(users);
 });

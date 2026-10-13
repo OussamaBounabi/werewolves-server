@@ -501,24 +501,32 @@ export async function accountByEmail(email: string): Promise<{ id: string; legac
 
 /**
  * For the legacy login: gives a Firebase player's account (his Firebase uid) the password he just proved
- * with Firebase, once. False if it already has its own. No account yet (he signed up after the copy):
- * one is made, empty, for him to set up.
+ * with Firebase, once. False if it already has its own (moved already, or its password was reset or
+ * changed in PocketBase). No account yet (he signed up after the copy): one is made, empty, for him to set up.
  */
 export async function moveFromFirebase(uid: string, email: string, password: string): Promise<boolean> {
   return forPlayer(uid, async () => {
     const client = await db();
     const user = await maybe(client.collection("users").getOne(uid));
     if (user && !user.legacyAuth) return false;
-    const login = { email, password, passwordConfirm: password, legacyAuth: false };
+    const login = { email, password, passwordConfirm: password };
+    const batch = client.createBatch(); // (read inside the write: see pocketbase/pb_hooks/legacy_auth.pb.js)
     if (user) {
-      await client.collection("users").update(uid, login);
-      return true;
+      // legacyAuth: true = "the password from Firebase": PocketBase's hook takes it only if the account is
+      // still waiting for it at the moment of writing (a reset may have just happened), and stores false.
+      batch.collection("users").update(uid, { ...login, legacyAuth: true });
+    } else {
+      const createdAt = new Date().toISOString();
+      batch.collection("users").create({ id: uid, ...login, legacyAuth: false, welcomeGift: true, createdAt }); // a Firebase player had his gift
+      batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
     }
-    const createdAt = new Date().toISOString();
-    const batch = client.createBatch();
-    batch.collection("users").create({ id: uid, ...login, welcomeGift: true, createdAt }); // a Firebase player had his gift
-    batch.collection("private_info").create({ id: uid, user: uid, email, provider: "password", createdAt });
-    await batch.send();
+    try {
+      await batch.send();
+    } catch (e) {
+      // (PocketBase words it "Already moved.")
+      if (e instanceof ClientResponseError && /already moved/i.test(JSON.stringify(e.response))) return false;
+      throw e;
+    }
     return true;
   });
 }

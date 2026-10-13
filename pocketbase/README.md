@@ -12,6 +12,10 @@ Firestore and the Realtime Database).
 The collections and their access rules are the migration files in [`pb_migrations/`](pb_migrations).
 PocketBase applies them when it starts. To change a collection, add a new migration file here.
 
+There is one hook, [`pb_hooks/legacy_auth.pb.js`](pb_hooks/legacy_auth.pb.js), and it holds no game
+logic. When a copied player's password is reset or changed in PocketBase, it ends his move from Firebase
+(`legacyAuth`, below). PocketBase must run with `--hooksDir` pointing at that folder.
+
 **Who writes what.** The apps write directly only what a player may change himself: signing up, his
 password, friend requests and friendships, messages, read markers and reports. Everything that touches
 the game goes through the game server: XP, coins, diamonds, stats, purchases, missions, the welcome gift,
@@ -70,7 +74,7 @@ server. Every relation to `users` has cascade delete: deleting an account delete
 | `vip` | bool | a VIP werewolf host picks his own role |
 | `welcomeGift` | bool | the server gives 10,000 coins and 1,000 diamonds once, within 10 s of sign-up |
 | `createdAt` | date | when the account was made (Firebase's date for copied players) |
-| `legacyAuth` | bool, hidden | the player still has to bring his password from Firebase (see Log in) |
+| `legacyAuth` | bool, hidden | the player still has to bring his password from Firebase (see Log in). Cleared when he does, and by the hook as soon as his PocketBase password is reset or changed: from then on the legacy login refuses him, so his old Firebase password can never replace a newer one. |
 | `created`, `updated` | autodate | |
 
 Rules:
@@ -241,7 +245,7 @@ then `authWithPassword(email, password)`. If the username is taken, the error is
 |---|---|---|
 | 200 | his password is now on PocketBase | `authWithPassword` again |
 | 401 | wrong e-mail or password | show it |
-| 409 | nothing to move (already moved, or a Google account) | show the usual wrong-password message |
+| 409 | nothing to move (already moved, password reset or changed in PocketBase, or a Google account) | show the usual wrong-password message |
 | 429 | too many tries | ask to wait 15 minutes |
 
 **Google:** `pb.collection("users").authWithOAuth2({ provider: "google" })` opens a browser tab.
@@ -250,6 +254,12 @@ If `record.username` is empty (a new player), show the profile screen, then
 `POST server/api/profile { username, name, avatar }`.
 
 **Forgot password:** `pb.collection("users").requestPasswordReset(email)` (needs SMTP set up in PocketBase).
+A player copied from Firebase who resets his password this way has moved for good: his old Firebase
+password no longer works anywhere.
+
+**Staying signed in:** a login token lasts 90 days. Call `pb.collection("users").authRefresh()` at
+each launch: it returns a new token, good for 90 more days. A player is signed out only after 90 days
+without opening the app, or when he changes his password.
 
 **Delete my account:** `pb.collection("users").delete(me)`.
 

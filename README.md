@@ -60,6 +60,7 @@ knows who is online.
 - `src/legacyLogin.ts`: e-mail players' first login after the move (delete it once everyone has moved)
 - `src/rooms/*Room.ts`: the games
 - `pocketbase/pb_migrations/`: the PocketBase collections and their access rules
+- `pocketbase/pb_hooks/`: PocketBase's one hook: a copied player's password reset ends his move from Firebase
 - `scripts/`: admin tools and the Firebase migration
 - `test/`: mocha tests
 
@@ -72,7 +73,7 @@ npx mocha -r tsx test/rummy.test.ts --exit --timeout 60000
 ```
 
 - `test/WerewolfRoom.test.ts` takes about 11 minutes.
-- `test/pocketbase.test.ts` runs a real PocketBase built from `pocketbase/pb_migrations`. It tests the
+- `test/pocketbase.test.ts` runs a real PocketBase built from `pocketbase/pb_migrations` and `pb_hooks`. It tests the
   access rules, everything the server writes, and the Firebase copy. Point it at the
   [PocketBase executable](https://github.com/pocketbase/pocketbase/releases), or it is skipped:
   `POCKETBASE_BIN=/path/to/pocketbase npx mocha -r tsx test/pocketbase.test.ts --exit --timeout 60000`
@@ -91,10 +92,11 @@ They use the PocketBase superuser from `.env`. On the VPS, or anywhere with
 ## PocketBase on the VPS
 
 1. Download PocketBase 0.40.5 (linux amd64) from its GitHub releases, e.g. to `/opt/pocketbase/pocketbase`.
-2. Run it under systemd, listening on localhost only, with this repository's migrations:
+2. Run it under systemd, listening on localhost only, with this repository's migrations and its hook:
    ```
    /opt/pocketbase/pocketbase serve --http 127.0.0.1:8090 --dir /var/lib/pocketbase \
-     --migrationsDir /path/to/werewolves-server/pocketbase/pb_migrations --automigrate=false --dev=false
+     --migrationsDir /path/to/werewolves-server/pocketbase/pb_migrations --automigrate=false --dev=false \
+     --hooksDir /path/to/werewolves-server/pocketbase/pb_hooks --hooksWatch=false
    ```
    It applies new migration files when it starts. Restart it after pulling new ones.
 3. Create two superusers: one for you (the dashboard) and one for the game server (`.env`):

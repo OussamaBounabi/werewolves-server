@@ -6,7 +6,8 @@ import { accountByEmail, moveFromFirebase } from "./accounts.js";
  * passwords, so when PocketBase refuses his login the app sends his e-mail and password here once (POST
  * /api/auth/legacy-login, over HTTPS): Firebase Auth checks them, and his account (copied by
  * scripts/migrate-from-firebase.ts under his Firebase uid) gets that password; the app then logs in to
- * PocketBase as usual. Once an account has its password it's never touched here again.
+ * PocketBase as usual. Once an account has a password of its own (brought from Firebase, or reset
+ * or changed in PocketBase: pocketbase/pb_hooks/legacy_auth.pb.js), it's never touched here again.
  * Needs FIREBASE_WEB_API_KEY (.env): the Firebase project's Web API key. Delete this file and its route
  * once everyone has moved.
  */
