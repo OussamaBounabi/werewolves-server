@@ -20,8 +20,8 @@ export type PlayerState = SchemaType<typeof PlayerState>;
 // Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "dictator" | "day" | "vote" |
 // "judge" | "joker" | "gameover"
 // ("reveal": the apps play the death card reveals before the game moves on)
-// Night steps, in order: "doubler" (until he copies) | "cupid" + "lovers" + "wild_child" (night 1) | "green_wolf" + "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
-// "white_wolf" (even nights) | "wolf_powers" (father / black / green wolves) | "witch_seer" ("" outside the night)
+// Night steps, in order: "doubler" (until he copies) | "wolfdog" + "cupid" + "lovers" + "wild_child" (night 1) | "green_wolf" + "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
+// "big_bad_wolf" (night 2+, while no wolf has died) | "white_wolf" (even nights) | "wolf_powers" (father / black wolves) | "witch_seer" ("" outside the night)
 export const WerewolfState = schema({
   // Room settings, editable by the host in the lobby. The room is named after its host.
   roomType: t.string().default("public"), // "public" | "friends" | "private" — not enforced yet
@@ -65,6 +65,9 @@ export const WerewolfState = schema({
   joker: t.boolean().default(false),
   raven: t.boolean().default(false),
   owl: t.boolean().default(false),
+  // A schema holds 64 fields at most: the roles added since share this one. Comma-separated ids of those in the mix:
+  // idiot, knight, brothers (two cards), wolfdog, juniorwolf (the hunter wolf), seerwolf, bigbadwolf.
+  extraRoles: t.string().default(""),
 
   phase: t.string().default("lobby"),
   nightStep: t.string().default(""),

@@ -422,10 +422,11 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(await checked, { a: villager.sessionId, b: wolf.sessionId, same: false });
     // Checked players are never checked again; he only wakes while two unchecked players (not him) live.
     const r = room as any;
-    assert.ok(r.detectiveChecked.has(villager.sessionId) && r.detectiveChecked.has(wolf.sessionId));
-    assert.strictEqual(r.canInvestigate(detective.sessionId), detective.sessionId); // wild hunter + hunter left
-    r.detectiveChecked.add(byRole("hunter").sessionId);
-    assert.strictEqual(r.canInvestigate(detective.sessionId), undefined);
+    const done = r.checkedBy(detective.sessionId);
+    assert.ok(done.has(villager.sessionId) && done.has(wolf.sessionId));
+    assert.strictEqual(r.canInvestigate(detective.sessionId), true); // wild hunter + hunter left
+    r.detectiveKnown.get(detective.sessionId).push({ a: byRole("hunter").sessionId, b: wolf.sessionId, same: false });
+    assert.strictEqual(r.canInvestigate(detective.sessionId), false);
 
     await waitFor(() => room.state.phase === "gameover"); // the only wolf is dead
     assert.strictEqual(room.state.players.get(wolf.sessionId)!.alive, false);
@@ -654,7 +655,7 @@ describe("WerewolfRoom", () => {
     const { room, byRole } = await startGame(mix, 5);
     const r = room as any;
     const [seer, red, white] = [byRole("seer"), byRole("redwolf"), byRole("whitewolf")];
-    r.paralysed = seer.sessionId;
+    r.paralysed.set(red.sessionId, seer.sessionId);
     r.startWitchSeerStep();
     assert.ok(!r.awake.has(seer.sessionId));
     assert.ok(r.isPack(white.sessionId) && r.isPack(red.sessionId));
@@ -720,18 +721,18 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.protectorShield, true); // on unless the host turns it off
 
     // The red wolf's spell on the player the protector then shields: gone, he plays tonight after all.
-    r.paralysed = villager.sessionId;
-    room.state.nightStep = "protector";
+    r.paralysed.set(byRole("redwolf").sessionId, villager.sessionId);
+    assert.strictEqual(room.state.nightStep, "protector");
     protector.send("protect", { targetId: villager.sessionId });
-    await waitFor(() => r.protectTarget === villager.sessionId);
-    assert.strictEqual(r.paralysed, null);
+    await waitFor(() => r.protects.get(protector.sessionId) === villager.sessionId);
+    assert.strictEqual(r.paralysed.size, 0);
 
     // The father bites the shielded player: no infection, and his one infection is spent.
     r.wolfTarget = villager.sessionId;
     room.state.nightStep = "wolf_powers";
     r.powerActors = new Set([father.sessionId]);
     father.send("infect", { infect: true });
-    await waitFor(() => r.infectionUsed === true);
+    await waitFor(() => r.infectionUsed.has(father.sessionId));
     assert.strictEqual(r.infected.has(villager.sessionId), false);
     assert.strictEqual(r.wolfVictim, null); // (and he wasn't bitten either)
 
@@ -768,7 +769,7 @@ describe("WerewolfRoom", () => {
     room.state.nightStep = "witch_seer";
     r.awake = new Set([dragon.sessionId, "someone"]);
     dragon.send("dragon_fire", { targetId: wolf.sessionId });
-    await waitFor(() => r.dragonTarget === wolf.sessionId);
+    await waitFor(() => r.dragonFires.get(dragon.sessionId) === wolf.sessionId);
     assert.ok(r.spent.has(dragon.sessionId));
     r.resolveNight();
     assert.strictEqual(state(wolf).alive, false);
@@ -804,7 +805,7 @@ describe("WerewolfRoom", () => {
     room.state.nightStep = "witch_seer";
     r.awake = new Set([dragon.sessionId, "someone"]);
     dragon.send("dragon_fire", { targetId: target.sessionId });
-    await waitFor(() => r.dragonTarget === target.sessionId);
+    await waitFor(() => r.dragonFires.get(dragon.sessionId) === target.sessionId);
     assert.ok(r.spent.has(dragon.sessionId));
     r.resolveNight();
     assert.strictEqual(room.state.players.get(target.sessionId)?.alive, false);
@@ -819,7 +820,7 @@ describe("WerewolfRoom", () => {
     room.state.nightStep = "witch_seer";
     r.awake = new Set([detective.sessionId, "someone"]);
     detective.send("detective_check", { a: a.sessionId, b: b.sessionId });
-    await waitFor(() => r.detectiveKnown.length === 1);
+    await waitFor(() => r.detectiveKnown.get(detective.sessionId)?.length === 1);
     const types = () => (r.publicLog as any[]).map((e) => e.type);
     assert.ok(!types().includes("detective_public")); // not during the night
     r.resolveNight();
@@ -884,7 +885,7 @@ describe("WerewolfRoom", () => {
     room.state.nightStep = "witch_seer";
     r.awake = new Set([dictator.sessionId, "someone"]);
     dictator.send("dictator_ready", { use: true });
-    await waitFor(() => r.dictatorArmed === true);
+    await waitFor(() => r.armed.has(dictator.sessionId));
     r.startDay();
     assert.strictEqual(room.state.phase, "dictator");
     r.phaseTimer.clear();
@@ -926,7 +927,7 @@ describe("WerewolfRoom", () => {
     room.state.nightStep = "witch_seer";
     r.awake = new Set([trickster.sessionId, "someone"]);
     trickster.send("trick", { targetId: judge.sessionId });
-    await waitFor(() => r.trickTarget === judge.sessionId);
+    await waitFor(() => r.tricks.has(judge.sessionId));
     r.morningNews();
     assert.strictEqual(room.state.players.get(judge.sessionId)?.revealedRole, "judge");
   });
@@ -1090,7 +1091,7 @@ describe("WerewolfRoom", () => {
     black.send("wolf_target", { targetId: clients.find((c: any) => c !== black).sessionId });
     await waitFor(() => room.state.nightStep === "wolf_powers", STEP);
     black.send("silence", { targetId: black.sessionId });
-    await waitFor(() => r.silenceTarget === black.sessionId);
+    await waitFor(() => r.silences.get(black.sessionId) === black.sessionId);
   });
 
   it("after the game, the host's new room takes the table: Play again gets in, even a private one", async () => {
@@ -1232,5 +1233,150 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(read.filter((m) => m.wolvesOnly), []);
     assert.ok(!r.chatFor(dead.sessionId).some((l: any) => l.wolvesOnly));
     assert.ok(r.chatFor(alive.sessionId).some((l: any) => l.wolvesOnly));
+  });
+
+  it("a doubler's copy plays his new role that same night, beside the player he copied", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, protector: true, doubler: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [doubler, protector, villager, wolf] = [byRole("doubler"), byRole("protector"), byRole("villager"), byRole("werewolf")];
+    assert.strictEqual(room.state.nightStep, "doubler");
+    doubler.send("copy", { targetId: protector.sessionId });
+    // The protectors' step waits for both of them.
+    await waitFor(() => room.state.nightStep === "protector");
+    assert.deepStrictEqual([...r.acting].sort(), [doubler.sessionId, protector.sessionId].sort());
+    doubler.send("protect", { targetId: villager.sessionId });
+    await waitFor(() => r.protects.size === 1);
+    assert.strictEqual(room.state.nightStep, "protector"); // the other one hasn't chosen yet
+    protector.send("protect", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.nightStep === "wolves");
+    assert.strictEqual(r.protects.get(doubler.sessionId), villager.sessionId);
+    assert.strictEqual(r.protects.get(protector.sessionId), wolf.sessionId);
+  });
+
+  it("the idiot survives his first vote, card shown; the seer wolf reads a card in secret; the hunter wolf shoots when he dies", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 0, villagers: 2, idiot: true, juniorwolf: true, seerwolf: true, talkingSeer: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [idiot, junior, seerWolf] = [byRole("idiot"), byRole("juniorwolf"), byRole("seerwolf")];
+    const state = (c: any) => room.state.players.get(c.sessionId)!;
+
+    // The seer wolf wakes with the seer's crowd: the exact card of someone outside the pack, and not a word to the village.
+    r.startWitchSeerStep();
+    assert.ok(r.awake.has(seerWolf.sessionId));
+    seerWolf.send("seer_peek", { targetId: junior.sessionId }); // a packmate: refused
+    const seen = seerWolf.waitForMessage("seer_result");
+    seerWolf.send("seer_peek", { targetId: idiot.sessionId });
+    assert.deepStrictEqual(await seen, { targetId: idiot.sessionId, role: "idiot", isWerewolf: false });
+    assert.ok(!(r.publicLog as any[]).some((e) => e.type === "seer_public"));
+
+    // The first vote against the idiot shows his card and lets him live; the next one kills him.
+    r.completeVote(idiot.sessionId, [idiot.sessionId], "vote");
+    assert.strictEqual(state(idiot).alive, true);
+    assert.strictEqual(state(idiot).revealedRole, "idiot");
+    assert.strictEqual(r.voteHistory.at(-1).excluded, null);
+    assert.ok((r.publicLog as any[]).some((e) => e.type === "idiot_saved"));
+    r.completeVote(idiot.sessionId, [idiot.sessionId], "vote");
+    assert.strictEqual(state(idiot).alive, false);
+
+    // The hunter wolf dies: a last shot, like the hunter's.
+    r.kill(junior.sessionId, "vote");
+    assert.ok(r.pendingShooters.includes(junior.sessionId));
+    assert.strictEqual(state(junior).aiming, true);
+  });
+
+  it("the big bad wolf takes a second victim the witch can't save: from night 2, while the pack is whole", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, bigbadwolf: true, witch: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [big, wolf, witch] = [byRole("bigbadwolf"), byRole("werewolf"), byRole("witch")];
+    const [first, second] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    const alive = (c: any) => room.state.players.get(c.sessionId)!.alive;
+
+    // Night 1: he only hunts with the pack.
+    const quiet = witch.waitForMessage("witch_turn");
+    r.endWolvesStep();
+    assert.strictEqual(room.state.nightStep, "witch_seer");
+    await quiet;
+
+    // Night 2: after the hunt, a victim of his own — not the pack's pick.
+    room.state.dayNumber = 2;
+    r.wolfVotes.set(wolf.sessionId, first.sessionId);
+    const turn = big.waitForMessage("bigbad_turn");
+    r.endWolvesStep();
+    assert.strictEqual(room.state.nightStep, "big_bad_wolf");
+    assert.deepStrictEqual(await turn, { blocked: first.sessionId });
+    const shown = witch.waitForMessage("witch_turn");
+    big.send("bigbad_kill", { targetId: first.sessionId }); // refused
+    big.send("bigbad_kill", { targetId: second.sessionId });
+    // The witch is shown the pack's victim only: she saves him, and the other one dies all the same.
+    assert.strictEqual(((await shown) as any).victim, first.sessionId);
+    witch.send("witch_revive");
+    witch.send("witch_pass");
+    await waitFor(() => !alive(second));
+    assert.strictEqual(alive(first), true);
+
+    // A wolf is dead: no second victim any more.
+    room.state.players.get(wolf.sessionId)!.alive = false;
+    room.state.dayNumber = 4;
+    r.endWolvesStep();
+    assert.notStrictEqual(room.state.nightStep, "big_bad_wolf");
+  });
+
+  it("the two brothers know each other, can't be infected, the survivor shoots; the knight's sword takes the first wolf on his left", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, fatherwolf: true, knight: true, brothers: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    assert.strictEqual(roles.filter((x: string) => x === "brothers").length, 2); // one switch, two cards
+    const [a, b] = clients.filter((_: any, i: number) => roles[i] === "brothers");
+    const [father, knight] = [byRole("fatherwolf"), byRole("knight")];
+    const alive = (id: string) => room.state.players.get(id)!.alive;
+    assert.deepStrictEqual(r.brothersOf(a.sessionId), [b.sessionId]);
+    assert.deepStrictEqual(r.privateLogs.get(a.sessionId)[0].brothers, [room.state.players.get(b.sessionId)!.name]);
+    assert.strictEqual(r.isHunter(b.sessionId), false);
+
+    // The father's bite doesn't turn a brother: he dies of it, and the infection is spent.
+    r.wolfTarget = a.sessionId;
+    r.wolfVotes.set(father.sessionId, a.sessionId);
+    room.state.nightStep = "wolf_powers";
+    r.powerActors = new Set([father.sessionId]);
+    father.send("infect", { infect: true });
+    await waitFor(() => !alive(a.sessionId));
+    assert.ok(r.infectionUsed.has(father.sessionId) && !r.infected.has(a.sessionId));
+    // His brother takes up the gun: he'll shoot when he dies.
+    assert.strictEqual(r.isHunter(b.sessionId), true);
+    assert.ok(r.privateLogs.get(b.sessionId).some((e: any) => e.type === "brother_avenger"));
+
+    // The wolves kill the knight: the first living wolf after him round the table dies of his sword that same morning.
+    const seats = [...room.state.players.keys()];
+    const from = seats.indexOf(knight.sessionId);
+    const [cut, spared] = [...seats.slice(from + 1), ...seats.slice(0, from)].filter((id) => r.isPack(id));
+    r.wolfVictim = knight.sessionId;
+    r.resolveNight();
+    assert.strictEqual(alive(knight.sessionId), false);
+    assert.strictEqual(alive(cut), false);
+    assert.strictEqual(alive(spared), true);
+    assert.ok((r.publicLog as any[]).some((e) => e.type === "death" && e.cause === "knight"));
+  });
+
+  it("the wolfdog picks his side on night 1; the two brothers leave a small table together", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, wolfdog: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    const [dog, wolf] = [byRole("wolfdog"), byRole("werewolf")];
+    assert.strictEqual(room.state.nightStep, "wolfdog"); // before anyone else
+    assert.strictEqual(r.teamOf(dog.sessionId), "village"); // …and saying nothing leaves him there
+    const told = dog.waitForMessage("role_assigned");
+    dog.send("wolfdog_side", { wolves: true });
+    assert.deepStrictEqual(((await told) as any).pack.sort(), [dog.sessionId, wolf.sessionId].sort());
+    assert.strictEqual(r.teamOf(dog.sessionId), "wolves");
+    assert.strictEqual(room.state.nightStep, "wolves"); // he hunts with them this very night
+    assert.ok(r.privateLogs.get(wolf.sessionId).some((e: any) => e.type === "wolfdog_joined"));
+
+    // Four seats for five cards: the brothers go together (never one without the other), a villager takes the free seat.
+    const small = await colyseus.createRoom<WerewolfState>("werewolf", { ...NO_SPECIALS, wolves: 2, villagers: 0, seer: true, brothers: true });
+    for (let i = 0; i < 4; i++) await colyseus.connectTo(small);
+    (small as any).assignRoles();
+    assert.deepStrictEqual([...(small as any).roles.values()].sort(), ["seer", "villager", "werewolf", "werewolf"]);
   });
 });
