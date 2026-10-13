@@ -85,7 +85,6 @@ const STEP_OPTIONS = [10, 20, 30, 40, 50, 60]; // night steps, votes, the hunter
 const START_MS = 10_000; // the countdown before the game starts
 const RECONNECT_SECONDS = 1200; // a dropped player's seat is held 20 minutes, then he dies
 const WOLVES_AGREED_MS = 5_000; // every wolf has voted: the pack's time drops to this
-const DOUBLER_MS = 30_000; // the doubler's own time to decide, whatever the room's step time
 const SPEAKING_LINE_MS = 60_000; // a VIP spectator talking: one line in the graveyard chat a minute at most
 const ROOM_LIFESPAN_MS = 2 * 60 * 60_000; // a room lives at most 2 hours from creation
 const CLOSE_AFTER_GAME_MS = 60_000; // after the game ends, the room closes a minute later
@@ -869,9 +868,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.state.nightStep = "doubler";
     this.state.nightRoles = "doubler";
     this.logEvent("step", { role: "doubler" });
-    // His own half minute to decide, whatever the room's step time (plus the card deal, on the game's first timer).
-    this.setPhaseTimer(DOUBLER_MS + this.dealTime, () => this.startCupidStep());
-    this.dealTime = 0;
+    this.setStepTimer(() => this.startCupidStep());
   }
 
   /** He becomes the copied role, fresh (unused powers, both potions); a wolf copy hunts tonight. */

@@ -1020,9 +1020,6 @@ describe("WerewolfRoom", () => {
     const { room, clients, byRole } = await startGame(SIX_MORE, 9);
     const r = room as any;
     const [doubler, seer] = [byRole("doubler"), byRole("seer")];
-    // He wakes first, with his own half minute to decide (the room's step time is 10 seconds here).
-    assert.strictEqual(room.state.nightStep, "doubler");
-    assert.ok(room.state.phaseEndsAt - Date.now() > 20_000);
     room.state.nightStep = "doubler";
     const copied = doubler.waitForMessage("doubler_result");
     doubler.send("copy", { targetId: seer.sessionId });
