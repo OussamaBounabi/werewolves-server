@@ -4,6 +4,7 @@ import type { Client, Room } from "colyseus";
 export const EMOJIS = [
   "laugh", "joy", "tongue", "sob", "angry", "party", "shush", "think", "gg",
   "clap", "thumbsup", "crossed", "wave", "muscle", "thumbsdown", "eyes", "heart", "broken",
+  "middle", "disappointed", "disgusted",
 ] as const;
 const EMOJI_GAP_MS = 1_500; // one emoji at a time over an avatar
 const CHAT_MAX = 200;
