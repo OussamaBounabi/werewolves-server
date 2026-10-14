@@ -1531,7 +1531,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       ...this.holders("cat"),
       ...(this.idsWithRole("hunter").some((h) => this.isAlive(h)) ? this.holders("littlegirl") : []), // she works for the hunter
       ...(living >= 4 ? unspent("shepherd") : []), // three other players for his sheep, until all three come back
-      ...(living >= 3 ? this.holders("rabbit") : []), // two other players for his chocolates
+      ...(living >= 3 ? unspent("rabbit") : []), // two other players for his chocolates, until both are eaten
       ...(day > 1 ? [...unspent("priest"), ...unspent("alchemist")] : []), // one flask each, never on the first night
       ...(this.heirlooms().length ? this.holders("servant") : []), // while a dead village player has a role to leave her
       ...this.holders("piper").filter((id) => this.charmable(id).length > 0),
@@ -1755,7 +1755,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * The shepherd's three sheep, the rabbit's two chocolates, each to a different player. A sheep sent to a wolf
-   * (the white wolf and infected players too) never comes back; a wolf doesn't eat his chocolate. Told at dawn.
+   * (the white wolf and infected players too) never comes back; a wolf doesn't eat his chocolate. Told at dawn; all
+   * three sheep back, or both chocolates eaten, and that power is gone.
    */
   private handleGifts(client: Client, msg: { targets: string[] }) {
     const id = this.awakeActor(client);
@@ -2009,7 +2010,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const same of this.detectiveNews) this.logEvent("detective_public", { same }); // the verdict, not who
     // The shepherd counts his sheep, the rabbit his chocolates (the village hears it too, if the room says so).
     for (const { by, role, count } of this.gifts) {
-      const lost = role === "shepherd" && count === 3; // all three came back: no wolf found, and his power is gone
+      // All three sheep came back, or both chocolates were eaten: no wolf found, and his power is gone.
+      const lost = (role === "shepherd" && count === 3) || (role === "rabbit" && count === 2);
       if (lost) {
         this.spent.add(by);
         this.sendRole(by);

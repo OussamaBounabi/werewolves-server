@@ -1488,6 +1488,13 @@ describe("WerewolfRoom", () => {
     state(hunter).alive = false;
     r.startWitchSeerStep();
     assert.ok(!r.awake.has(girl.sessionId) && !r.awake.has(shepherd.sessionId) && r.awake.has(rabbit.sessionId));
+
+    // Both chocolates eaten: no wolf found, and the rabbit's power is gone too.
+    r.gifts = [{ by: rabbit.sessionId, role: "rabbit", count: 2 }];
+    r.resolveNight();
+    assert.ok(r.spent.has(rabbit.sessionId));
+    r.startWitchSeerStep();
+    assert.ok(!r.awake.has(rabbit.sessionId));
   });
 
   it("the priest's holy water kills a wolf or the priest; the alchemist's poison; the mirror sends a villager's attack back", async () => {
