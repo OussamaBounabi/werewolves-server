@@ -76,6 +76,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = [];
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
+  private banned = new Map<string, string>(); // a kicked player's id → who kicked him (the host then)
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
@@ -116,10 +117,13 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     on<Question>("ask", (c, m) => this.handleAsk(this.idOf(c), m));
     on<{ player: string }>("guess", (c, m) => this.handleGuess(this.idOf(c), String(m.player)));
     on("concede", (c) => this.handleConcede(this.idOf(c)));
+    on<{ id: string }>("kick", (c, m) => this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
-      if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+      if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
+      this.invited.add(msg.uid);
+      if (this.idOf(client) === this.hostId) this.banned.delete(msg.uid); // the host takes his kick back
     });
     this.updateListing();
   }
@@ -135,6 +139,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
+    // Kicked by the host: kept out while he is the host.
+    const kicker = this.banned.get(account?.uid ?? String(options.playerId ?? ""));
+    if (kicker && kicker === this.seat(this.hostId)?.playerId) throw new ServerError(4403, "banned");
     // He left this game: back to the seat he had, whichever door he comes through.
     if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
@@ -325,6 +332,18 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.matches = bracket(this.seats.map((s) => s.id));
     this.phase = "bracket";
     this.later(BRACKET_MS, () => this.startMatch(0));
+  }
+
+  /** The host, in the waiting room: a player out of the room, kept out while he is the host (his invite lets him in). */
+  private handleKick(client: Client, id: string) {
+    const seat = this.seat(id);
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || !seat || id === this.hostId || !!seat.bot) return;
+    this.banned.set(seat.playerId, this.seat(this.hostId)!.playerId);
+    const kicked = this.connectionOf(id);
+    kicked?.send("kicked");
+    this.removeSeat(id);
+    this.updateListing();
+    kicked?.leave(4000);
   }
 
   private removeSeat(id: string) {

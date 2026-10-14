@@ -71,6 +71,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private seats: Seat[] = []; // seat order = turn order (clockwise)
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
+  private banned = new Map<string, string>(); // a kicked player's id → who kicked him (the host then)
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
@@ -106,10 +107,13 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     on<Aim>("roll", (c, m) => this.handleRoll(this.idOf(c), m));
     on<{ pawn: number; capture?: boolean }>("move", (c, m) => this.handleMove(this.idOf(c), Number(m.pawn), m.capture !== false));
     on<{ on: boolean }>("auto", (c, m) => this.handleAuto(this.idOf(c), m.on === true));
+    on<{ id: string }>("kick", (c, m) => this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
-      if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
+      if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
+      this.invited.add(msg.uid);
+      if (this.idOf(client) === this.hostId) this.banned.delete(msg.uid); // the host takes his kick back
     });
     this.updateListing();
   }
@@ -125,6 +129,9 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
         throw new ServerError(4401, "auth");
       }
     }
+    // Kicked by the host: kept out while he is the host.
+    const kicker = this.banned.get(account?.uid ?? String(options.playerId ?? ""));
+    if (kicker && kicker === this.seat(this.hostId)?.playerId) throw new ServerError(4403, "banned");
     // He left this game: back to the seat he had, whichever door he comes through.
     if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
@@ -322,6 +329,18 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     });
     this.phase = "playing";
     this.startTurn(this.seats[Math.floor(Math.random() * this.seats.length)].id, START_MS); // a random first player
+  }
+
+  /** The host, in the waiting room: a player out of the room, kept out while he is the host (his invite lets him in). */
+  private handleKick(client: Client, id: string) {
+    const seat = this.seat(id);
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || !seat || id === this.hostId || !!seat.bot) return;
+    this.banned.set(seat.playerId, this.seat(this.hostId)!.playerId);
+    const kicked = this.connectionOf(id);
+    kicked?.send("kicked");
+    this.removeSeat(id);
+    this.updateListing();
+    kicked?.leave(4000);
   }
 
   private removeSeat(id: string) {

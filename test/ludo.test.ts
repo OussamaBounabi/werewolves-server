@@ -90,6 +90,24 @@ describe("LudoRoom", () => {
     });
   }
 
+  it("the host kicks a player out of the waiting room: he can't come back while that host is the host, unless invited", async () => {
+    const room: any = await colyseus.createRoom("ludo", {});
+    const host = await colyseus.connectTo(room, { playerId: "host" });
+    const guest = await colyseus.connectTo(room, { playerId: "guest" });
+    for (const c of [host, guest]) c.onMessage("ludo", () => {});
+    const told = guest.waitForMessage("kicked");
+    guest.send("kick", { id: host.sessionId }); // not his to do
+    host.send("kick", { id: guest.sessionId });
+    await told;
+    await new Promise((done) => setTimeout(done, 200));
+    assert.deepStrictEqual(room.seats.map((s: any) => s.playerId), ["host"]);
+    await assert.rejects(colyseus.connectTo(room, { playerId: "guest" }), /banned/);
+    host.send("invite", { uid: "guest" }); // the host's invite takes his kick back
+    await new Promise((done) => setTimeout(done, 100));
+    await colyseus.connectTo(room, { playerId: "guest" });
+    assert.strictEqual(room.seats.length, 2);
+  });
+
   it("a host who leaves mid-game: the room keeps his face in the lists", async () => {
     const room: any = await colyseus.createRoom("ludo", {});
     const host = await colyseus.connectTo(room, { name: "Aya" });
