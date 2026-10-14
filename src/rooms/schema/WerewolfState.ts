@@ -17,7 +17,7 @@ export const PlayerState = schema({
 });
 export type PlayerState = SchemaType<typeof PlayerState>;
 
-// Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "dictator" | "day" | "vote" |
+// Phase: "lobby" | "starting" | "night" | "reveal" | "hunter" | "mayor" | "succession" | "bomb" | "dictator" | "day" | "vote" |
 // "judge" | "joker" | "gameover"
 // ("reveal": the apps play the death card reveals before the game moves on)
 // Night steps, in order: "doubler" (until he copies) | "wolfdog" + "cupid" + "lovers" + "wild_child" (night 1) | "policeman" | "green_wolf" + "red_wolf" (night 2+) | "wild_hunter" (odd nights) | "protector" | "wolves" |
@@ -67,7 +67,7 @@ export const WerewolfState = schema({
   owl: t.boolean().default(false),
   // A schema holds 64 fields at most: the roles added since share this one. Comma-separated ids of those in the mix:
   // idiot, knight, brothers (two cards), wolfdog, juniorwolf (the hunter wolf), seerwolf, bigbadwolf, cat, littlegirl,
-  // shepherd, rabbit, policeman, mirror, priest, alchemist.
+  // shepherd, rabbit, policeman, mirror, priest, alchemist, servant, puppet, chameleonwolf, alien, bomber, piper, guitarist.
   extraRoles: t.string().default(""),
   // …and the settings added since, the same way: talkingShepherd, talkingRabbit (the village hears their count at dawn).
   extraOptions: t.string().default(""),
@@ -82,6 +82,7 @@ export const WerewolfState = schema({
   judgeTarget: t.string().default(""), // "judge" phase: the player the vote put out, while the (secret) judge decides
   spared: t.string().default(""), // the judge's revote: this player can't be voted this time
   jokerId: t.string().default(""), // "joker" phase: the voted-out joker picking who dies in his place
+  bombHolder: t.string().default(""), // "bomb" phase (daybreak): who holds the bomber's bomb, for everyone to see
   dayNumber: t.number().default(0),
   phaseEndsAt: t.number().default(0), // epoch ms; client renders its own countdown
   winner: t.string().default(""), // "werewolves" | "villagers" | "whitewolf" | "none" (room expired) | ""
