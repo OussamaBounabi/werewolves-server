@@ -5,7 +5,8 @@ import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../acc
 import { enterRoom, leaveRoom } from "../presence.js";
 import { MIMIC_SOUNDS } from "../mimicSounds.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
-import { Abandon } from "./abandoned.js";
+import { Abandon, holdSpectator } from "./abandoned.js";
+import { TableTalk } from "./tableTalk.js";
 
 /**
  * Mimic Party: each round everyone hears a well-known sound (a cow, a siren, a sneeze…) at the same moment, then
@@ -72,6 +73,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private members = new Map<string, string>();
   private invited = new Set<string>();
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private round = 0;
@@ -102,6 +104,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     on("next", (c) => this.handleNext(this.idOf(c)));
     on("play_again", (c) => this.handlePlayAgain(c));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
     });
@@ -148,6 +151,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
+    this.tableTalk.history(client);
     this.updateListing();
     this.sync();
   }
@@ -212,7 +216,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   }
 
   onDrop(client: Client) {
-    if (this.spectators.has(this.idOf(client))) return; // no seat to hold: onLeave runs next
+    if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -223,6 +227,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   onReconnect(client: Client) {
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = true;
+    this.tableTalk.history(client);
     this.sync();
   }
 

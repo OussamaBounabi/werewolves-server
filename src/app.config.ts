@@ -20,6 +20,7 @@ import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
 import { PresenceRoom } from "./rooms/PresenceRoom.js";
+import { onlineCount } from "./presence.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
@@ -94,10 +95,11 @@ const server = defineServer({
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
     api_imposter_rooms: createEndpoint("/api/imposter/rooms", { method: "GET" }, async () => publicRooms("imposter")),
     api_mimic_rooms: createEndpoint("/api/mimic/rooms", { method: "GET" }, async () => publicRooms("mimic")),
-    // The home: how many public rooms each game has now.
+    // The home: how many public rooms each game has now, and how many players are online.
     api_room_counts: createEndpoint("/api/room-counts", { method: "GET" }, async () => {
       const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic"];
-      return Object.fromEntries(await Promise.all(games.map(async (g) => [g, (await publicRooms(g)).length])));
+      const rooms = Object.fromEntries(await Promise.all(games.map(async (g) => [g, (await publicRooms(g)).length])));
+      return { ...rooms, online: onlineCount() }; // (and how many have the app open)
     }),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),

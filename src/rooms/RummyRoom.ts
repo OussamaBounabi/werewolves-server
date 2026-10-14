@@ -8,7 +8,8 @@ import {
 } from "../rummy.js";
 import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
-import { Abandon } from "./abandoned.js";
+import { Abandon, holdSpectator } from "./abandoned.js";
+import { TableTalk } from "./tableTalk.js";
 
 /**
  * Algerian rummy, 2–5 players (bots included), 14 cards each (the round's first player gets 15 and
@@ -97,6 +98,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>(); // account uids invited by someone at the table
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private hands = new Map<string, number[]>();
@@ -149,6 +151,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     on("ready", (c) => this.handleReady(this.idOf(c)));
     on<{ index: number }>("pick", (c, m) => this.handlePick(this.idOf(c), Number(m.index)));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     // Someone at the table invited a friend (the invite itself goes through the app's chat): let him in.
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
@@ -198,6 +201,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
+    this.tableTalk.history(client);
     this.updateListing();
     this.sync();
   }
@@ -258,7 +262,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   }
 
   onDrop(client: Client) {
-    if (this.spectators.has(this.idOf(client))) return; // no seat to hold: onLeave runs next
+    if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -268,6 +272,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   onReconnect(client: Client) {
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = true;
+    this.tableTalk.history(client);
     this.sync();
   }
 

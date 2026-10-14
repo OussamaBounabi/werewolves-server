@@ -4,7 +4,8 @@ import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../acc
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
-import { Abandon } from "./abandoned.js";
+import { Abandon, holdSpectator } from "./abandoned.js";
+import { TableTalk } from "./tableTalk.js";
 
 /**
  * Ludo, 2–4 players (bots included), 4 pawns each (or 2: quick game). A 6 takes a pawn out of the base
@@ -71,6 +72,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
+  private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private turn = "";
@@ -104,6 +106,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     on<{ pawn: number; capture?: boolean }>("move", (c, m) => this.handleMove(this.idOf(c), Number(m.pawn), m.capture !== false));
     on<{ on: boolean }>("auto", (c, m) => this.handleAuto(this.idOf(c), m.on === true));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (this.seat(this.idOf(client)) && typeof msg?.uid === "string") this.invited.add(msg.uid);
     });
@@ -150,6 +153,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
+    this.tableTalk.history(client);
     this.updateListing();
     this.sync();
   }
@@ -211,7 +215,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   }
 
   onDrop(client: Client) {
-    if (this.spectators.has(this.idOf(client))) return; // no seat to hold: onLeave runs next
+    if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
     Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
@@ -221,6 +225,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   onReconnect(client: Client) {
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = true;
+    this.tableTalk.history(client);
     this.sync();
   }
 

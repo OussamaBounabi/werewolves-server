@@ -1,6 +1,15 @@
-import type { Room } from "colyseus";
+import type { Client, Room } from "colyseus";
 
 const ABANDONED_MS = 60_000;
+const SPECTATOR_SECONDS = 120;
+
+/**
+ * A spectator's connection dropped (his app in the background, a network blip): his place is held two minutes, as
+ * a player's seat is, so he comes back to the game he was watching. onLeave runs if he doesn't.
+ */
+export function holdSpectator(room: Room, client: Client) {
+  Promise.resolve(room.allowReconnection(client, SPECTATOR_SECONDS)).catch(() => {});
+}
 
 /** A seat as every table keeps it: whose app is here, and who isn't a person any more (a bot, or gone for good). */
 type Seat = { connected: boolean; bot?: unknown; left?: boolean; quit?: boolean };

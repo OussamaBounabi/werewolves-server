@@ -40,7 +40,7 @@ Account endpoints take the app's Firebase ID token as `Authorization: Bearer <to
 
 | Endpoint | What |
 |---|---|
-| `GET /api/rooms`, `/api/<game>/rooms`, `/api/room-counts`, `/api/rooms/:roomId` | room lists |
+| `GET /api/rooms`, `/api/<game>/rooms`, `/api/room-counts`, `/api/rooms/:roomId` | room lists (`room-counts` also says how many players are `online`) |
 | `GET /api/missions` | the missions and the current day/week keys |
 | `POST /api/missions/claim` `{ id }` | a mission's reward |
 | `POST /api/avatars/buy` `{ id }`, `POST /api/frames/buy` `{ id }` | the store |

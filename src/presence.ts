@@ -41,6 +41,11 @@ export function leaveRoom(uid: string, roomId: string) {
   changed(uid);
 }
 
+/** How many people have the app open right now (in a game or not): the home screen shows it. */
+export function onlineCount() {
+  return new Set([...apps.keys(), ...rooms.keys()]).size;
+}
+
 /** In a game (the last room he joined), else online if his app is connected, else offline. */
 export function whereIs(uid: string): Where {
   const inRooms = rooms.get(uid);

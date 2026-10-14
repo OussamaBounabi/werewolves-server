@@ -89,4 +89,26 @@ describe("LudoRoom", () => {
       assert.ok(first.pawns.every((p: number) => p === HOME));
     });
   }
+
+  it("the table's chat: every line to everyone (kept for newcomers), a player's dots and emojis to the others", async () => {
+    const room: any = await colyseus.createRoom("ludo", {});
+    const [host, guest] = [await colyseus.connectTo(room), await colyseus.connectTo(room)];
+    for (const c of [host, guest]) c.onMessage("ludo", () => {});
+    const line = guest.waitForMessage("chat");
+    host.send("chat", { text: "  salam  " });
+    assert.strictEqual(((await line) as any).text, "salam");
+    assert.deepStrictEqual(room.tableTalk.lines.map((l: any) => [l.from, l.text]), [[host.sessionId, "salam"]]);
+
+    const dots = guest.waitForMessage("typing");
+    host.send("typing", { on: true });
+    assert.deepStrictEqual(await dots, { from: host.sessionId, on: true });
+
+    const emojis: any[] = [];
+    guest.onMessage("emoji", (m: any) => emojis.push(m));
+    host.send("emoji", { id: "nope" }); // not one the apps know
+    host.send("emoji", { id: "heart" });
+    host.send("emoji", { id: "gg" }); // too soon after the heart
+    await new Promise((done) => setTimeout(done, 300));
+    assert.deepStrictEqual(emojis, [{ from: host.sessionId, id: "heart" }]);
+  });
 });
