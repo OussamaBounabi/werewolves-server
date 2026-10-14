@@ -31,6 +31,7 @@ into it. `.env.example` lists the variables.
 | `POCKETBASE_SUPERUSER_EMAIL`, `POCKETBASE_SUPERUSER_PASSWORD` | the superuser the server (and the admin scripts) sign in as. Give the server its own superuser, not yours. |
 | `ADMIN_EMAILS` | the admin app's e-mails, comma-separated: god view in werewolf rooms, `/api/admin/*` |
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | in-room voice |
+| `LIVEKIT_API_URL` | optional: where the game server itself calls LiveKit (`http://127.0.0.1:7880` on the same machine), instead of the public `LIVEKIT_URL` the apps join at |
 | `FIREBASE_SERVICE_ACCOUNT` | the migration script only: the service account's JSON, if not in `service-account.json` |
 
 ## HTTP API

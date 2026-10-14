@@ -15,7 +15,10 @@ const secret = process.env.LIVEKIT_API_SECRET ?? "";
 const testing = process.env.NODE_ENV === "test" || process.argv.some((arg) => arg.includes("mocha"));
 export const voiceEnabled = !!(url && key && secret) && !testing;
 
-const rooms = voiceEnabled ? new RoomServiceClient(url.replace(/^ws/, "http"), key, secret) : null;
+// The apps join at LIVEKIT_URL (the public address). The game server's own calls can go straight to the voice server
+// on its machine instead (LIVEKIT_API_URL, e.g. http://127.0.0.1:7880): no name to look up, no proxy in between.
+const api = process.env.LIVEKIT_API_URL || url.replace(/^ws/, "http");
+const rooms = voiceEnabled ? new RoomServiceClient(api, key, secret) : null;
 
 export type VoiceRights = { talk: boolean; hear: boolean };
 
@@ -43,11 +46,41 @@ export async function voiceToken(
   return { url, token: await token.toJwt() };
 }
 
-/** Changes a connected player's rights (the phase changed, he died…). Not connected yet: nothing to do. */
+/**
+ * Runs [send] until it goes through: [tries] times at most, [waitMs] apart, and only while [wanted] still holds (a
+ * newer change may have replaced this one). "Does not exist" is an answer, not a failure: the player isn't in the
+ * voice room, and the token he joins with carries his rights.
+ */
+export async function insist(send: () => Promise<unknown>, wanted: () => boolean, tries = 5, waitMs = 1000) {
+  for (let attempt = 1; wanted(); attempt++) {
+    try {
+      await send();
+      return;
+    } catch (e) {
+      const why = String((e as Error)?.message ?? e);
+      if (/does not exist|not found/i.test(why)) return;
+      if (attempt >= tries) return console.warn(`voice: a change was lost after ${tries} tries (${why.slice(0, 160)})`);
+      if (attempt === 1) console.warn(`voice: the voice server didn't take a change (${why.slice(0, 160)}): trying again`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
+/** The last rights asked for each player of a voice room: a change still being tried again gives way to a newer one. */
+const wantedRights = new Map<string, VoiceRights>();
+
+/**
+ * Changes a connected player's rights (the phase changed, he died…). Not connected yet: nothing to do. A change the
+ * voice server didn't take is sent again: lost, it leaves a player without his mic and without sound until he
+ * relaunches his app.
+ */
 export async function setVoiceRights(roomId: string, identity: string, rights: VoiceRights) {
-  await rooms?.updateParticipant(voiceRoom(roomId), identity, {
-    permission: { canPublish: rights.talk, canSubscribe: rights.hear, canPublishData: false },
-  });
+  if (!rooms) return;
+  const player = `${roomId}/${identity}`;
+  wantedRights.set(player, rights);
+  const permission = { canPublish: rights.talk, canSubscribe: rights.hear, canPublishData: false };
+  await insist(() => rooms.updateParticipant(voiceRoom(roomId), identity, { permission }), () => wantedRights.get(player) === rights);
+  if (wantedRights.get(player) === rights) wantedRights.delete(player);
 }
 
 /** He left the game room: out of its voice too (a modified app can't stay and listen). */
