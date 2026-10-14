@@ -1815,6 +1815,21 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual(mine.map((m) => m.id), ["heart", "sob"]);
   });
 
+  it("a host who leaves mid-game: the room keeps his face in the lists, and he's its host again when he comes back", async () => {
+    const { room, clients } = await startGame();
+    const host = clients[0];
+    const listed = () => (room as any).metadata.host;
+    const name = room.state.players.get(host.sessionId)!.name;
+    assert.strictEqual(listed(), name);
+    await host.leave(true);
+    await waitFor(() => room.state.players.get(host.sessionId)?.alive === false);
+    assert.strictEqual(listed(), name);
+    const back = await colyseus.connectTo(room, { spectator: true, playerId: host.sessionId });
+    await waitFor(() => room.state.players.has(back.sessionId));
+    assert.strictEqual(room.state.hostId, back.sessionId);
+    assert.strictEqual(listed(), name);
+  });
+
   it("holds a dropped spectator's place a while, as a player's seat", async () => {
     const { room } = await startGame();
     const watcher = await colyseus.connectTo(room, { spectator: true, playerId: "watcher" });

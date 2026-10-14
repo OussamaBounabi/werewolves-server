@@ -101,6 +101,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
+  private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
   private hands = new Map<string, number[]>();
   private opened = new Set<string>(); // laid down this round
   private staged = new Map<string, number[][]>(); // melds being put together for the next lay-down (still in the hand)
@@ -899,11 +900,17 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private updateListing() {
     this.listedStarted = this.phase !== "lobby";
+    // The room's face in the lists is its host's. Mid-game it stays the host the game started with, even after he
+    // left (another player may be the host by then, or nobody).
+    const host = this.seat(this.hostId);
+    if (host && (this.phase === "lobby" || !this.listedHost.name)) {
+      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
+    }
     this.setMatchmaking({
       metadata: {
-        host: this.seat(this.hostId)?.name ?? "",
-        hostAvatar: this.seat(this.hostId)?.avatar ?? 0,
-        hostFrame: this.seat(this.hostId)?.frame ?? 0,
+        host: this.listedHost.name,
+        hostAvatar: this.listedHost.avatar,
+        hostFrame: this.listedHost.frame,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,

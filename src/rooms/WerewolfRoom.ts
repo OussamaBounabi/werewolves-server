@@ -146,6 +146,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private spectators = new Set<string>(); // sessionIds watching, not playing
   private admins = new Set<string>(); // god view: invisible, see every role and secret, hear everyone
   private lastGod = "";
+  private listedHost = { name: "", avatar: 0, frame: 0 }; // the face of the room in the lists
   private dropped = new Set<string>(); // players whose connection dropped (seat held)
   private heldSeats = new Map<string, { reject: Function }>(); // pending reconnections (Colyseus Deferred)
   private voteHistory: VoteRecord[] = [];
@@ -459,6 +460,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       }
       this.state.players.set(id, new PlayerState({ ...p.toJSON(), sessionId: id, connected: true }));
     }
+    if (this.state.hostId === old) this.state.hostId = id; // the host is back: still the host
     this.dropped.delete(old);
     this.heldSeats.delete(old);
     this.graveSent.delete(old);
@@ -713,15 +715,20 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (this.state.phase !== "gameover") this.endGame(null);
   }
 
-  /** What the lobby screen lists for this room. */
+  /**
+   * What the lobby screen lists for this room. Its face is its host's; once the game runs, the host it started with,
+   * even after he left.
+   */
   private updateListing() {
     const host = this.state.players.get(this.state.hostId);
+    const waiting = this.state.phase === "lobby" || this.state.phase === "starting";
+    if (host && (waiting || !this.listedHost.name)) this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
     this.setMatchmaking({
       maxClients: MAX_CONNECTIONS,
       metadata: {
-        host: host?.name ?? "",
-        hostAvatar: host?.avatar ?? 0,
-        hostFrame: host?.frame ?? 0,
+        host: this.listedHost.name,
+        hostAvatar: this.listedHost.avatar,
+        hostFrame: this.listedHost.frame,
         roomType: this.state.roomType,
         started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,

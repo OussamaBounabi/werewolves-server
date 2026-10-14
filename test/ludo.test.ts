@@ -90,6 +90,20 @@ describe("LudoRoom", () => {
     });
   }
 
+  it("a host who leaves mid-game: the room keeps his face in the lists", async () => {
+    const room: any = await colyseus.createRoom("ludo", {});
+    const host = await colyseus.connectTo(room, { name: "Aya" });
+    host.onMessage("ludo", () => {});
+    host.send("add_bot");
+    await new Promise((done) => setTimeout(done, 200));
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((done) => setTimeout(done, 20));
+    await host.leave(true);
+    await new Promise((done) => setTimeout(done, 200));
+    assert.strictEqual(room.hostId, ""); // nobody left to be the host…
+    assert.strictEqual(room.metadata.host, "Aya"); // …but the room is still his in the lists
+  });
+
   it("the table's chat: every line to everyone (kept for newcomers), a player's dots and emojis to the others", async () => {
     const room: any = await colyseus.createRoom("ludo", {});
     const [host, guest] = [await colyseus.connectTo(room), await colyseus.connectTo(room)];

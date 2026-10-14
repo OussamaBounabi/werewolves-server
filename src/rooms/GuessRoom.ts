@@ -80,6 +80,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
+  private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
   private botSeq = 0;
   private matches: Match[] = []; // a cup's, in playing order (1 vs 1: one)
   private current = -1; // the match being played
@@ -512,11 +513,17 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   private updateListing() {
     this.listedStarted = this.phase !== "lobby";
+    // The room's face in the lists is its host's. Mid-game it stays the host the game started with, even after he
+    // left (another player may be the host by then, or nobody).
+    const host = this.seat(this.hostId);
+    if (host && (this.phase === "lobby" || !this.listedHost.name)) {
+      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
+    }
     this.setMatchmaking({
       metadata: {
-        host: this.seat(this.hostId)?.name ?? "",
-        hostAvatar: this.seat(this.hostId)?.avatar ?? 0,
-        hostFrame: this.seat(this.hostId)?.frame ?? 0,
+        host: this.listedHost.name,
+        hostAvatar: this.listedHost.avatar,
+        hostFrame: this.listedHost.frame,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,
