@@ -1780,8 +1780,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const [dragon, target] of this.dragonFires) strike(dragon, target, "dragon", false);
     for (const { by, target, role } of this.flasks) {
       if (role === "alchemist") strike(by, target, "alchemist", true);
-      // The priest's holy water kills a wolf; thrown at anyone else (a villager, a loner), it's the priest who dies.
-      else if (this.teamOf(target) === "wolves") strike(by, target, "priest", true);
+      // The priest's holy water kills a wolf (the white wolf too); thrown at anyone else, it's the priest who dies.
+      else if (this.isPack(target)) strike(by, target, "priest", true);
       else if (this.isAlive(target) && !this.isCaged(target)) dies(by, trapped(target) ? "trap" : "priest_fail");
     }
     // The cat who went to sleep at a wolf's house.

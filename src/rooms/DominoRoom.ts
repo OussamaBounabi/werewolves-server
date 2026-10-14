@@ -13,7 +13,8 @@ import { Abandon } from "./abandoned.js";
  * is the pile (on the empty chair). A player with no tile that fits draws until one does — or passes
  * once the pile is empty. Round 1 starts with the highest double (6-6), then the last winner starts.
  * Whoever plays his last tile scores every dot left in the opponents' hands; when nobody can play,
- * the fewest dots wins (a tie: nobody scores). 2 vs 2: partners face to face, one score per team.
+ * the fewest dots wins (a tie: nobody scores). 2 vs 2: partners face to face, one score per team; blocked, the
+ * single lightest hand of the four wins for its team.
  * The first to the room's target wins the match.
  *
  * No schema: each player gets his own "domino" message (the table, plus his tiles) after every change,
@@ -456,11 +457,11 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.botTimer?.clear();
     const dots: Record<string, number> = {};
     for (const s of this.seats) dots[s.id] = this.hands.get(s.id)!.reduce((n, t) => n + pips(t), 0);
-    // Blocked: the fewest dots wins (a team's dots added up); a tie: nobody.
+    // Blocked: the player with the fewest dots wins it, in 2 vs 2 for his team (the partners' hands aren't added
+    // up). The fewest shared by players of both sides: nobody.
     if (blocked) {
-      const sideDots = (id: string) => this.seats.filter((x) => this.sameSide(x.id, id)).reduce((n, x) => n + dots[x.id], 0);
-      const best = Math.min(...this.seats.map((s) => sideDots(s.id)));
-      const winners = this.seats.filter((s) => sideDots(s.id) === best);
+      const best = Math.min(...this.seats.map((s) => dots[s.id]));
+      const winners = this.seats.filter((s) => dots[s.id] === best);
       winner = winners.every((w) => this.sameSide(w.id, winners[0].id)) ? winners[0].id : "";
     }
     const points = winner ? this.seats.filter((s) => !this.sameSide(s.id, winner)).reduce((n, s) => n + dots[s.id], 0) : 0;

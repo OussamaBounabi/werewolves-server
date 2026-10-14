@@ -68,6 +68,28 @@ describe("DominoRoom", () => {
     });
   }
 
+  it("2 vs 2, blocked: the lightest single hand wins for its team, not the lighter pair; shared by both sides, nobody", async () => {
+    const room: any = await colyseus.createRoom("domino", { teams: true, target: 250 });
+    const host = await colyseus.connectTo(room);
+    host.onMessage("domino", () => {});
+    host.onMessage("domino_fx", () => {});
+    for (let i = 0; i < 3; i++) host.send("add_bot", { level: "easy" });
+    await new Promise((r) => setTimeout(r, 200));
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    const tile = (a: number, b: number) => TILES.findIndex((t) => t[0] === a && t[1] === b);
+    const ids = room.seats.map((s: any) => s.id); // seats 0 and 2 against 1 and 3
+    const hands = (...tiles: number[][]) => tiles.forEach((t, i) => room.hands.set(ids[i], t));
+    // The lightest hand (1 dot) sits with the heavier pair (1 + 12 against 2 + 3): its team takes the round.
+    hands([tile(0, 1)], [tile(0, 2)], [tile(6, 6)], [tile(1, 2)]);
+    room.endRound("", true);
+    assert.deepStrictEqual([room.history.at(-1).winner, room.history.at(-1).points, room.teamScores], [ids[0], 5, [5, 0]]);
+    // Two dots on each side: nobody scores.
+    hands([tile(0, 2)], [tile(1, 1)], [tile(6, 6)], [tile(5, 5)]);
+    room.endRound("", true);
+    assert.deepStrictEqual([room.history.at(-1).winner, room.history.at(-1).points, room.teamScores], ["", 0, [5, 0]]);
+  });
+
   it("a spectator sees the table, never a hand, and can't play", async () => {
     const room: any = await colyseus.createRoom("domino", {});
     const host = await colyseus.connectTo(room);

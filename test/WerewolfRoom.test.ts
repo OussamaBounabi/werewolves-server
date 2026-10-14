@@ -1486,10 +1486,11 @@ describe("WerewolfRoom", () => {
   });
 
   it("the priest's holy water kills a wolf or the priest; the alchemist's poison; the mirror sends a villager's attack back", async () => {
-    const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, priest: true, alchemist: true, mirror: true, mayor: false };
-    const { room, byRole } = await startGame(mix, 6);
+    const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, priest: true, alchemist: true, mirror: true, whitewolf: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 7);
     const r = room as any;
-    const [priest, alchemist, mirror, wolf, villager] = ["priest", "alchemist", "mirror", "werewolf", "villager"].map(byRole);
+    const [priest, alchemist, mirror, wolf, villager, white] =
+      ["priest", "alchemist", "mirror", "werewolf", "villager", "whitewolf"].map(byRole);
     const state = (c: any) => room.state.players.get(c.sessionId)!;
     const causes = () => Object.fromEntries((r.publicLog as any[]).filter((e) => e.type === "death").map((e) => [e.name, e.cause]));
 
@@ -1527,5 +1528,10 @@ describe("WerewolfRoom", () => {
     r.flasks = [{ by: alchemist.sessionId, target: villager.sessionId, role: "alchemist" }];
     r.resolveNight();
     assert.deepStrictEqual([state(alchemist).alive, state(villager).alive], [false, true]);
+    // For the holy water the white wolf is a wolf like the others.
+    r.traps = new Set();
+    r.flasks = [{ by: priest.sessionId, target: white.sessionId, role: "priest" }];
+    r.resolveNight();
+    assert.deepStrictEqual([state(white).alive, state(priest).alive], [false, true]);
   });
 });
