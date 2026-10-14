@@ -124,7 +124,7 @@ async function signedIn(idToken: string): Promise<FirebaseUser> {
   }
 }
 
-export type Account = { uid: string; name: string; avatar: number; frame: number; vip: boolean };
+export type Account = { uid: string; name: string; avatar: number; frame: number; vip: boolean; vipPro: boolean };
 
 /** The account behind an app's Firebase ID token, with its display name and avatar. Throws if invalid. */
 export async function accountFor(idToken: string): Promise<Account> {
@@ -137,6 +137,7 @@ export async function accountFor(idToken: string): Promise<Account> {
     avatar: Number(user.avatar) || 0,
     frame: Number(user.frame) || 0,
     vip: user.vip === true,
+    vipPro: user.vipPro === true, // (a VIP Pro is a VIP too)
   };
 }
 
@@ -233,10 +234,13 @@ async function findPlayer(who: string): Promise<RecordModel> {
   return user;
 }
 
-/** Makes an account VIP (or not): found by its e-mail or its username. VIPs pick their own role as a werewolf host. */
-export async function setVip(who: string, vip: boolean) {
+/**
+ * Makes an account VIP, VIP Pro (a VIP too, who picks his own werewolf role, host or not), or neither: found by its
+ * e-mail or its username.
+ */
+export async function setVip(who: string, level: "vip" | "pro" | "off") {
   const user = await findPlayer(who);
-  await (await db()).collection("users").update(user.id, { vip });
+  await (await db()).collection("users").update(user.id, { vip: level !== "off", vipPro: level === "pro" });
   return user.username as string;
 }
 

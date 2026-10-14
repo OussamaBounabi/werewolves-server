@@ -92,18 +92,19 @@ describe("WerewolfRoom", () => {
     await new Promise((r) => setTimeout(r, 100));
     assert.strictEqual(room.state.stepSeconds, 30);
 
-    // The narrator is off unless the host turns him on. Picking his own role is a VIP host's.
+    // The narrator is off unless the host turns him on. Picking his own role is a VIP Pro's (a plain VIP's isn't).
     const r = room as any;
     assert.strictEqual(room.state.narrator, false);
+    r.vips.add(host.sessionId);
     host.send("settings", { narrator: true, testRole: "seer" });
     await waitFor(() => room.state.narrator === true);
-    assert.strictEqual(r.testHostRole, null);
-    r.vips.add(host.sessionId);
+    assert.strictEqual(r.rolePicks.size, 0);
+    r.vipPros.add(host.sessionId);
     host.send("settings", { testRole: "seer" });
-    await waitFor(() => r.testHostRole === "seer");
-    host.send("transfer_host", { targetId: guest.sessionId }); // the role he picked doesn't pass to the next host
+    await waitFor(() => r.rolePicks.get(host.sessionId) === "seer");
+    host.send("transfer_host", { targetId: guest.sessionId }); // still his once he isn't the host
     await waitFor(() => room.state.hostId === guest.sessionId);
-    assert.strictEqual(r.testHostRole, null);
+    assert.strictEqual(r.rolePicks.get(host.sessionId), "seer");
   });
 
   it("counts down 10s before starting; the host can cancel; joining is closed meanwhile", async () => {
@@ -202,17 +203,21 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.winner, "none");
   });
 
-  it("gives a VIP host the role he picked", async () => {
+  it("gives VIP Pro players the roles they picked, the host or not; not plain VIPs", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
     const clients: any[] = [];
     for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room));
     const r = room as any;
-    r.vips.add(clients[0].sessionId); // (his account's flag, read when he joins)
-    clients[0].send("settings", { testRole: "witch" });
-    await waitFor(() => r.testHostRole === "witch");
-    const dealt = clients[0].waitForMessage("role_assigned", STEP);
-    clients[0].send("start_game");
-    assert.strictEqual((await dealt).role, "witch");
+    const [host, pro, vip] = clients;
+    for (const c of [host, pro]) r.vipPros.add(c.sessionId); // (their accounts' flags, read when they join)
+    r.vips.add(vip.sessionId);
+    host.send("settings", { testRole: "witch" }); // the host, from the room's settings
+    pro.send("pick_role", { role: "seer" }); // another player, from his own
+    vip.send("pick_role", { role: "protector" }); // not VIP Pro: nothing
+    await waitFor(() => r.rolePicks.size === 2);
+    const dealt = Promise.all([host, pro].map((c) => c.waitForMessage("role_assigned", STEP)));
+    host.send("start_game");
+    assert.deepStrictEqual((await dealt).map((m: any) => m.role), ["witch", "seer"]);
   });
 
   it("plays a night: protector → wolves → witch sees the victim and revives it", async function () {

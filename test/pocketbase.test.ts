@@ -362,10 +362,12 @@ describe("PocketBase", function () {
       assert.deepStrictEqual(await accounts.grantAllAvatars(p.email), { uid: p.id, count: avatarIds.length + frameIds.length });
       const me = await user(p.id);
       assert.deepStrictEqual([me.avatars.length, me.frames.length], [avatarIds.length, frameIds.length]);
-      assert.strictEqual(await accounts.setVip(p.email, true), p.username);
-      assert.strictEqual((await user(p.id)).vip, true);
-      await accounts.setVip(p.username.toUpperCase(), false);
-      assert.strictEqual((await user(p.id)).vip, false);
+      assert.strictEqual(await accounts.setVip(p.email, "vip"), p.username);
+      assert.deepStrictEqual([(await user(p.id)).vip, (await user(p.id)).vipPro], [true, false]);
+      await accounts.setVip(p.username, "pro"); // a VIP Pro is a VIP too
+      assert.deepStrictEqual([(await user(p.id)).vip, (await user(p.id)).vipPro], [true, true]);
+      await accounts.setVip(p.username.toUpperCase(), "off");
+      assert.deepStrictEqual([(await user(p.id)).vip, (await user(p.id)).vipPro], [false, false]);
     });
 
     it("runs the admin tools without FIREBASE_PROJECT_ID, where players are only guests", async () => {
@@ -373,7 +375,7 @@ describe("PocketBase", function () {
       try {
         accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password, null); // (as the scripts may run)
         assert.strictEqual(accounts.accountsEnabled, false);
-        assert.strictEqual(await accounts.setVip(p.username, true), p.username);
+        assert.strictEqual(await accounts.setVip(p.username, "vip"), p.username);
         assert.strictEqual((await accounts.grantCurrency(p.username, 5, 0)).coins, 5);
         await assert.rejects(accounts.accountFor(p.idToken), accounts.AuthError);
         await assert.rejects(accounts.exchangeToken(p.idToken), accounts.AuthError);

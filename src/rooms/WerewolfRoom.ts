@@ -168,8 +168,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.expire();
     void this.disconnect().catch(() => {});
   });
-  private testHostRole: Role | null = null; // a VIP host picks his own role
+  private rolePicks = new Map<string, Role>(); // the roles VIP Pro players picked for themselves (host or not)
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
+  private vipPros = new Set<string>(); // …and of VIP Pro ones
   private spokeAt = new Map<string, number>(); // VIP spectators: when their last "is speaking" line was written
   private nightNews: string[] = []; // what the narrator tells at dawn: "protected" | "redhood" | "ancient" | "infection"
   private seerNews: Role[] = []; // the talking seer's finds of the night (the role, not who), told at dawn
@@ -264,6 +265,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
     });
     this.onMessage("kick", (client, msg: { targetId: string }) => this.handleKick(client, msg));
+    this.onMessage("pick_role", (client, msg: { role: string | null }) => this.pickRole(client.sessionId, msg?.role));
     this.onMessage("spectator_speaking", (client) => this.handleSpectatorSpeaking(client));
     this.onMessage("transfer_host", (client, msg: { targetId: string }) => this.handleTransferHost(client, msg));
     this.onMessage("start_game", (client) => this.handleStartGame(client));
@@ -382,6 +384,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     this.sendHistory(client);
     if (client.auth?.account?.vip) this.vips.add(client.sessionId);
+    if (client.auth?.account?.vipPro) this.vipPros.add(client.sessionId);
     const uid: string | undefined = client.auth?.account?.uid;
     if (uid) {
       this.members.set(client.sessionId, uid);
@@ -483,6 +486,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.dropped.delete(id);
     this.state.players.delete(id);
     this.playerIds.delete(id);
+    this.rolePicks.delete(id);
     this.clients.getById(id)?.leave(4001);
   }
 
@@ -661,6 +665,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private removeFromLobby(id: string, kicked = false) {
     this.logEvent(kicked ? "kicked" : "left", { name: this.nameOf(id) });
+    this.rolePicks.delete(id);
     this.state.players.delete(id);
     this.playerIds.delete(id);
     if (this.state.hostId !== id) return;
@@ -762,11 +767,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (typeof s[key] === "boolean") st[key] = s[key];
     }
     if (st.villagers === 0) st.bluewolf = false; // he hides behind a simple villager
-    // Picking his own role is a VIP host's.
-    if (s.testRole !== undefined) {
-      const mayPick = this.vips.has(st.hostId) && ROLES.includes(s.testRole as Role);
-      this.testHostRole = mayPick ? (s.testRole as Role) : null;
-    }
+    if (s.testRole !== undefined) this.pickRole(st.hostId, s.testRole); // the host's own role (a VIP Pro's)
     this.updateListing();
   }
 
@@ -808,12 +809,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private setHost(sessionId: string) {
-    if (this.state.hostId !== sessionId) {
-      this.banned.clear(); // a new host lifts the old host's bans
-      this.testHostRole = null; // …and the role the old one picked for himself goes with him
-    }
+    if (this.state.hostId !== sessionId) this.banned.clear(); // a new host lifts the old host's bans
     this.state.hostId = sessionId;
     this.updateListing();
+  }
+
+  /** A VIP Pro player's own role, picked in the waiting room (anything else: at random). Dealt to him if the game has it. */
+  private pickRole(id: string, role: unknown) {
+    const waiting = this.state.phase === "lobby" || this.state.phase === "starting";
+    if (!waiting || !this.vipPros.has(id) || !this.state.players.has(id)) return;
+    if (ROLES.includes(role as Role)) this.rolePicks.set(id, role as Role);
+    else this.rolePicks.delete(id);
   }
 
   // ---- lobby ----
@@ -895,12 +901,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const r of SPECIALS) mix[r] = on.includes(r);
     const deck = buildDeck(mix, ids.length);
 
-    // TEST ONLY: give the host the role they picked when creating the room.
-    const hostId = this.state.hostId;
-    if (this.testHostRole && deck.includes(this.testHostRole)) {
-      deck.splice(deck.indexOf(this.testHostRole), 1);
-      this.roles.set(hostId, this.testHostRole);
-      ids.splice(ids.indexOf(hostId), 1);
+    // VIP Pro players get the role they picked, if the game has it (one card each: the first to pick it).
+    for (const [id, role] of this.rolePicks) {
+      if (!ids.includes(id) || !deck.includes(role)) continue;
+      deck.splice(deck.indexOf(role), 1);
+      this.roles.set(id, role);
+      ids.splice(ids.indexOf(id), 1);
     }
 
     shuffle(deck);
