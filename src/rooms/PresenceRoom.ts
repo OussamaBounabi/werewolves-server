@@ -1,6 +1,7 @@
 import { Room, Client, ServerError } from "colyseus";
 import { accountFor, accountsEnabled } from "../accounts.js";
 import { appClosed, appOpened } from "../presence.js";
+import { seen } from "../metrics.js";
 
 const RECONNECT_SECONDS = 30; // a network blip doesn't show him offline
 
@@ -22,6 +23,7 @@ export class PresenceRoom extends Room {
 
   onJoin(client: Client) {
     appOpened(client.auth.uid);
+    seen(client.auth.uid); // one of today's active players
   }
 
   onDrop(client: Client) {

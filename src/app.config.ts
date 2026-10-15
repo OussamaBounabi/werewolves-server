@@ -20,13 +20,14 @@ import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
 import { PresenceRoom } from "./rooms/PresenceRoom.js";
-import { onlineCount } from "./presence.js";
+import { onlineCount, whereIs } from "./presence.js";
+import { todayNow } from "./metrics.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
 import {
-  announce, AuthError, buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin, ProfileError, StoreError, updateProfile,
-  type ProfileChanges,
+  adminAccounts, adminStats, announce, AuthError, buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin,
+  ProfileError, StoreError, updateProfile, type ProfileChanges,
 } from "./accounts.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -184,6 +185,31 @@ const server = defineServer({
         phase: r.metadata?.phase ?? "",
         day: r.metadata?.day ?? 0,
       }));
+    }),
+    // Admins only: the admin app's home — the accounts, the last 30 days, and now (online, each game's rooms and
+    // players; today's online count every ten minutes).
+    api_admin_stats: createEndpoint("/api/admin/stats", { method: "GET" }, async (ctx) => {
+      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+      const stats = await adminStats();
+      const today = todayNow();
+      const last = stats.days.at(-1);
+      if (last?.day === today.day) Object.assign(last, { games: today.games, active: today.active, peak: today.peak });
+      const now: Record<string, { rooms: number; players: number; spectators: number }> = {};
+      for (const r of await matchMaker.query({})) {
+        if (r.name === "presence") continue;
+        const game = (now[r.name] ??= { rooms: 0, players: 0, spectators: 0 });
+        game.rooms++;
+        game.players += Number(r.metadata?.players) || 0;
+        game.spectators += Number(r.metadata?.spectators) || 0;
+      }
+      return { ...stats, online: onlineCount(), onlineToday: today.online, now };
+    }),
+    // Admins only: the accounts, newest first (?q= searches the names, ?page=), each with where he is now.
+    api_admin_accounts: createEndpoint("/api/admin/accounts", { method: "GET" }, async (ctx) => {
+      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+      const url = new URL(ctx.request?.url ?? "http://x/");
+      const list = await adminAccounts(url.searchParams.get("q") ?? "", Number(url.searchParams.get("page")) || 1);
+      return { ...list, items: list.items.map((u) => ({ ...u, where: whereIs(u.uid).state })) };
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
     api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {

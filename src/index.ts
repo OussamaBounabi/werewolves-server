@@ -12,6 +12,7 @@ import { listen } from "@colyseus/tools";
 // Import Colyseus config
 import app from "./app.config.js";
 import { resetPresence, watchNewPlayers } from "./accounts.js";
+import { startMetrics } from "./metrics.js";
 
 // Nobody is connected yet: nobody is online or in a room (a crash may have left some marked). 10 s at most.
 await Promise.race([resetPresence(), new Promise((done) => setTimeout(done, 10_000).unref())])
@@ -20,3 +21,4 @@ await Promise.race([resetPresence(), new Promise((done) => setTimeout(done, 10_0
 // Create and listen on 2567 (or PORT environment variable.)
 listen(app);
 watchNewPlayers(); // each new player's welcome gift
+startMetrics().catch((e) => console.error("starting the day's numbers failed", e)); // (the admin app's)

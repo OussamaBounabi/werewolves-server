@@ -9,6 +9,7 @@ import {
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
+import { gameStarted } from "../metrics.js";
 
 /**
  * Guess Who, football edition. Each player has a secret footballer; turn by turn they ask about the other's
@@ -531,6 +532,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   private updateListing() {
+    if (!this.listedStarted && this.phase !== "lobby") gameStarted(this.roomName); // (the admin app's numbers)
     this.listedStarted = this.phase !== "lobby";
     // The room's face in the lists is its host's. Mid-game it stays the host the game started with, even after he
     // left (another player may be the host by then, or nobody).

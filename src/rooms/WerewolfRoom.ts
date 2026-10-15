@@ -6,6 +6,7 @@ import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rew
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
+import { gameStarted } from "../metrics.js";
 
 /** The first roles: each has its own switch in the room state. */
 const CLASSIC = [
@@ -885,6 +886,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.chatLog = [];
     this.deadChatLog = [];
     this.broadcast("events", []);
+    gameStarted("werewolf"); // (the admin app's numbers)
     this.assignRoles();
     this.dealTime = DEAL_MS;
     // The roles dealt, the village elects its mayor (if it plays with one), then the first night falls.

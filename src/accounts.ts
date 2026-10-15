@@ -215,6 +215,82 @@ export async function exchangeToken(idToken: string, appVersion?: unknown) {
   return { token: String(token), expires: Number(getTokenPayload(token).exp) * 1000, record: record as RecordModel };
 }
 
+// ---- the admin app ----
+
+const DZ_MS = 60 * 60_000; // Algeria time (UTC+1 all year)
+const dzDay = (ms: number) => new Date(ms + DZ_MS).toISOString().slice(0, 10);
+const pbDate = (ms: number) => new Date(ms).toISOString().replace("T", " ");
+const dayId = (day: string) => `d${day.replaceAll("-", "")}`;
+
+/** One day's numbers (metrics.ts keeps them): games started per game, who opened the app, online every 10 minutes. */
+export type DayStats = { day: string; games: Record<string, number>; active: Set<string>; online: [number, number][]; peak: number };
+
+export async function saveDay(d: DayStats) {
+  if (!pb) return;
+  const batch = (await db()).createBatch();
+  batch.collection("daily_stats").upsert({
+    id: dayId(d.day), day: d.day, games: d.games, active: [...d.active], online: d.online, peak: d.peak,
+  });
+  await batch.send();
+}
+
+export async function loadDay(day: string): Promise<DayStats | null> {
+  if (!pb) return null;
+  const r = await maybe((await db()).collection("daily_stats").getOne(dayId(day)));
+  return r ? { day: r.day, games: r.games ?? {}, active: new Set(r.active ?? []), online: r.online ?? [], peak: r.peak ?? 0 } : null;
+}
+
+/** The admin app's home: the accounts (all, VIP, VIP Pro, new today) and the last [days] days, oldest first. */
+export async function adminStats(days = 30) {
+  const client = await db();
+  const users = client.collection("users");
+  const count = async (filter: string) => (await users.getList(1, 1, { filter, fields: "id" })).totalItems;
+  const today = Date.parse(`${dzDay(Date.now())}T00:00:00Z`) - DZ_MS; // this midnight in Algeria
+  const since = today - (days - 1) * 86_400_000;
+  const [total, vip, vipPro, newToday, joined, rows] = await Promise.all([
+    count(""),
+    count("vip = true"),
+    count("vipPro = true"),
+    count(`createdAt >= "${pbDate(today)}"`),
+    users.getFullList({ filter: `createdAt >= "${pbDate(since)}"`, fields: "createdAt" }),
+    client.collection("daily_stats").getFullList({ filter: `day >= "${dzDay(since)}"`, fields: "day,games,active,peak" }),
+  ]);
+  const signups: Record<string, number> = {};
+  for (const u of joined) {
+    const day = dzDay(Date.parse(String(u.createdAt).replace(" ", "T")));
+    signups[day] = (signups[day] ?? 0) + 1;
+  }
+  const byDay = new Map(rows.map((r) => [r.day as string, r]));
+  return {
+    accounts: { total, vip, vipPro, today: newToday },
+    days: Array.from({ length: days }, (_, i) => {
+      const day = dzDay(since + i * 86_400_000);
+      const r = byDay.get(day);
+      return { day, signups: signups[day] ?? 0, active: (r?.active as unknown[] | undefined)?.length ?? 0, games: (r?.games ?? {}) as Record<string, number>, peak: Number(r?.peak) || 0 };
+    }),
+  };
+}
+
+/** The admin app's accounts, newest first, 50 a page: [query] searches the display names and usernames. */
+export async function adminAccounts(query: string, page: number) {
+  const client = await db();
+  const q = query.trim();
+  const filter = q ? client.filter("name ~ {:q} || username ~ {:q}", { q }) : "";
+  const list = await client.collection("users").getList(Math.max(1, page), 50, {
+    filter, sort: "-createdAt", fields: "id,name,username,avatar,frame,createdAt,vip,vipPro,xp,coins,diamonds,stats",
+  });
+  return {
+    page: list.page,
+    pages: list.totalPages,
+    total: list.totalItems,
+    items: list.items.map((u) => ({
+      uid: u.id, name: u.name || u.username, username: u.username, avatar: Number(u.avatar) || 0, frame: Number(u.frame) || 0,
+      createdAt: u.createdAt, vip: u.vip === true, vipPro: u.vipPro === true, xp: Number(u.xp) || 0,
+      coins: Number(u.coins) || 0, diamonds: Number(u.diamonds) || 0, games: Number(u.stats?.games) || 0,
+    })),
+  };
+}
+
 /** A message from support to every player, in the three languages: the apps show the newest one, once. */
 export async function announce(texts: { ar?: unknown; en?: unknown; fr?: unknown }) {
   const text = (v: unknown) => (typeof v === "string" ? v.trim().slice(0, 1000) : "");

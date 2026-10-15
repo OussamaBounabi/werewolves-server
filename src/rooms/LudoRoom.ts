@@ -6,6 +6,7 @@ import { botMove, HOME, movable, target, throwDie, victims, type Board, type Bot
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
+import { gameStarted } from "../metrics.js";
 
 /**
  * Ludo, 2–4 players (bots included), 4 pawns each (or 2: quick game). A 6 takes a pawn out of the base
@@ -547,6 +548,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   }
 
   private updateListing() {
+    if (!this.listedStarted && this.phase !== "lobby") gameStarted(this.roomName); // (the admin app's numbers)
     this.listedStarted = this.phase !== "lobby";
     // The room's face in the lists is its host's. Mid-game it stays the host the game started with, even after he
     // left (another player may be the host by then, or nobody).
