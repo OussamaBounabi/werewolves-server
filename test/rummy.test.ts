@@ -322,6 +322,38 @@ describe("RummyRoom", () => {
     assert.strictEqual(Object.values(room.lastRound.penalties)[0], 200); // never opened: 100, doubled
   });
 
+  it("the admin app watches unseen: admins only; it gets every hand, says nothing, and isn't counted", async () => {
+    const room: any = await colyseus.createRoom("rummy", {});
+    const host = await colyseus.connectTo(room);
+    host.onMessage("rummy", () => {});
+    host.onMessage("rummy_fx", () => {});
+    await assert.rejects(colyseus.connectTo(room, { admin: true, idToken: "not-an-admin" }), /admin/);
+    host.send("add_bot", { level: "normal" });
+    await new Promise((r) => setTimeout(r, 200));
+    host.send("start_game");
+    while (room.phase !== "seating" && room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    room.showPicks();
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    // A real admin is checked with Firebase: here a watcher is made one, as onAuth and onJoin would.
+    const admin = await colyseus.connectTo(room, { spectator: true });
+    let god: any = null;
+    admin.onMessage("rummy", () => {});
+    admin.onMessage("rummy_fx", () => {});
+    admin.onMessage("god", (g: any) => (god = g));
+    room.spectators.delete(admin.sessionId);
+    room.admins.add(admin.sessionId);
+    room.clients.find((c: any) => c.sessionId === admin.sessionId).auth = { account: null, admin: true };
+    room.updateListing();
+    room.sync();
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepStrictEqual(Object.keys(god.hands).sort(), room.seats.map((s: any) => s.id).sort());
+    assert.deepStrictEqual(god.hands[host.sessionId], room.hands.get(host.sessionId));
+    admin.send("chat", { text: "hello" });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepStrictEqual(room.tableTalk.lines, []);
+    assert.strictEqual(room.metadata.spectators, 0);
+  });
+
   it("plays whole rounds with bots only, every move legal", async () => {
     RummyRoom.botSpeed = 0.01;
     after(() => (RummyRoom.botSpeed = 1));

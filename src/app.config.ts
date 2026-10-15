@@ -19,15 +19,16 @@ import { LudoRoom } from "./rooms/LudoRoom.js";
 import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
-import { PresenceRoom } from "./rooms/PresenceRoom.js";
+import { kickFromApp, PresenceRoom } from "./rooms/PresenceRoom.js";
 import { onlineCount, whereIs } from "./presence.js";
 import { todayNow } from "./metrics.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
 import {
-  adminAccounts, adminStats, announce, AuthError, buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin,
-  ProfileError, StoreError, updateProfile, type ProfileChanges,
+  adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
+  buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin, ProfileError, StoreError, supportReply,
+  supportThread, supportThreads, updateProfile, type ProfileChanges,
 } from "./accounts.js";
 import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 
@@ -44,6 +45,21 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     started: r.metadata?.started === true,
     mode: r.metadata?.mode ?? "", // guess who: duel | cup
   };
+}
+
+/** A query parameter of a request. */
+const param = (ctx: { request?: Request }, key: string) => new URL(ctx.request?.url ?? "http://x/").searchParams.get(key) ?? "";
+
+/** An endpoint of the admin app: its Firebase ID token (Authorization: Bearer) is one of ADMIN_EMAILS'. */
+function adminEndpoint(path: string, method: "GET" | "POST", run: (ctx: { body?: unknown; request?: Request }) => Promise<unknown>) {
+  return createEndpoint(path, { method }, async (ctx) => {
+    if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+    try {
+      return await run(ctx);
+    } catch (e) {
+      throw ctx.error(400, { error: (e as Error).message });
+    }
+  });
 }
 
 /** An app's Firebase ID token, from "Authorization: Bearer <token>". */
@@ -162,8 +178,11 @@ const server = defineServer({
       const idToken = (ctx.body as { idToken?: unknown } | undefined)?.idToken;
       if (typeof idToken !== "string" || !idToken) throw ctx.error(400, { error: "missing idToken" });
       try {
-        return await exchangeToken(idToken, (ctx.body as { version?: unknown }).version);
+        const { version, device } = ctx.body as { version?: unknown; device?: unknown };
+        return await exchangeToken(idToken, version, device);
       } catch (e) {
+        // A ban says until when and why (year 9999: for good), and whether it's his phone's.
+        if (e instanceof BanError) throw ctx.error(403, { error: "banned", until: e.until, reason: e.reason, phone: e.phone });
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
@@ -177,14 +196,17 @@ const server = defineServer({
         throw ctx.error(400, { error: (e as Error).message });
       }
     }),
-    // Admins only (Authorization: Bearer <ID token>): every room, private ones included.
+    // Admins only (Authorization: Bearer <ID token>): every room of a game (?game=, werewolf by default), private ones
+    // included.
     api_admin_rooms: createEndpoint("/api/admin/rooms", { method: "GET" }, async (ctx) => {
       if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
-      return (await matchMaker.query({ name: "werewolf" })).map((r) => ({
+      const game = new URL(ctx.request?.url ?? "http://x/").searchParams.get("game") || "werewolf";
+      const rooms = (await matchMaker.query({ name: game })).map((r) => ({
         ...roomInfo(r),
         phase: r.metadata?.phase ?? "",
         day: r.metadata?.day ?? 0,
       }));
+      return { rooms };
     }),
     // Admins only: the admin app's home — the accounts, the last 30 days, and now (online, each game's rooms and
     // players; today's online count every ten minutes).
@@ -210,6 +232,33 @@ const server = defineServer({
       const url = new URL(ctx.request?.url ?? "http://x/");
       const list = await adminAccounts(url.searchParams.get("q") ?? "", Number(url.searchParams.get("page")) || 1);
       return { ...list, items: list.items.map((u) => ({ ...u, where: whereIs(u.uid).state })) };
+    }),
+    // Admins only, for the admin app's Support: the reported players (most reported first), one player (?uid=),
+    // who is banned, support's conversations and one of them (?uid=); a message or a warning to a player (body
+    // { uid, kind, text }), a ban (body { uid, days: -1 for good, 0 lifts, reason, phone }), an answer (body { uid, text }).
+    api_admin_reports: adminEndpoint("/api/admin/reports", "GET", async () => ({ players: await adminReports() })),
+    api_admin_player: adminEndpoint("/api/admin/player", "GET", async (ctx) => {
+      const uid = param(ctx, "uid");
+      return { ...(await adminPlayer(uid)), where: whereIs(uid).state };
+    }),
+    api_admin_bans: adminEndpoint("/api/admin/bans", "GET", () => adminBans()),
+    api_admin_support: adminEndpoint("/api/admin/support", "GET", async () => ({ threads: await supportThreads() })),
+    api_admin_thread: adminEndpoint("/api/admin/support/thread", "GET", (ctx) => supportThread(param(ctx, "uid"))),
+    api_admin_notice: adminEndpoint("/api/admin/notice", "POST", async (ctx) => {
+      const { uid, kind, text } = (ctx.body ?? {}) as { uid?: unknown; kind?: unknown; text?: unknown };
+      await adminNotice(String(uid), kind, text);
+      return { ok: true };
+    }),
+    api_admin_ban: adminEndpoint("/api/admin/ban", "POST", async (ctx) => {
+      const { uid, days, reason, phone } = (ctx.body ?? {}) as { uid?: unknown; days?: unknown; reason?: unknown; phone?: unknown };
+      const done = await adminBan(String(uid), Number(days), reason, phone === true);
+      if (Number(days) !== 0) kickFromApp(String(uid)); // out now: his app finds the ban as it reconnects
+      return done;
+    }),
+    api_admin_reply: adminEndpoint("/api/admin/support/reply", "POST", async (ctx) => {
+      const { uid, text } = (ctx.body ?? {}) as { uid?: unknown; text?: unknown };
+      await supportReply(String(uid), text);
+      return { ok: true };
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.
     api_room: createEndpoint("/api/rooms/:roomId", { method: "GET" }, async (ctx) => {

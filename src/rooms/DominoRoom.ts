@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, ends, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line,
@@ -24,7 +24,7 @@ import { gameStarted } from "../metrics.js";
  */
 type Meta = { host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; target?: number; teams?: boolean };
-type JoinOptions = Settings & { name?: string; playerId?: string; idToken?: string; spectator?: boolean };
+type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
   playerId: string;
@@ -80,6 +80,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   private banned = new Map<string, string>(); // a kicked player's id → who kicked him (the host then)
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private tableTalk!: TableTalk; // the table's chat and emojis
+  private admins = new Set<string>(); // the admin app watching, unseen (its God Eye: every hand)
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
@@ -132,7 +133,11 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
 
   // ---- joining (as at the rummy table) ----
 
-  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null }> {
+  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null; admin?: boolean }> {
+    if (options.admin) { // the admin app: any room, unseen
+      if (!options.idToken || !(await isAdmin(String(options.idToken)))) throw new ServerError(4403, "admin");
+      return { account: null, admin: true };
+    }
     let account: Account | null = null;
     if (options.idToken && accountsEnabled) {
       try {
@@ -163,6 +168,11 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    if (client.auth?.admin) {
+      this.admins.add(client.sessionId);
+      this.tableTalk.history(client);
+      return this.sync();
+    }
     const account: Account | null = client.auth?.account ?? null;
     const back = this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""));
     if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
@@ -233,6 +243,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   onDrop(client: Client) {
+    if (this.admins.has(client.sessionId)) return holdSpectator(this, client);
     if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
@@ -248,6 +259,10 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   onLeave(client: Client) {
+    if (this.admins.delete(client.sessionId)) {
+      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      return;
+    }
     const id = this.idOf(client);
     this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
@@ -274,6 +289,9 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (this.admins.has(client.sessionId)) { // the admin listens, unseen
+      return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
+    }
     const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
     client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk: !!this.seat(this.idOf(client)), hear: true })) });
   }
@@ -618,5 +636,6 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     for (const client of this.clients) {
       client.send("domino", { ...table, me: this.idOf(client), hand: this.hands.get(this.idOf(client)) ?? [] });
     }
+    for (const id of this.admins) this.clients.getById(id)?.send("god", { hands: Object.fromEntries(this.seats.map((s) => [s.id, this.hands.get(s.id) ?? []])) });
   }
 }

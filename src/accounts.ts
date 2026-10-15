@@ -131,6 +131,7 @@ export async function accountFor(idToken: string): Promise<Account> {
   const { uid } = await signedIn(idToken);
   const user = await maybe((await db()).collection("users").getOne(uid));
   if (!user?.username) throw new AuthError("no profile"); // not set up yet: no username
+  await checkBan(user);
   return {
     uid,
     name: String(user.name || user.username),
@@ -200,13 +201,19 @@ export const EXCHANGE_TOKEN_SECONDS = 60 * 60;
  * account is made at his first exchange), good for an hour and not refreshable: the app exchanges again
  * at each launch and when it expires. [expires] in epoch ms.
  */
-export async function exchangeToken(idToken: string, appVersion?: unknown) {
+export async function exchangeToken(idToken: string, appVersion?: unknown, device?: unknown) {
   const user = await signedIn(idToken);
-  await ensurePlayer(user);
+  const account = await ensurePlayer(user);
+  const phone = typeof device === "string" && DEVICE.test(device) ? device : undefined;
+  await checkBan(account, phone);
   const client = await db();
-  // The version of the app he opened, kept on his account: the owner sees who is still on an old one.
-  if (typeof appVersion === "string" && /^[0-9A-Za-z.+-]{1,20}$/.test(appVersion)) {
-    await client.collection("users").update(user.uid, { appVersion }).catch(() => {});
+  // The version of the app he opened, kept on his account: the owner sees who is still on an old one. And his
+  // phone, for a ban of the phone.
+  const changes: Record<string, string> = {};
+  if (typeof appVersion === "string" && /^[0-9A-Za-z.+-]{1,20}$/.test(appVersion)) changes.appVersion = appVersion;
+  if (phone) changes.device = phone;
+  if (Object.entries(changes).some(([key, value]) => account[key] !== value)) {
+    await client.collection("users").update(user.uid, changes).catch(() => {});
   }
   const { token, record } = await client.send(`/api/collections/users/impersonate/${encodeURIComponent(user.uid)}`, {
     method: "POST",
@@ -297,6 +304,177 @@ export async function announce(texts: { ar?: unknown; en?: unknown; fr?: unknown
   const message = { ar: text(texts.ar), en: text(texts.en), fr: text(texts.fr) };
   if (!message.ar && !message.en && !message.fr) throw new Error("empty");
   return (await db()).collection("announcements").create(message);
+}
+
+// ---- support (the admin app) ----
+
+/** A banned account until [until] (year 9999: for good), or every account on a banned phone ([phone]). */
+export class BanError extends AuthError {
+  constructor(readonly until: string, readonly reason: string, readonly phone: boolean) {
+    super("banned");
+  }
+}
+
+const FOREVER = "9999-12-31 00:00:00.000Z";
+const DEVICE = /^[0-9A-Za-z_-]{6,64}$/; // Android's id of the phone, for this app
+
+/** Throws if [user] is banned, or the phone the app runs on ([device]) is. */
+async function checkBan(user: RecordModel, device?: string) {
+  if (parseDate(user.bannedUntil) > Date.now()) throw new BanError(String(user.bannedUntil), String(user.banReason ?? ""), false);
+  if (!device) return;
+  const client = await db();
+  const ban = await maybe(client.collection("device_bans").getFirstListItem(client.filter("device = {:device}", { device })));
+  if (ban && parseDate(ban.until) > Date.now()) throw new BanError(String(ban.until), String(ban.reason ?? ""), true);
+}
+
+const BRIEF = "id,name,username,avatar,frame,bannedUntil";
+
+/** A player as the admin app lists him ([u] missing: a deleted account). */
+const brief = (u: RecordModel | null | undefined, uid: string) => ({
+  uid,
+  name: String(u?.name || u?.username || "?"),
+  username: String(u?.username ?? ""),
+  avatar: Number(u?.avatar) || 0,
+  frame: Number(u?.frame) || 0,
+  bannedUntil: parseDate(u?.bannedUntil) > Date.now() ? String(u!.bannedUntil) : "",
+});
+
+/** These accounts, by id (fifty at a time: a filter has a length limit). */
+async function usersById(ids: string[]) {
+  const client = await db();
+  const found = new Map<string, RecordModel>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const filter = ids.slice(i, i + 50).map((id) => client.filter("id = {:id}", { id })).join(" || ");
+    for (const u of await client.collection("users").getFullList({ filter, fields: BRIEF })) found.set(u.id, u);
+  }
+  return found;
+}
+
+/** The reported players, the most reported first: why, when last, how many warnings support sent him. */
+export async function adminReports() {
+  const client = await db();
+  const [reports, warnings] = await Promise.all([
+    client.collection("reports").getFullList({ fields: "target,reason,created", sort: "-created" }),
+    client.collection("notices").getFullList({ filter: 'kind = "warning"', fields: "user" }),
+  ]);
+  const byPlayer = new Map<string, { reports: number; reasons: Record<string, number>; last: string }>();
+  for (const r of reports) {
+    const p = byPlayer.get(r.target) ?? { reports: 0, reasons: {}, last: String(r.created) };
+    p.reports++;
+    p.reasons[r.reason] = (p.reasons[r.reason] ?? 0) + 1;
+    byPlayer.set(r.target, p);
+  }
+  const warned = new Map<string, number>();
+  for (const w of warnings) warned.set(w.user, (warned.get(w.user) ?? 0) + 1);
+  const users = await usersById([...byPlayer.keys()]);
+  return [...byPlayer]
+    .map(([uid, p]) => ({ ...brief(users.get(uid), uid), ...p, warnings: warned.get(uid) ?? 0 }))
+    .sort((a, b) => b.reports - a.reports || b.last.localeCompare(a.last));
+}
+
+/** One player for the admin app: his account and bans, the reports against him, support's notices to him. */
+export async function adminPlayer(uid: string) {
+  const client = await db();
+  const user = await client.collection("users").getOne(uid);
+  const device = String(user.device ?? "");
+  const [reports, notices, phoneBan] = await Promise.all([
+    client.collection("reports").getFullList({ filter: client.filter("target = {:uid}", { uid }), sort: "-created", expand: "reporter" }),
+    client.collection("notices").getFullList({ filter: client.filter("user = {:uid}", { uid }), sort: "-created" }),
+    device ? maybe(client.collection("device_bans").getFirstListItem(client.filter("device = {:device}", { device }))) : null,
+  ]);
+  return {
+    ...brief(user, uid),
+    createdAt: user.createdAt,
+    vip: user.vip === true,
+    vipPro: user.vipPro === true,
+    xp: Number(user.xp) || 0,
+    games: Number(user.stats?.games) || 0,
+    appVersion: String(user.appVersion ?? ""),
+    banReason: parseDate(user.bannedUntil) > Date.now() ? String(user.banReason ?? "") : "",
+    phoneKnown: device !== "", // (apps before 1.0.12 don't send it)
+    phoneBannedUntil: phoneBan && parseDate(phoneBan.until) > Date.now() ? String(phoneBan.until) : "",
+    reports: reports.map((r) => ({
+      reason: r.reason, context: r.context, created: r.created, by: r.expand?.reporter?.name || r.expand?.reporter?.username || "?",
+    })),
+    notices: notices.map((n) => ({ kind: n.kind, text: n.text, created: n.created, readAt: n.readAt })),
+  };
+}
+
+/** A message or a warning from support to one player: his app shows it until he has read it. */
+export async function adminNotice(uid: string, kind: unknown, text: unknown) {
+  const message = typeof text === "string" ? text.trim().slice(0, 1000) : "";
+  if (!message || (kind !== "message" && kind !== "warning")) throw new Error("a message or a warning, with its text");
+  await (await db()).collection("notices").create({ user: uid, kind, text: message });
+}
+
+/**
+ * Bans a player for [days] (-1: for good), with [phone] the phone he last opened the app on too (every account on
+ * it); 0 lifts his bans, his phone's included. [phoneKnown]: false if his app is too old to have told his phone.
+ */
+export async function adminBan(uid: string, days: number, reason: unknown, phone: boolean) {
+  if (!Number.isInteger(days) || days < -1) throw new Error("days");
+  const client = await db();
+  const user = await client.collection("users").getOne(uid);
+  const device = String(user.device ?? "");
+  const why = typeof reason === "string" ? reason.trim().slice(0, 200) : "";
+  if (days === 0) {
+    await client.collection("users").update(uid, { bannedUntil: "", banReason: "" });
+    const filter = device ? client.filter("device = {:device} || user = {:uid}", { device, uid }) : client.filter("user = {:uid}", { uid });
+    for (const b of await client.collection("device_bans").getFullList({ filter })) await client.collection("device_bans").delete(b.id);
+    return { phoneKnown: device !== "" };
+  }
+  const until = days === -1 ? FOREVER : pbDate(Date.now() + days * 86_400_000);
+  await client.collection("users").update(uid, { bannedUntil: until, banReason: why });
+  if (phone && device) {
+    const ban = { device, until, reason: why, user: uid };
+    const found = await maybe(client.collection("device_bans").getFirstListItem(client.filter("device = {:device}", { device })));
+    await (found ? client.collection("device_bans").update(found.id, ban) : client.collection("device_bans").create(ban));
+  }
+  return { phoneKnown: device !== "" };
+}
+
+/** Who is banned now: accounts, and phones (with the account each was banned with). */
+export async function adminBans() {
+  const client = await db();
+  const now = pbDate(Date.now());
+  const [accounts, phones] = await Promise.all([
+    client.collection("users").getFullList({ filter: client.filter("bannedUntil > {:now}", { now }), fields: `${BRIEF},banReason`, sort: "bannedUntil" }),
+    client.collection("device_bans").getFullList({ filter: client.filter("until > {:now}", { now }), expand: "user", sort: "until" }),
+  ]);
+  return {
+    accounts: accounts.map((u) => ({ ...brief(u, u.id), reason: String(u.banReason ?? "") })),
+    phones: phones.map((b) => ({ ...brief(b.expand?.user, String(b.user)), until: String(b.until), reason: String(b.reason ?? "") })),
+  };
+}
+
+/** Support's conversations, the latest first: each one's last message, and whether the player waits for an answer. */
+export async function supportThreads() {
+  const client = await db();
+  // ponytail: the last 500 messages make the list; a view collection if support ever gets that busy
+  const recent = await client.collection("support_messages").getList(1, 500, { sort: "-created", fields: "user,fromSupport,text,created" });
+  const threads = new Map<string, { last: string; at: string; waiting: boolean }>();
+  for (const m of recent.items) {
+    if (!threads.has(m.user)) threads.set(m.user, { last: String(m.text), at: String(m.created), waiting: m.fromSupport !== true });
+  }
+  const users = await usersById([...threads.keys()]);
+  return [...threads].map(([uid, t]) => ({ ...brief(users.get(uid), uid), ...t }));
+}
+
+/** One player's conversation with support, oldest first. */
+export async function supportThread(uid: string) {
+  const client = await db();
+  const [user, messages] = await Promise.all([
+    maybe(client.collection("users").getOne(uid, { fields: BRIEF })),
+    client.collection("support_messages").getFullList({ filter: client.filter("user = {:uid}", { uid }), sort: "created", fields: "fromSupport,text,created" }),
+  ]);
+  return { ...brief(user, uid), messages: messages.map((m) => ({ fromSupport: m.fromSupport === true, text: m.text, created: m.created })) };
+}
+
+/** Support's answer, into the player's conversation (his app shows it). */
+export async function supportReply(uid: string, text: unknown) {
+  const message = typeof text === "string" ? text.trim().slice(0, 1000) : "";
+  if (!message) throw new Error("empty");
+  await (await db()).collection("support_messages").create({ user: uid, fromSupport: true, text: message });
 }
 
 /** The account with this e-mail, or this username (admin tools). */

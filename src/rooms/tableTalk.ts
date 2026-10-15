@@ -55,7 +55,7 @@ export class TableTalk {
 
   private chat(client: Client, text: unknown) {
     const clean = typeof text === "string" ? text.trim().slice(0, CHAT_MAX) : "";
-    if (!clean) return;
+    if (!clean || client.auth?.admin) return; // (the admin app only watches)
     const seat = this.seatOf(client);
     const account = client.auth?.account;
     const face: Face = seat

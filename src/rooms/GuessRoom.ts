@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isFriendOfAny, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
@@ -32,7 +32,7 @@ type Meta = {
 type Settings = {
   roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
-type JoinOptions = Settings & { mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
+type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; connected: boolean; bot: boolean; quit: boolean };
 /** One of the match's two players: a (blue) or b (red). */
 type Side = {
@@ -80,6 +80,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private banned = new Map<string, string>(); // a kicked player's id → who kicked him (the host then)
   private spectators = new Map<string, JoinOptions>(); // sessionId → how he came: watching a game, without a seat
   private tableTalk!: TableTalk; // the table's chat and emojis
+  private admins = new Set<string>(); // the admin app watching, unseen (its God Eye: every secret footballer)
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
@@ -131,7 +132,11 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   // ---- joining (as at the other tables) ----
 
-  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null }> {
+  async onAuth(_client: Client, options: JoinOptions = {}): Promise<{ account: Account | null; admin?: boolean }> {
+    if (options.admin) { // the admin app: any room, unseen
+      if (!options.idToken || !(await isAdmin(String(options.idToken)))) throw new ServerError(4403, "admin");
+      return { account: null, admin: true };
+    }
     let account: Account | null = null;
     if (options.idToken && accountsEnabled) {
       try {
@@ -162,6 +167,11 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    if (client.auth?.admin) {
+      this.admins.add(client.sessionId);
+      this.tableTalk.history(client);
+      return this.sync();
+    }
     const account: Account | null = client.auth?.account ?? null;
     const back = this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""));
     if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
@@ -230,6 +240,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   onDrop(client: Client) {
+    if (this.admins.has(client.sessionId)) return holdSpectator(this, client);
     if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
@@ -245,6 +256,10 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   onLeave(client: Client) {
+    if (this.admins.delete(client.sessionId)) {
+      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      return;
+    }
     const id = this.idOf(client);
     this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
@@ -271,6 +286,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (this.admins.has(client.sessionId)) { // the admin listens, unseen
+      return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
+    }
     const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
     client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk: !!this.seat(this.idOf(client)), hear: true })) });
   }
@@ -602,5 +620,6 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       }));
       client.send("guess", { ...table, sides, me });
     }
+    for (const id of this.admins) this.clients.getById(id)?.send("god", { secrets: Object.fromEntries(this.sides.map((s) => [s.id, s.secret])) });
   }
 }

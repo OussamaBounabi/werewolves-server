@@ -12,6 +12,7 @@ import * as accounts from "../src/accounts.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
 import { appClosed, appOpened, enterRoom, leaveRoom, presenceSaved } from "../src/presence.js";
+import { kickFromApp } from "../src/rooms/PresenceRoom.js";
 import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.js";
 
 /**
@@ -508,6 +509,81 @@ describe("PocketBase", function () {
     });
   });
 
+  describe("support (the admin app)", () => {
+    const exchange = (p: Player, device?: string) => accounts.exchangeToken(p.idToken, "1.0.12", device);
+    const banned = (phone: boolean, check: (e: accounts.BanError) => boolean = () => true) => (e: unknown) =>
+      e instanceof accounts.BanError && e.phone === phone && check(e);
+
+    it("bans an account for days or for good, or its phone with every account on it; lifts them all", async () => {
+      const p = await player();
+      await exchange(p, "phone-aaa111");
+      assert.strictEqual((await user(p.id)).device, "phone-aaa111");
+      await accounts.adminBan(p.id, 3, "insults", false);
+      const inThreeDays = (e: accounts.BanError) => e.reason === "insults" && Date.parse(e.until.replace(" ", "T")) > Date.now() + 2.9 * 86_400_000;
+      await assert.rejects(exchange(p, "phone-aaa111"), banned(false, inThreeDays));
+      await assert.rejects(accounts.accountFor(p.idToken), banned(false)); // (the rooms check it too)
+      // His phone as well: another account is refused on it, not on another phone.
+      await accounts.adminBan(p.id, -1, "cheating", true);
+      const q = await player();
+      await assert.rejects(exchange(q, "phone-aaa111"), banned(true, (e) => e.until.startsWith("9999") && e.reason === "cheating"));
+      await exchange(q, "phone-bbb222");
+      const bans = await accounts.adminBans();
+      assert.deepStrictEqual([bans.accounts.some((b) => b.uid === p.id), bans.phones.some((b) => b.uid === p.id)], [true, true]);
+      assert.deepStrictEqual(await accounts.adminBan(p.id, 0, "", false), { phoneKnown: true });
+      await exchange(p, "phone-aaa111");
+      await exchange(q, "phone-aaa111");
+      await assert.rejects(accounts.adminBan(p.id, -2, "", false), /days/);
+    });
+
+    it("sends a player messages and warnings: he reads his own and marks them read, and may change nothing else", async () => {
+      const [p, other] = [await player(), await player()];
+      await accounts.adminNotice(p.id, "warning", "  Mind your words  ");
+      await assert.rejects(accounts.adminNotice(p.id, "shout", "x"));
+      await assert.rejects(accounts.adminNotice(p.id, "message", "  "));
+      const [n] = await p.pb.collection("notices").getFullList();
+      assert.deepStrictEqual([n.kind, n.text, n.readAt], ["warning", "Mind your words", ""]);
+      await refused(other.pb.collection("notices").getOne(n.id));
+      await refused(p.pb.collection("notices").update(n.id, { text: "nothing" }));
+      await refused(p.pb.collection("notices").update(n.id, { user: other.id }));
+      await refused(p.pb.collection("notices").create({ user: p.id, kind: "message", text: "hi" }));
+      await refused(p.pb.collection("notices").delete(n.id));
+      await p.pb.collection("notices").update(n.id, { readAt: new Date().toISOString() });
+      assert.ok((await admin.collection("notices").getOne(n.id)).readAt);
+      assert.deepStrictEqual((await accounts.adminPlayer(p.id)).notices.map((x) => x.kind), ["warning"]);
+    });
+
+    it("lists the reported players, the most reported first, with why, by whom and how many warnings", async () => {
+      const [a, b, c, d] = [await player(), await player(), await player(), await player()];
+      for (const by of [a, b, c]) {
+        await by.pb.collection("reports").create({ target: d.id, reporter: by.id, reason: by === c ? "spam" : "insults" });
+      }
+      await a.pb.collection("reports").create({ target: c.id, reporter: a.id, reason: "afk" });
+      await accounts.adminNotice(d.id, "warning", "Stop");
+      const list = (await accounts.adminReports()).filter((r) => [c.id, d.id].includes(r.uid));
+      assert.deepStrictEqual(list.map((r) => [r.uid, r.reports, r.reasons, r.warnings]), [
+        [d.id, 3, { insults: 2, spam: 1 }, 1],
+        [c.id, 1, { afk: 1 }, 0],
+      ]);
+      const names = [a, b, c].map((p) => `Player_${p.username.slice(7)}`).sort();
+      assert.deepStrictEqual((await accounts.adminPlayer(d.id)).reports.map((r) => r.by).sort(), names);
+    });
+
+    it("keeps each player's conversation with support: he writes his side, support answers, nobody else reads it", async () => {
+      const [p, other] = [await player(), await player()];
+      await p.pb.collection("support_messages").create({ user: p.id, text: "My coins are gone" });
+      await refused(p.pb.collection("support_messages").create({ user: p.id, text: "fake", fromSupport: true }));
+      await refused(p.pb.collection("support_messages").create({ user: other.id, text: "as him" }));
+      const thread = async () => (await accounts.supportThreads()).filter((t) => t.uid === p.id).map((t) => [t.last, t.waiting]);
+      assert.deepStrictEqual(await thread(), [["My coins are gone", true]]);
+      await accounts.supportReply(p.id, "  Sent them back  ");
+      assert.deepStrictEqual(await thread(), [["Sent them back", false]]);
+      const mine = await p.pb.collection("support_messages").getFullList({ sort: "created" });
+      assert.deepStrictEqual(mine.map((m) => [m.fromSupport, m.text]), [[false, "My coins are gone"], [true, "Sent them back"]]);
+      assert.strictEqual((await other.pb.collection("support_messages").getFullList()).length, 0);
+      assert.deepStrictEqual((await accounts.supportThread(p.id)).messages.map((m) => m.text), ["My coins are gone", "Sent them back"]);
+    });
+  });
+
   describe("rooms and HTTP", () => {
     let colyseus: ColyseusTestServer<typeof appConfig>;
     before(async () => {
@@ -548,6 +624,27 @@ describe("PocketBase", function () {
       await until(async () => (await state(p)) === "online");
       await app.leave();
       await until(async () => (await state(p)) === "offline");
+    });
+
+    it("refuses a banned player at the exchange (until when, why) and in the presence room, which puts him out", async () => {
+      const p = await player();
+      const app = await colyseus.sdk.joinOrCreate("presence", { idToken: p.idToken });
+      const left = new Promise<number>((done) => app.onLeave((code) => done(code)));
+      await accounts.adminBan(p.id, 7, "spam", false);
+      kickFromApp(p.id);
+      assert.strictEqual(await left, 4403);
+      await assert.rejects(colyseus.sdk.joinOrCreate("presence", { idToken: p.idToken }), /banned/);
+      const res = await fetch(`http://127.0.0.1:${GAME_PORT}/api/auth/exchange`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idToken: p.idToken }),
+      });
+      const body = await res.json();
+      assert.deepStrictEqual([res.status, body.error, body.reason, body.phone], [403, "banned", "spam", false]);
+      assert.ok(Date.parse(body.until.replace(" ", "T")) > Date.now() + 6.9 * 86_400_000);
+      for (const path of ["/api/admin/reports", "/api/admin/bans", `/api/admin/player?uid=${p.id}`]) {
+        assert.strictEqual((await fetch(`http://127.0.0.1:${GAME_PORT}${path}`, { headers: { authorization: `Bearer ${p.idToken}` } })).status, 403);
+      }
     });
 
     it("answers /api/auth/exchange and /api/profile", async () => {
