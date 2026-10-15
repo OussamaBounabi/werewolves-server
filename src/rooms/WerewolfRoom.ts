@@ -380,7 +380,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (client.auth?.admin) {
       this.admins.add(client.sessionId);
       this.sendGodHistory(client);
-      this.lastGod = ""; // send him the god state with the next patch
+      this.lastGod = ""; // send him the god state with the next patch…
+      this.lastSnapshot = ""; // …and the game itself (his joining changes nothing in it: it could wait for minutes)
       return; // not a player, not a spectator, not in the listing
     }
     this.sendHistory(client);

@@ -1074,6 +1074,16 @@ describe("WerewolfRoom", () => {
     assert.ok(clients.length === 9);
   });
 
+  it("the admin app's watcher gets the game at once and every role, unseen", async () => {
+    const { room } = await startGame();
+    (room as any).onAuth = async () => ({ account: null as null, admin: true }); // (a real admin is checked with Firebase)
+    const admin = await colyseus.connectTo(room, { admin: true });
+    const [state, god] = await Promise.all([admin.waitForMessage("state", 2000), admin.waitForMessage("god", 2000)]);
+    assert.strictEqual((state as any).phase, room.state.phase);
+    assert.strictEqual(Object.keys((god as any).roles).length, 5);
+    assert.deepStrictEqual([room.state.players.size, room.state.spectators], [5, 0]);
+  });
+
   it("god view is for admins only", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
     await colyseus.connectTo(room);
