@@ -189,7 +189,7 @@ describe("PocketBase", function () {
     it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true });
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
       // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
       const fresh = await newcomer();
