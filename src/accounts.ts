@@ -2,8 +2,9 @@ import { randomBytes } from "node:crypto";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isTokenExpired, type RecordModel } from "pocketbase";
-import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS, PRICES } from "./avatars.js";
-import { claimable, DAILY_BONUS, dayKey, MISSIONS, weekKey, type Counters } from "./missions.js";
+import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
+import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
+import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
 
 /**
  * Player accounts. Players log in with Firebase Auth, as before: the server checks their Firebase ID
@@ -124,7 +125,19 @@ async function signedIn(idToken: string): Promise<FirebaseUser> {
   }
 }
 
-export type Account = { uid: string; name: string; avatar: number; frame: number; vip: boolean; vipPro: boolean };
+export type Account = {
+  uid: string;
+  name: string;
+  avatar: number;
+  frame: number;
+  vip: boolean;
+  vipPro: boolean;
+  roleCardDay: string; // the day a VIP last played the role his Master card chose (one a day)
+};
+
+/** "pro", "vip" or "": the badge a player wears by his name (a VIP Pro is a VIP too). */
+export const vipLevel = (u: Record<string, any> | null | undefined): "" | "vip" | "pro" =>
+  u?.vipPro === true ? "pro" : u?.vip === true ? "vip" : "";
 
 /** The account behind an app's Firebase ID token, with its display name and avatar. Throws if invalid. */
 export async function accountFor(idToken: string): Promise<Account> {
@@ -139,6 +152,7 @@ export async function accountFor(idToken: string): Promise<Account> {
     frame: Number(user.frame) || 0,
     vip: user.vip === true,
     vipPro: user.vipPro === true, // (a VIP Pro is a VIP too)
+    roleCardDay: String(user.roleCardDay ?? ""),
   };
 }
 
@@ -284,7 +298,8 @@ export async function adminAccounts(query: string, page: number) {
   const q = query.trim();
   const filter = q ? client.filter("name ~ {:q} || username ~ {:q}", { q }) : "";
   const list = await client.collection("users").getList(Math.max(1, page), 50, {
-    filter, sort: "-createdAt", fields: "id,name,username,avatar,frame,createdAt,vip,vipPro,xp,coins,diamonds,stats",
+    filter, sort: "-createdAt",
+    fields: "id,name,username,avatar,frame,createdAt,vip,vipPro,vipUntil,vipProUntil,xp,coins,diamonds,stats",
   });
   return {
     page: list.page,
@@ -292,7 +307,8 @@ export async function adminAccounts(query: string, page: number) {
     total: list.totalItems,
     items: list.items.map((u) => ({
       uid: u.id, name: u.name || u.username, username: u.username, avatar: Number(u.avatar) || 0, frame: Number(u.frame) || 0,
-      createdAt: u.createdAt, vip: u.vip === true, vipPro: u.vipPro === true, xp: Number(u.xp) || 0,
+      createdAt: u.createdAt, vip: u.vip === true, vipPro: u.vipPro === true, vipUntil: u.vipUntil ?? "",
+      vipProUntil: u.vipProUntil ?? "", xp: Number(u.xp) || 0,
       coins: Number(u.coins) || 0, diamonds: Number(u.diamonds) || 0, games: Number(u.stats?.games) || 0,
     })),
   };
@@ -477,6 +493,193 @@ export async function supportReply(uid: string, text: unknown) {
   await (await db()).collection("support_messages").create({ user: uid, fromSupport: true, text: message });
 }
 
+// ---- the admin's plans (plans.ts), VIP, and the ranking's prizes ----
+
+const DAY_MS = 86_400_000;
+const plans: { store: StorePlan | null; missions: MissionPlan | null; rewards: RewardTier[] | null } = {
+  store: null,
+  missions: null,
+  rewards: null,
+};
+type PlanId = keyof typeof plans;
+
+/** The admin's plans as last read: every minute (startSchedules), and at once when he saves one. */
+export const currentPlans = () => plans;
+
+export async function loadPlans() {
+  if (!pb) return;
+  for (const row of await (await db()).collection("admin_config").getFullList()) {
+    if (row.id in plans) plans[row.id as PlanId] = row.data ?? null;
+  }
+}
+
+/** The admin saves a plan (cleaned by plans.ts first). */
+export async function savePlan<K extends PlanId>(id: K, data: NonNullable<(typeof plans)[K]>) {
+  const batch = (await db()).createBatch();
+  batch.collection("admin_config").upsert({ id, data });
+  await batch.send();
+  plans[id] = data;
+}
+
+/** The last week whose ranking was rewarded, and the last month VIPs got their diamonds. */
+type Done = { rewardWeek?: string; gemsMonth?: string };
+async function saveDone(done: Done) {
+  const batch = (await db()).createBatch();
+  batch.collection("admin_config").upsert({ id: "done", data: done });
+  await batch.send();
+}
+
+/**
+ * VIP or VIP Pro for [days] more (counted from the end of what he has; null: for good), or neither ("off"). VIP Pro is
+ * VIP too, for at least as long. The flags vip and vipPro say what he has now: expireVips turns them off in time.
+ */
+export async function grantVip(uid: string, level: "vip" | "pro" | "off", days: number | null) {
+  if (days !== null && !(Number.isInteger(days) && days > 0 && days <= 3650)) throw new Error("days");
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const u = await client.collection("users").getOne(uid, { fields: "vip,vipPro,vipUntil,vipProUntil" });
+    if (level === "off") return client.collection("users").update(uid, { vip: false, vipPro: false, vipUntil: "", vipProUntil: "" });
+    // "" = for good: asked for, or had already.
+    const extend = (on: boolean, until: unknown) =>
+      days === null || (on && !until) ? "" : pbDate(Math.max(Date.now(), on ? parseDate(until) || 0 : 0) + days * DAY_MS);
+    const vipUntil = extend(u.vip === true, u.vipUntil);
+    if (level === "vip") return client.collection("users").update(uid, { vip: true, vipUntil });
+    const vipProUntil = extend(u.vipPro === true, u.vipProUntil);
+    const vipForGood = vipUntil === "" || vipProUntil === "";
+    return client.collection("users").update(uid, {
+      vip: true,
+      vipPro: true,
+      vipProUntil,
+      vipUntil: vipForGood ? "" : pbDate(Math.max(parseDate(vipUntil), parseDate(vipProUntil))),
+    });
+  });
+}
+
+/** VIP and VIP Pro whose time is up end; a VIP Pro item he wears without owning it goes back to a free one. */
+export async function expireVips() {
+  const client = await db();
+  const now = pbDate(Date.now());
+  const ended = await client.collection("users").getFullList({
+    filter: client.filter('(vip = true && vipUntil != "" && vipUntil < {:now}) || (vipPro = true && vipProUntil != "" && vipProUntil < {:now})', { now }),
+    fields: "id,vip,vipPro,vipUntil,vipProUntil,avatar,frame,avatars,frames",
+  });
+  const store = storeNow(plans.store);
+  for (const u of ended) {
+    const over = (on: unknown, until: unknown) => on === true && !!until && parseDate(until) < Date.now();
+    const update: Record<string, unknown> = {};
+    if (over(u.vip, u.vipUntil)) update.vip = false;
+    if (over(u.vipPro, u.vipProUntil)) {
+      update.vipPro = false;
+      const owns = (list: unknown, id: unknown) => Array.isArray(list) && list.includes(id);
+      if (store.proAvatars.includes(u.avatar) && !owns(u.avatars, u.avatar)) update.avatar = FREE_AVATARS[0];
+      if (store.proFrames.includes(u.frame) && !owns(u.frames, u.frame)) update.frame = 0;
+    }
+    await forPlayer(u.id, () => client.collection("users").update(u.id, update));
+  }
+}
+
+export const VIP_DIAMONDS = 1000;
+
+/**
+ * The 1st of each month (Algeria time): every VIP (VIP Pro too) gets his 1,000 diamonds, with a message. Once a month
+ * (the month is marked first: a crash halfway never pays twice). The first run only marks it: from next month on.
+ */
+async function monthlyDiamonds(done: Done) {
+  const month = dzDay(Date.now()).slice(0, 7);
+  if (done.gemsMonth === month) return;
+  const first = !done.gemsMonth;
+  done.gemsMonth = month;
+  await saveDone(done);
+  if (first) return;
+  const client = await db();
+  for (const { id } of await client.collection("users").getFullList({ filter: "vip = true", fields: "id" })) {
+    await forPlayer(id, async () => {
+      const batch = client.createBatch(); // ("diamonds+" in a batch: see sell)
+      batch.collection("users").update(id, { "diamonds+": VIP_DIAMONDS });
+      batch.collection("notices").create({
+        user: id, kind: "gems", text: `VIP: your ${VIP_DIAMONDS} diamonds for ${month}`, data: { month, diamonds: VIP_DIAMONDS },
+      });
+      await batch.send();
+    }).catch((e) => console.error("VIP diamonds failed for", id, e));
+  }
+}
+
+/**
+ * Monday: last week's ranking wins the admin's prizes (coins, diamonds, VIP days), each winner told his place and
+ * prize. Once a week (marked first). The first run only marks it.
+ */
+async function weeklyPrizes(done: Done) {
+  const last = weekKey(Date.now() - 7 * DAY_MS);
+  if (done.rewardWeek === last) return;
+  const first = !done.rewardWeek;
+  done.rewardWeek = last;
+  await saveDone(done);
+  const tiers = plans.rewards ?? [];
+  if (first || tiers.length === 0) return;
+  const client = await db();
+  const top = Math.max(...tiers.map((t) => t.to));
+  const { items } = await client.collection("leaderboard").getList(1, top, { filter: client.filter("week = {:last}", { last }), sort: "-xp" });
+  for (const [i, row] of items.entries()) {
+    const prize = prizeFor(tiers, i + 1);
+    if (!prize || !(Number(row.xp) > 0)) continue;
+    const { coins, diamonds, vipDays } = prize;
+    const won = [coins && `${coins} coins`, diamonds && `${diamonds} diamonds`, vipDays && `${vipDays} VIP days`].filter(Boolean);
+    try {
+      await forPlayer(row.user, async () => {
+        const batch = client.createBatch();
+        if (coins || diamonds) batch.collection("users").update(row.user, { "coins+": coins, "diamonds+": diamonds });
+        batch.collection("notices").create({
+          user: row.user, kind: "reward", text: `#${i + 1} in last week's ranking: ${won.join(", ")}`,
+          data: { rank: i + 1, week: last, coins, diamonds, vipDays },
+        });
+        await batch.send();
+      });
+      if (vipDays) await grantVip(row.user, "vip", vipDays);
+    } catch (e) {
+      console.error("ranking prize failed for", row.user, e);
+    }
+  }
+}
+
+/** One round of the schedules: the plans read again, VIP time that's up, the monthly diamonds, the weekly prizes. */
+export async function runSchedules() {
+  await loadPlans();
+  await expireVips();
+  const done = ((await maybe((await db()).collection("admin_config").getOne("done")))?.data ?? {}) as Done;
+  await monthlyDiamonds(done);
+  await weeklyPrizes(done);
+}
+
+/** The game server calls this once, at start: a round of schedules now, then every minute. */
+export function startSchedules() {
+  if (!pb) return;
+  const run = () => runSchedules().catch((e) => console.error("schedules failed", e));
+  run();
+  setInterval(run, 60_000).unref();
+}
+
+/** A VIP played the role his Master card chose: his card for today is spent. */
+export async function useRoleCard(uid: string) {
+  if (!pb || !uid) return;
+  await (await db()).collection("users").update(uid, { roleCardDay: dayKey() });
+}
+
+export const PRO_KICKS = 3; // a month
+
+/** A VIP Pro puts someone out of a room he doesn't host: false if he has no kick left this month (or isn't one). */
+export async function useProKick(uid: string) {
+  if (!pb || !uid) return false;
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const u = await client.collection("users").getOne(uid, { fields: "vipPro,proKicks" });
+    const month = dzDay(Date.now()).slice(0, 7);
+    const used = u.proKicks?.month === month ? Number(u.proKicks.used) || 0 : 0;
+    if (u.vipPro !== true || used >= PRO_KICKS) return false;
+    await client.collection("users").update(uid, { proKicks: { month, used: used + 1 } });
+    return true;
+  });
+}
+
 /** The account with this e-mail, or this username (admin tools). */
 async function findPlayer(who: string): Promise<RecordModel> {
   const client = await db();
@@ -494,7 +697,7 @@ async function findPlayer(who: string): Promise<RecordModel> {
  */
 export async function setVip(who: string, level: "vip" | "pro" | "off") {
   const user = await findPlayer(who);
-  await (await db()).collection("users").update(user.id, { vip: level !== "off", vipPro: level === "pro" });
+  await grantVip(user.id, level, null);
   return user.username as string;
 }
 
@@ -545,7 +748,6 @@ export async function recordResults(results: GameResult[]) {
 }
 
 async function recordResult(r: GameResult) {
-  const { xp, coins } = rewardFor(r);
   // Mission progress for today and this week, and this week's leaderboard.
   const counters: Counters = {
     games: 1,
@@ -559,14 +761,18 @@ async function recordResult(r: GameResult) {
   const [day, week] = [dayKey(), weekKey()];
   await forPlayer(r.uid, async () => {
     const client = await db();
-    const { stats } = await client.collection("users").getOne(r.uid, { fields: "stats" });
+    const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro" });
+    const double = user.vip === true ? 2 : 1; // VIP: double coins and XP
+    const { xp, coins } = rewardFor(r);
+    const stats = user.stats;
     const batch = client.createBatch(); // all of it or none of it
-    batch.collection("users").update(r.uid, { "xp+": xp, "coins+": coins, stats: addResult(stats, r) });
+    batch.collection("users").update(r.uid, { "xp+": xp * double, "coins+": coins * double, stats: addResult(stats, r) });
     for (const period of [day, week]) {
       batch.collection("missions").upsert({ id: missionsId(r.uid, period), user: r.uid, period, ...inc });
     }
     batch.collection("leaderboard").upsert({
-      id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp, name: r.name, avatar: r.avatar, frame: r.frame,
+      id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp * double, name: r.name, avatar: r.avatar, frame: r.frame,
+      vip: vipLevel(user),
     });
     await batch.send();
   });
@@ -576,18 +782,20 @@ export class ClaimError extends Error {}
 
 export class StoreError extends Error {}
 
-/** Buys an avatar: its price (by rarity) in coins or diamonds is taken if the player has it; then it's worn. */
+/** Buys an avatar on sale this week: its price in coins or diamonds is taken if the player has it; then it's worn. */
 export async function buyAvatar(idToken: string, id: number) {
-  const rarity = AVATARS[id];
-  if (!rarity) throw new StoreError("unknown");
-  if (FREE_AVATARS.includes(id)) throw new StoreError("free"); // everyone has them
-  return sell(idToken, id, PRICES[rarity], "avatars", "avatar");
+  if (!AVATARS[id]) throw new StoreError("unknown");
+  const item = storeNow(plans.store).avatars.find((a) => a.id === id);
+  if (!item) throw new StoreError(FREE_AVATARS.includes(id) ? "free" : "not on sale"); // (the free two: everyone's)
+  return sell(idToken, id, item, "avatars", "avatar");
 }
 
-/** Buys an animated frame, the same way: price taken, frame owned and worn. */
+/** Buys an animated frame on sale this week, the same way: price taken, frame owned and worn. */
 export async function buyFrame(idToken: string, id: number) {
   if (!FRAMES[id]) throw new StoreError("unknown");
-  return sell(idToken, id, FRAMES[id], "frames", "frame");
+  const item = storeNow(plans.store).frames.find((f) => f.id === id);
+  if (!item) throw new StoreError("not on sale");
+  return sell(idToken, id, item, "frames", "frame");
 }
 
 async function sell(
@@ -703,7 +911,9 @@ export async function grantCurrencyToAll(coins: number, diamonds: number, dryRun
 export async function claimMission(idToken: string, id: string) {
   if (!pb) throw new ClaimError("accounts disabled");
   const { uid } = await signedIn(idToken);
-  const mission = id === DAILY_BONUS.id ? { ...DAILY_BONUS, period: "daily" } : MISSIONS.find((m) => m.id === id);
+  const now = missionsNow(plans.missions);
+  const missions = [...now.daily, ...now.weekly];
+  const mission = id === DAILY_BONUS.id ? { ...now.bonus, period: "daily" } : missions.find((m) => m.id === id);
   if (!mission) throw new ClaimError("unknown mission");
   const period = mission.period === "daily" ? dayKey() : weekKey();
   const week = weekKey();
@@ -711,8 +921,8 @@ export async function claimMission(idToken: string, id: string) {
   await forPlayer(uid, async () => {
     const client = await db();
     const progress = await maybe(client.collection("missions").getOne(missionsId(uid, period)));
-    if (!claimable(id, (progress ?? {}) as Parameters<typeof claimable>[1])) throw new ClaimError("not claimable");
-    const user = await client.collection("users").getOne(uid, { fields: "name,username,avatar,frame" });
+    if (!claimable(id, (progress ?? {}) as Parameters<typeof claimable>[1], missions)) throw new ClaimError("not claimable");
+    const user = await client.collection("users").getOne(uid, { fields: "name,username,avatar,frame,vip,vipPro" });
     const batch = client.createBatch();
     batch.collection("missions").upsert({
       id: missionsId(uid, period), user: uid, period, claimed: { ...(progress?.claimed ?? {}), [id]: true },
@@ -720,7 +930,7 @@ export async function claimMission(idToken: string, id: string) {
     batch.collection("users").update(uid, { "coins+": reward.coins, "xp+": reward.xp, "diamonds+": reward.diamonds });
     batch.collection("leaderboard").upsert({
       id: leaderboardId(uid, week), week, user: uid, "xp+": reward.xp,
-      name: user.name || user.username || "?", avatar: user.avatar ?? 0, frame: user.frame ?? 0,
+      name: user.name || user.username || "?", avatar: user.avatar ?? 0, frame: user.frame ?? 0, vip: vipLevel(user),
     });
     await batch.send();
   });
@@ -776,15 +986,18 @@ export async function updateProfile(idToken: string, changes: ProfileChanges) {
         if (!settingUp) update.nameChangedAt = new Date().toISOString();
       }
     }
+    const pro = user.vipPro === true ? storeNow(plans.store) : null; // VIP Pro wears VIP Pro's own items
     if (changes.avatar != null) {
       const avatar = Number(changes.avatar);
-      const mine = [...FREE_AVATARS, ...(Array.isArray(user.avatars) ? user.avatars : []), Number(user.avatar) || 0];
+      const mine = [
+        ...FREE_AVATARS, ...(Array.isArray(user.avatars) ? user.avatars : []), Number(user.avatar) || 0, ...(pro?.proAvatars ?? []),
+      ];
       if (!Number.isInteger(avatar) || !mine.includes(avatar)) throw new ProfileError("avatar", 409);
       update.avatar = avatar;
     }
     if (changes.frame != null) {
       const frame = Number(changes.frame);
-      const mine = [0, ...(Array.isArray(user.frames) ? user.frames : []), Number(user.frame) || 0];
+      const mine = [0, ...(Array.isArray(user.frames) ? user.frames : []), Number(user.frame) || 0, ...(pro?.proFrames ?? [])];
       if (!Number.isInteger(frame) || !mine.includes(frame)) throw new ProfileError("frame", 409);
       update.frame = frame;
     }

@@ -1,12 +1,13 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomBytes } from "node:crypto";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { MIMIC_SOUNDS } from "../mimicSounds.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
+import { kickRefusal, roomLook } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -20,7 +21,7 @@ import { gameStarted } from "../metrics.js";
  * No schema: everyone gets the "mimic" message after every change.
  */
 type Meta = {
-  host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean;
+  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean;
   players: number; maxPlayers: number; spectators: number;
 };
 type Settings = { roomType?: string; rounds?: number; category?: string };
@@ -32,6 +33,7 @@ type Seat = {
   uid: string;
   avatar: number;
   frame: number;
+  vip?: string; // "vip" | "pro": his badge by his name
   connected: boolean;
   left: boolean;
   token: string; // for his takes' uploads
@@ -79,7 +81,8 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private admins = new Set<string>(); // the admin app watching, unseen (its God Eye: nothing is hidden)
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
-  private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
+  private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // …and whose face it shows
+  private look = { name: "", style: "" }; // a VIP Pro host's name and style for his room in the lists
   private round = 0;
   private deck: string[] = []; // the sounds still to come
   private sound = "";
@@ -107,8 +110,9 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     on("done", (c) => this.handleDone(this.idOf(c)));
     on("next", (c) => this.handleNext(this.idOf(c)));
     on("play_again", (c) => this.handlePlayAgain(c));
-    on<{ id: string }>("kick", (c, m) => this.handleKick(c, m.id));
+    on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
@@ -135,7 +139,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     }
     // Kicked by the host: kept out while he is the host.
     const kicker = this.banned.get(account?.uid ?? String(options.playerId ?? ""));
-    if (kicker && kicker === this.seat(this.hostId)?.playerId) throw new ServerError(4403, "banned");
+    if (kicker && this.seats.some((s) => s.playerId === kicker)) throw new ServerError(4403, "banned");
     // He left this game: back to the seat he had, whichever door he comes through.
     if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
@@ -187,6 +191,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(),
       frame: account?.frame ?? randomFrame(),
+      vip: vipLevel(account),
       connected: true,
       left: false,
       token: randomBytes(12).toString("hex"),
@@ -319,16 +324,40 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     this.startRound();
   }
 
-  /** The host, in the waiting room: a player out of the room, kept out while he is the host (his invite lets him in). */
-  private handleKick(client: Client, id: string) {
-    const seat = this.seat(id);
-    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || !seat || id === this.hostId) return;
-    this.banned.set(seat.playerId, this.seat(this.hostId)!.playerId);
+  /**
+   * Out of the waiting room, and kept out while whoever put him out is here (the host's invite lets him in): by the
+   * host, or by a VIP Pro who isn't (3 a month); a VIP Pro only by a VIP Pro.
+   */
+  private async handleKick(client: Client, id: string) {
+    const seat = this.seat(id), by = this.seat(this.idOf(client));
+    if (this.phase !== "lobby" || !by || !seat || seat === by) return;
+    const refused = await kickRefusal(by, by.id === this.hostId, seat);
+    if (refused) return client.send("mimic_error", { code: refused });
+    if (this.phase !== "lobby" || !this.seat(id)) return; // (the game began, or he left, meanwhile)
+    this.banned.set(seat.playerId, by.playerId);
     const kicked = this.connectionOf(id);
     kicked?.send("kicked");
     this.removeSeat(id);
     this.updateListing();
     kicked?.leave(4000);
+    this.sync();
+  }
+
+  /** A VIP Pro host names his room and picks its style, for the lists. */
+  private handleLook(client: Client, msg: unknown) {
+    if (this.idOf(client) !== this.hostId || this.seat(this.hostId)?.vip !== "pro") return;
+    this.look = roomLook(msg);
+    this.updateListing();
+  }
+
+  /** Support banned this player: out at once, the table told "removed by support"; mid-game his seat plays on as usual. */
+  removeBanned(uid: string) {
+    for (const [id, member] of this.members) {
+      if (member !== uid) continue;
+      const seat = this.seat(id);
+      if (seat) this.broadcast("removed", { name: seat.name });
+      this.connectionOf(id)?.leave(4000); // (4000: a leave, not a drop — no seat held for him)
+    }
   }
 
   private removeSeat(id: string) {
@@ -487,13 +516,16 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     // left (another player may be the host by then, or nobody).
     const host = this.seat(this.hostId);
     if (host && (this.phase === "lobby" || !this.listedHost.name)) {
-      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
+      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame, vip: host.vip ?? "" };
     }
     this.setMatchmaking({
       metadata: {
         host: this.listedHost.name,
         hostAvatar: this.listedHost.avatar,
         hostFrame: this.listedHost.frame,
+        hostVip: this.listedHost.vip,
+        roomName: this.look.name,
+        roomStyle: this.look.style,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,
@@ -525,7 +557,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
       takeAt: this.takeAt,
       scoreAt: this.scoreAt,
       seats: this.seats.map((s) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, connected: s.connected, bot: "",
+        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, bot: "",
         left: s.left, takes: s.takes, done: s.done, ready: s.ready, ms: s.ms,
         score: shown(s) ? s.score : -1, scores: s.scores,
       })),

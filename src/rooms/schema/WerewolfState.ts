@@ -6,6 +6,7 @@ export const PlayerState = schema({
   uid: t.string().default(""), // his account (empty for guests): the app opens his profile card from it
   avatar: t.number().default(0), // his avatar (see avatars.ts); test clients wear one at random
   frame: t.number().default(0), // his animated frame, 0 none
+  vip: t.string().default(""), // "vip" | "pro": his badge by his name
   alive: t.boolean().default(true),
   connected: t.boolean().default(true),
   votedFor: t.string().default(""), // day votes are public; cleared each vote phase

@@ -41,6 +41,9 @@ export function leaveRoom(uid: string, roomId: string) {
   changed(uid);
 }
 
+/** The rooms he is in now, as a player or a spectator. */
+export const roomsOf = (uid: string) => [...(rooms.get(uid)?.keys() ?? [])];
+
 /** How many people have the app open right now (in a game or not): the home screen shows it. */
 export function onlineCount() {
   return new Set([...apps.keys(), ...rooms.keys()]).size;

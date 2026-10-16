@@ -11,6 +11,7 @@ import appConfig from "../src/app.config.js";
 import * as accounts from "../src/accounts.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
+import { cleanMissionPlan, cleanStorePlan, cleanTiers } from "../src/plans.js";
 import { appClosed, appOpened, enterRoom, leaveRoom, presenceSaved } from "../src/presence.js";
 import { kickFromApp } from "../src/rooms/PresenceRoom.js";
 import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.js";
@@ -189,7 +190,7 @@ describe("PocketBase", function () {
     it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false });
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "" });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
       // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
       const fresh = await newcomer();
@@ -581,6 +582,104 @@ describe("PocketBase", function () {
       assert.deepStrictEqual(mine.map((m) => [m.fromSupport, m.text]), [[false, "My coins are gone"], [true, "Sent them back"]]);
       assert.strictEqual((await other.pb.collection("support_messages").getFullList()).length, 0);
       assert.deepStrictEqual((await accounts.supportThread(p.id)).messages.map((m) => m.text), ["My coins are gone", "Sent them back"]);
+    });
+  });
+
+  describe("VIP, the weekly store, the missions' plan and the ranking's prizes", () => {
+    const DAY = 86_400_000;
+    const at = (date: string) => Date.parse(date.replace(" ", "T"));
+
+    it("makes a player VIP or VIP Pro for days (added to what he has) or for good; their time runs out", async () => {
+      const p = await player();
+      await accounts.grantVip(p.id, "vip", 7);
+      let u = await user(p.id);
+      assert.ok(u.vip && !u.vipPro && at(u.vipUntil) > Date.now() + 6.9 * DAY);
+      await accounts.grantVip(p.id, "vip", 3); // added to the 7
+      u = await user(p.id);
+      assert.ok(at(u.vipUntil) > Date.now() + 9.9 * DAY);
+      await accounts.grantVip(p.id, "pro", 30); // VIP Pro is VIP too: his own 10 VIP days run on after it
+      u = await user(p.id);
+      assert.ok(u.vip && u.vipPro && at(u.vipProUntil) > Date.now() + 29.9 * DAY && at(u.vipUntil) > Date.now() + 39.9 * DAY);
+      await accounts.grantVip(p.id, "pro", null); // for good
+      u = await user(p.id);
+      assert.deepStrictEqual([u.vip, u.vipPro, u.vipUntil, u.vipProUntil], [true, true, "", ""]);
+      await assert.rejects(accounts.grantVip(p.id, "vip", 0), /days/);
+      await accounts.grantVip(p.id, "off", null);
+      u = await user(p.id);
+      assert.deepStrictEqual([u.vip, u.vipPro], [false, false]);
+      // Time's up: the flags go off, and a VIP Pro avatar he doesn't own goes back to a free one.
+      const q = await player();
+      const past = "2020-01-01 00:00:00.000Z";
+      await admin.collection("users").update(q.id, { vip: true, vipPro: true, vipUntil: past, vipProUntil: past, avatar: 601 });
+      await accounts.savePlan("store", cleanStorePlan({ proAvatars: [601] }));
+      await accounts.expireVips();
+      u = await user(q.id);
+      assert.deepStrictEqual([u.vip, u.vipPro, u.avatar], [false, false, 103]);
+      await accounts.savePlan("store", cleanStorePlan({}));
+    });
+
+    it("sells only this week's items at the week's price; a VIP Pro wears VIP Pro's own for nothing", async () => {
+      const p = await player();
+      await admin.collection("users").update(p.id, { coins: 1000, diamonds: 0 });
+      await accounts.savePlan("store", cleanStorePlan({
+        start: weekKey(),
+        weeks: [{ avatars: [301], frames: [], cards: [] }],
+        prices: { avatars: { 301: { amount: 700, currency: "coins" } } },
+        proAvatars: [501],
+      }));
+      await assert.rejects(accounts.buyAvatar(p.idToken, 302), (e: any) => e instanceof accounts.StoreError && e.message === "not on sale");
+      await assert.rejects(accounts.buyAvatar(p.idToken, 501), /not on sale/); // VIP Pro's: never sold
+      await accounts.buyAvatar(p.idToken, 301);
+      assert.strictEqual((await user(p.id)).coins, 300);
+      await assert.rejects(accounts.updateProfile(p.idToken, { avatar: 501 }), /avatar/);
+      await accounts.grantVip(p.id, "pro", 1);
+      await accounts.updateProfile(p.idToken, { avatar: 501 });
+      assert.strictEqual((await user(p.id)).avatar, 501);
+      await accounts.savePlan("store", cleanStorePlan({}));
+    });
+
+    it("pays today's planned missions (not the usual ones), and doubles a VIP's coins and XP from games", async () => {
+      const p = await player();
+      await accounts.savePlan("missions", cleanMissionPlan({
+        daysStart: dayKey(), days: [[{ id: "m1", counter: "games", target: 1, coins: 42 }]], weeksStart: weekKey(), weeks: [],
+      }));
+      await accounts.recordResults([result(p.id, false)]);
+      await assert.rejects(accounts.claimMission(p.idToken, "d_play3"), /unknown mission/);
+      assert.deepStrictEqual(await accounts.claimMission(p.idToken, "m1"), { coins: 42, xp: 0, diamonds: 0 });
+      await accounts.savePlan("missions", cleanMissionPlan({}));
+      // A VIP wins double (10 minutes won: 30 XP and 30 coins, twice), his badge in the ranking.
+      await accounts.grantVip(p.id, "vip", 1);
+      const before = await user(p.id);
+      await accounts.recordResults([result(p.id, true)]);
+      const after = await user(p.id);
+      assert.deepStrictEqual([after.xp - before.xp, after.coins - before.coins], [60, 60]);
+      assert.strictEqual((await admin.collection("leaderboard").getOne(`${p.id}_${weekKey()}`)).vip, "vip");
+    });
+
+    it("Monday: last week's best win their prizes, each told in a message; the 1st: VIP diamonds; each once", async () => {
+      const [a, b, vip] = [await player(), await player(), await player()];
+      await accounts.grantVip(vip.id, "vip", 5);
+      const last = weekKey(Date.now() - 7 * DAY);
+      for (const [p, xp] of [[a, 900], [b, 800]] as const) {
+        await admin.collection("leaderboard").create({ id: `${p.id}_${last}`, week: last, user: p.id, xp, name: "x", avatar: 103 });
+      }
+      await accounts.savePlan("rewards", cleanTiers([{ from: 1, to: 1, coins: 500, vipDays: 3 }, { from: 2, to: 2, diamonds: 50 }]));
+      await admin.collection("admin_config").create({ id: "done", data: { rewardWeek: weekKey(Date.now() - 14 * DAY), gemsMonth: "2000-01" } });
+      const before = await Promise.all([a, b, vip].map((p) => user(p.id)));
+      await accounts.runSchedules();
+      const after = await Promise.all([a, b, vip].map((p) => user(p.id)));
+      assert.strictEqual(after[0].coins - before[0].coins, 500);
+      assert.ok(after[0].vip && at(after[0].vipUntil) > Date.now() + 2.9 * DAY);
+      assert.strictEqual(after[1].diamonds - before[1].diamonds, 50);
+      assert.strictEqual(after[2].diamonds - before[2].diamonds, accounts.VIP_DIAMONDS);
+      const [prize] = await a.pb.collection("notices").getFullList({ filter: 'kind = "reward"' });
+      assert.deepStrictEqual(prize.data, { rank: 1, week: last, coins: 500, diamonds: 0, vipDays: 3 });
+      assert.strictEqual((await vip.pb.collection("notices").getFullList({ filter: 'kind = "gems"' })).length, 1);
+      // Once: another round gives nothing more.
+      await accounts.runSchedules();
+      assert.strictEqual((await user(a.id)).coins, after[0].coins);
+      assert.strictEqual((await user(vip.id)).diamonds, after[2].diamonds);
+      await accounts.savePlan("rewards", []);
     });
   });
 

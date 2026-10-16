@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
@@ -9,6 +9,7 @@ import {
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
+import { kickRefusal, roomLook } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -26,14 +27,14 @@ import { gameStarted } from "../metrics.js";
  */
 type Mode = "duel" | "cup";
 type Meta = {
-  host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean;
+  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean;
   players: number; maxPlayers: number; spectators: number; mode: Mode;
 };
 type Settings = {
   roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
-type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; connected: boolean; bot: boolean; quit: boolean };
+type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
 /** One of the match's two players: a (blue) or b (red). */
 type Side = {
   id: string;
@@ -83,7 +84,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private admins = new Set<string>(); // the admin app watching, unseen (its God Eye: every secret footballer)
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
-  private listedHost = { name: "", avatar: 0, frame: 0 }; // …and whose face it shows
+  private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // …and whose face it shows
+  private look = { name: "", style: "" }; // a VIP Pro host's name and style for his room in the lists
   private botSeq = 0;
   private matches: Match[] = []; // a cup's, in playing order (1 vs 1: one)
   private current = -1; // the match being played
@@ -119,8 +121,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     on<Question>("ask", (c, m) => this.handleAsk(this.idOf(c), m));
     on<{ player: string }>("guess", (c, m) => this.handleGuess(this.idOf(c), String(m.player)));
     on("concede", (c) => this.handleConcede(this.idOf(c)));
-    on<{ id: string }>("kick", (c, m) => this.handleKick(c, m.id));
+    on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
@@ -147,7 +150,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     }
     // Kicked by the host: kept out while he is the host.
     const kicker = this.banned.get(account?.uid ?? String(options.playerId ?? ""));
-    if (kicker && kicker === this.seat(this.hostId)?.playerId) throw new ServerError(4403, "banned");
+    if (kicker && this.seats.some((s) => s.playerId === kicker)) throw new ServerError(4403, "banned");
     // He left this game: back to the seat he had, whichever door he comes through.
     if (this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""))) return { account };
     if (options.spectator) {
@@ -199,6 +202,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       frame: account?.frame ?? randomFrame(),
+      vip: vipLevel(account),
       connected: true,
       bot: false,
       quit: false,
@@ -353,16 +357,40 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.later(BRACKET_MS, () => this.startMatch(0));
   }
 
-  /** The host, in the waiting room: a player out of the room, kept out while he is the host (his invite lets him in). */
-  private handleKick(client: Client, id: string) {
-    const seat = this.seat(id);
-    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || !seat || id === this.hostId || !!seat.bot) return;
-    this.banned.set(seat.playerId, this.seat(this.hostId)!.playerId);
+  /**
+   * Out of the waiting room, and kept out while whoever put him out is here (the host's invite lets him in): by the
+   * host, or by a VIP Pro who isn't (3 a month); a VIP Pro only by a VIP Pro.
+   */
+  private async handleKick(client: Client, id: string) {
+    const seat = this.seat(id), by = this.seat(this.idOf(client));
+    if (this.phase !== "lobby" || !by || !seat || seat === by || !!seat.bot) return;
+    const refused = await kickRefusal(by, by.id === this.hostId, seat);
+    if (refused) return client.send("guess_error", { code: refused });
+    if (this.phase !== "lobby" || !this.seat(id)) return; // (the game began, or he left, meanwhile)
+    this.banned.set(seat.playerId, by.playerId);
     const kicked = this.connectionOf(id);
     kicked?.send("kicked");
     this.removeSeat(id);
     this.updateListing();
     kicked?.leave(4000);
+    this.sync();
+  }
+
+  /** A VIP Pro host names his room and picks its style, for the lists. */
+  private handleLook(client: Client, msg: unknown) {
+    if (this.idOf(client) !== this.hostId || this.seat(this.hostId)?.vip !== "pro") return;
+    this.look = roomLook(msg);
+    this.updateListing();
+  }
+
+  /** Support banned this player: out at once, the table told "removed by support"; mid-game his seat plays on as usual. */
+  removeBanned(uid: string) {
+    for (const [id, member] of this.members) {
+      if (member !== uid) continue;
+      const seat = this.seat(id);
+      if (seat) this.broadcast("removed", { name: seat.name });
+      this.connectionOf(id)?.leave(4000); // (4000: a leave, not a drop — no seat held for him)
+    }
   }
 
   private removeSeat(id: string) {
@@ -556,13 +584,16 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     // left (another player may be the host by then, or nobody).
     const host = this.seat(this.hostId);
     if (host && (this.phase === "lobby" || !this.listedHost.name)) {
-      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
+      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame, vip: host.vip ?? "" };
     }
     this.setMatchmaking({
       metadata: {
         host: this.listedHost.name,
         hostAvatar: this.listedHost.avatar,
         hostFrame: this.listedHost.frame,
+        hostVip: this.listedHost.vip,
+        roomName: this.look.name,
+        roomStyle: this.look.style,
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,
@@ -599,7 +630,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       spectate: this.spectate,
       maxPlayers: this.capacity(),
       seats: this.seats.map((s) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, connected: s.connected, quit: s.quit,
+        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, quit: s.quit,
         bot: s.bot ? "normal" : "", // as at the other tables
       })),
       matches: this.matches,

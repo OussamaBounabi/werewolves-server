@@ -2,10 +2,14 @@ import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, type Account, type GameResult } from "../accounts.js";
+import {
+  accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, useRoleCard, vipLevel, type Account, type GameResult,
+} from "../accounts.js";
+import { dayKey } from "../missions.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
+import { emojisOpen, kickRefusal, roomLook } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /** The first roles: each has its own switch in the room state. */
@@ -27,7 +31,7 @@ const SPECIALS = [...CLASSIC, ...EXTRA] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
 type Meta = {
-  host: string; hostAvatar: number; hostFrame: number; roomType: string; started: boolean; players: number; maxPlayers: number;
+  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number;
   spectators: number;
   phase: string; day: number;
 };
@@ -42,14 +46,15 @@ type GameEvent = { seq: number; time: number; type: string; [param: string]: unk
 type DeathCause =
   | "wolves" | "witch" | "trap" | "hunter" | "whitewolf" | "vote" | "quit" | "timeout"
   | "love" | "dragon" | "barbe" | "barbe_fail" | "dictator" | "dictator_fail" | "joker" | "knight"
-  | "cat" | "mirror" | "priest" | "priest_fail" | "alchemist" | "alien" | "alien_fail" | "bomb" | "guitarist" | "killer";
+  | "cat" | "mirror" | "priest" | "priest_fail" | "alchemist" | "alien" | "alien_fail" | "bomb" | "guitarist" | "killer"
+  | "banned";
 /** Loners play for themselves: each kind is a side of its own (two of a kind, after a doubler's copy, share it). */
 type Loner = "whitewolf" | "alien" | "bomber" | "piper" | "guitarist" | "killer";
 type Team = "wolves" | "village" | Loner;
 type Winner = "werewolves" | "villagers" | "lovers" | Loner;
 /** One chat line, with its writer's look: his seat id changes when he leaves and comes back, his messages stay his. */
 type ChatLine = {
-  from: string; name: string; uid: string; avatar: number; frame: number; text: string; at: number;
+  from: string; name: string; uid: string; avatar: number; frame: number; vip?: string; text: string; at: number;
   wolvesOnly: boolean; // the pack's, at night
   dead?: boolean; // the graveyard's: the dead and the spectators, among themselves
   speaking?: boolean; // no text: a VIP spectator started talking to the dead
@@ -147,7 +152,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private spectators = new Set<string>(); // sessionIds watching, not playing
   private admins = new Set<string>(); // god view: invisible, see every role and secret, hear everyone
   private lastGod = "";
-  private listedHost = { name: "", avatar: 0, frame: 0 }; // the face of the room in the lists
+  private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // the face of the room in the lists
   private dropped = new Set<string>(); // players whose connection dropped (seat held)
   private heldSeats = new Map<string, { reject: Function }>(); // pending reconnections (Colyseus Deferred)
   private voteHistory: VoteRecord[] = [];
@@ -172,6 +177,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private rolePicks = new Map<string, Role>(); // the roles VIP Pro players picked for themselves (host or not)
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
   private vipPros = new Set<string>(); // …and of VIP Pro ones
+  private roleCards = new Set<string>(); // VIPs whose Master card (their role, chosen once a day) isn't played today
+  private look = { name: "", style: "" }; // a VIP Pro host's name and style for his room in the lists
   private spokeAt = new Map<string, number>(); // VIP spectators: when their last "is speaking" line was written
   private nightNews: string[] = []; // what the narrator tells at dawn: "protected" | "redhood" | "ancient" | "infection"
   private seerNews: Role[] = []; // the talking seer's finds of the night (the role, not who), told at dawn
@@ -265,7 +272,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("settings", (client, msg: Settings) => {
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
     });
-    this.onMessage("kick", (client, msg: { targetId: string }) => this.handleKick(client, msg));
+    this.onMessage("kick", (client, msg: { targetId: string }) => void this.handleKick(client, msg));
+    this.onMessage("room_look", (client, msg) => {
+      if (client.sessionId !== this.state.hostId || !this.vipPros.has(client.sessionId)) return;
+      this.look = roomLook(msg); // a VIP Pro host names his room and picks its style, for the lists
+      this.updateListing();
+    });
     this.onMessage("pick_role", (client, msg: { role: string | null }) => this.pickRole(client.sessionId, msg?.role));
     this.onMessage("spectator_speaking", (client) => this.handleSpectatorSpeaking(client));
     this.onMessage("transfer_host", (client, msg: { targetId: string }) => this.handleTransferHost(client, msg));
@@ -387,6 +399,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.sendHistory(client);
     if (client.auth?.account?.vip) this.vips.add(client.sessionId);
     if (client.auth?.account?.vipPro) this.vipPros.add(client.sessionId);
+    else if (client.auth?.account?.vip && client.auth.account.roleCardDay !== dayKey()) this.roleCards.add(client.sessionId);
     const uid: string | undefined = client.auth?.account?.uid;
     if (uid) {
       this.members.set(client.sessionId, uid);
@@ -414,6 +427,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? randomAvatar(), // no account (a test client): a character at random
       frame: account?.frame ?? randomFrame(),
+      vip: vipLevel(account),
     }));
     if (ghost === undefined) this.logEvent(this.state.hostId ? "joined" : "created", { name });
     if (!this.state.hostId || wasHost) this.setHost(client.sessionId);
@@ -682,8 +696,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.abandon.check(this.state.players.values());
   }
 
-  private removeFromLobby(id: string, kicked = false) {
-    this.logEvent(kicked ? "kicked" : "left", { name: this.nameOf(id) });
+  private removeFromLobby(id: string, how: "left" | "kicked" | "removed" = "left") {
+    this.logEvent(how, { name: this.nameOf(id) });
     this.rolePicks.delete(id);
     this.state.players.delete(id);
     this.playerIds.delete(id);
@@ -694,7 +708,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   /** A player gone for good mid-game dies on the spot, outside any night/vote resolution. */
-  private removeFromGame(id: string, reason: "quit" | "timeout") {
+  private removeFromGame(id: string, reason: "quit" | "timeout" | "banned") {
     if (!this.isAlive(id)) return;
     this.quitAlive.set(id, Date.now()); // leaving alive is a loss, whatever his team does
     this.kill(id, reason);
@@ -711,18 +725,38 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.endGameIfOver();
   }
 
-  /** Host only, waiting room only: removes a player and bans him until the host changes. */
-  private handleKick(client: Client, msg: { targetId: string }) {
-    const target = msg?.targetId;
-    if (this.state.phase !== "lobby" || client.sessionId !== this.state.hostId) return;
-    if (!target || target === client.sessionId || !this.state.players.has(target)) return;
+  /**
+   * Waiting room only: removes a player and bans him until the host changes. By the host, or by a VIP Pro who isn't (3 a
+   * month); a VIP Pro only by a VIP Pro.
+   */
+  private async handleKick(client: Client, msg: { targetId: string }) {
+    const target = msg?.targetId, by = client.sessionId;
+    if (this.state.phase !== "lobby" || !this.state.players.has(by)) return;
+    if (!target || target === by || !this.state.players.has(target)) return;
+    const face = (id: string) => ({ uid: this.accounts.get(id) ?? "", vip: this.vipPros.has(id) ? "pro" : "" });
+    const refused = await kickRefusal(face(by), by === this.state.hostId, face(target));
+    if (refused) return client.send("error", { code: refused });
+    if (this.state.phase !== "lobby" || !this.state.players.has(target)) return; // (it started, or he left, meanwhile)
     this.banned.add(this.playerIds.get(target) ?? target);
     this.heldSeats.get(target)?.reject("kicked"); // a disconnected player's held seat
     const kicked = this.clients.getById(target);
     kicked?.send("kicked");
-    this.removeFromLobby(target, true);
+    this.removeFromLobby(target, "kicked");
     this.updateListing();
     kicked?.leave(4000);
+  }
+
+  /** Support banned this player: out at once, everyone told "removed by support"; in a game he dies on the spot. */
+  removeBanned(uid: string) {
+    for (const [id, member] of [...this.members]) {
+      if (member !== uid) continue;
+      if (this.state.players.has(id)) {
+        if (this.state.phase === "lobby" || this.state.phase === "starting") this.removeFromLobby(id, "removed");
+        else if (this.gameRunning()) this.removeFromGame(id, "banned");
+        this.updateListing();
+      }
+      this.clients.getById(id)?.leave(4000); // (4000: a leave, not a drop — no seat held for him)
+    }
   }
 
   /** The host hands the room over to another player at the table (who is here): at any time, the game running or not. */
@@ -746,13 +780,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private updateListing() {
     const host = this.state.players.get(this.state.hostId);
     const waiting = this.state.phase === "lobby" || this.state.phase === "starting";
-    if (host && (waiting || !this.listedHost.name)) this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame };
+    if (host && (waiting || !this.listedHost.name)) {
+      this.listedHost = { name: host.name, avatar: host.avatar, frame: host.frame, vip: host.vip };
+    }
     this.setMatchmaking({
       maxClients: MAX_CONNECTIONS,
       metadata: {
         host: this.listedHost.name,
         hostAvatar: this.listedHost.avatar,
         hostFrame: this.listedHost.frame,
+        hostVip: this.listedHost.vip,
+        roomName: this.look.name,
+        roomStyle: this.look.style,
         roomType: this.state.roomType,
         started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,
@@ -833,10 +872,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.updateListing();
   }
 
-  /** A VIP Pro player's own role, picked in the waiting room (anything else: at random). Dealt to him if the game has it. */
+  /**
+   * A player's own role, picked in the waiting room (anything else: at random), dealt to him if the game has it: a VIP
+   * Pro's every game, a VIP's with his Master card (once a day).
+   */
   private pickRole(id: string, role: unknown) {
     const waiting = this.state.phase === "lobby" || this.state.phase === "starting";
-    if (!waiting || !this.vipPros.has(id) || !this.state.players.has(id)) return;
+    if (!waiting || !(this.vipPros.has(id) || this.roleCards.has(id)) || !this.state.players.has(id)) return;
     if (ROLES.includes(role as Role)) this.rolePicks.set(id, role as Role);
     else this.rolePicks.delete(id);
   }
@@ -921,16 +963,28 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const r of SPECIALS) mix[r] = on.includes(r);
     const deck = buildDeck(mix, ids.length);
 
-    // VIP Pro players get the role they picked, if the game has it (one card each: the first to pick it).
+    // Players who picked their role get it, if the game has it (one card each: the first to pick it). A VIP's Master
+    // card is spent for the day.
     for (const [id, role] of this.rolePicks) {
       if (!ids.includes(id) || !deck.includes(role)) continue;
       deck.splice(deck.indexOf(role), 1);
       this.roles.set(id, role);
       ids.splice(ids.indexOf(id), 1);
+      if (this.roleCards.delete(id)) useRoleCard(this.accounts.get(id) ?? "").catch((e) => console.error("master card", e));
     }
 
     shuffle(deck);
     ids.forEach((id, i) => this.roles.set(id, deck[i]));
+    // VIP Pro: a better chance of a special role. One dealt a plain villager swaps, one time in two, with someone else's
+    // special card.
+    for (const id of ids) {
+      if (!this.vipPros.has(id) || this.roles.get(id) !== "villager" || Math.random() < 0.5) continue;
+      const others = ids.filter((o) => !this.vipPros.has(o) && this.roles.get(o) !== "villager");
+      if (others.length === 0) continue;
+      const other = others[Math.floor(Math.random() * others.length)];
+      this.roles.set(id, this.roles.get(other)!);
+      this.roles.set(other, "villager");
+    }
     const dealt: Record<string, number> = {};
     for (const role of this.roles.values()) dealt[role] = (dealt[role] ?? 0) + 1;
     this.state.dealt = JSON.stringify(dealt);
@@ -2592,7 +2646,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** A VIP spectator starts talking to the dead: a line in their chat says so (one a minute at most). */
   private handleSpectatorSpeaking(client: Client) {
     const id = client.sessionId;
-    if (!this.spectators.has(id) || !this.vips.has(id) || !this.inGraveyard(id)) return;
+    if (!this.spectators.has(id) || !this.vipPros.has(id) || !this.inGraveyard(id)) return;
     const now = Date.now();
     if (now - (this.spokeAt.get(id) ?? 0) < SPEAKING_LINE_MS) return;
     this.spokeAt.set(id, now);
@@ -2603,6 +2657,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       uid: account?.uid ?? "",
       avatar: account?.avatar ?? 0,
       frame: account?.frame ?? 0,
+      vip: vipLevel(account),
       text: "",
       at: now,
       wolvesOnly: false,
@@ -2626,6 +2681,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       uid: player?.uid ?? account?.uid ?? "",
       avatar: player?.avatar ?? account?.avatar ?? 0,
       frame: player?.frame ?? account?.frame ?? 0,
+      vip: vipLevel(account),
       text,
       at: Date.now(),
       wolvesOnly: phase === "night",
@@ -2671,7 +2727,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const graveyard = this.gameRunning() && !player.alive;
     if (!graveyard && this.gameRunning() && (this.state.phase === "night" || player.silenced)) return;
     const emoji = msg?.id;
-    if (!emojiAllowed(this.emojiAt, id, emoji)) return;
+    if (!emojisOpen(this.vips.has(id)) || !emojiAllowed(this.emojiAt, id, emoji)) return;
     const payload = { from: id, id: emoji };
     if (!graveyard) return this.broadcast("emoji", payload);
     for (const c of this.clients) if (this.inGraveyard(c.sessionId)) c.send("emoji", payload);
@@ -2901,8 +2957,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.graveSent.add(id);
     const name = this.state.players.get(id)?.name ?? "spectator";
     const admin = this.admins.has(id);
-    // The dead talk among themselves; of those watching, only VIPs may talk to them.
-    const talk = !admin && (!this.spectators.has(id) || this.vips.has(id));
+    // The dead talk among themselves; of those watching, only VIP Pro may talk to them.
+    const talk = !admin && (!this.spectators.has(id) || this.vipPros.has(id));
     const access = await voiceToken(this.roomId, id, name, { talk, hear: true }, true, admin);
     this.clients.getById(id)?.send("voice_grave", access);
   }

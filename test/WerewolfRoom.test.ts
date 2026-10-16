@@ -203,21 +203,36 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.winner, "none");
   });
 
-  it("gives VIP Pro players the roles they picked, the host or not; not plain VIPs", async () => {
+  it("gives VIP Pro players the roles they picked, the host or not; a VIP his Master card's, once a day", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
     const clients: any[] = [];
     for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room));
     const r = room as any;
-    const [host, pro, vip] = clients;
+    const [host, pro, vip, spent] = clients;
     for (const c of [host, pro]) r.vipPros.add(c.sessionId); // (their accounts' flags, read when they join)
-    r.vips.add(vip.sessionId);
+    for (const c of [vip, spent]) r.vips.add(c.sessionId);
+    r.roleCards.add(vip.sessionId); // his Master card isn't played today; the other VIP's is
     host.send("settings", { testRole: "witch" }); // the host, from the room's settings
     pro.send("pick_role", { role: "seer" }); // another player, from his own
-    vip.send("pick_role", { role: "protector" }); // not VIP Pro: nothing
-    await waitFor(() => r.rolePicks.size === 2);
-    const dealt = Promise.all([host, pro].map((c) => c.waitForMessage("role_assigned", STEP)));
+    vip.send("pick_role", { role: "protector" }); // with his Master card
+    spent.send("pick_role", { role: "werewolf" }); // nothing: his card is spent
+    await waitFor(() => r.rolePicks.size === 3);
+    const dealt = Promise.all([host, pro, vip].map((c) => c.waitForMessage("role_assigned", STEP)));
     host.send("start_game");
-    assert.deepStrictEqual((await dealt).map((m: any) => m.role), ["witch", "seer"]);
+    assert.deepStrictEqual((await dealt).map((m: any) => m.role), ["witch", "seer", "protector"]);
+    assert.strictEqual(r.roleCards.has(vip.sessionId), false); // played: spent for today
+  });
+
+  it("support's ban mid-game: the player dies on the spot, removed by support, and is put out", async () => {
+    const { room, clients } = await startGame();
+    const r = room as any;
+    const banned = clients[1];
+    r.members.set(banned.sessionId, "uid-banned"); // (an account's: test clients have none)
+    const gone = clients[0].waitForMessage("player_gone", STEP);
+    r.removeBanned("uid-banned");
+    const event: any = await gone;
+    assert.deepStrictEqual([event.id, event.reason], [banned.sessionId, "banned"]);
+    assert.strictEqual(room.state.players.get(banned.sessionId)?.alive, false);
   });
 
   it("plays a night: protector → wolves → witch sees the victim and revives it", async function () {
@@ -808,7 +823,7 @@ describe("WerewolfRoom", () => {
     assert.ok(!r.spent.has(dragon.sessionId));
   });
 
-  it("watching: not a game my own living seat is in; a VIP talking to the dead leaves a line in their chat", async () => {
+  it("watching: not a game my own living seat is in; a VIP Pro talking to the dead leaves a line in their chat", async () => {
     const { room, clients } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 4, mayor: false }, 5);
     const r = room as any;
     // My seat is alive in this game: I come back to it, I don't watch (a living player would hear the dead).
@@ -820,7 +835,7 @@ describe("WerewolfRoom", () => {
     watcher.send("spectator_speaking"); // not a VIP: nothing
     await new Promise((done) => setTimeout(done, 100));
     assert.strictEqual(r.deadChatLog.length, 0);
-    r.vips.add(watcher.sessionId);
+    r.vipPros.add(watcher.sessionId); // (VIP Pro talks to the dead while watching)
     const heard = watcher.waitForMessage("chat");
     watcher.send("spectator_speaking");
     const line: any = await heard;

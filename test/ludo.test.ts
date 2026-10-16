@@ -108,6 +108,39 @@ describe("LudoRoom", () => {
     assert.strictEqual(room.seats.length, 2);
   });
 
+  it("VIP Pro: put out only by a VIP Pro; a VIP Pro host names his room and picks its style for the lists", async () => {
+    const room: any = await colyseus.createRoom("ludo", {});
+    const host = await colyseus.connectTo(room, { playerId: "host" });
+    const pro = await colyseus.connectTo(room, { playerId: "pro" });
+    for (const c of [host, pro]) c.onMessage("ludo", () => {});
+    room.seats[1].vip = "pro"; // (his account's, read as he joins)
+    const refused = host.waitForMessage("ludo_error");
+    host.send("kick", { id: pro.sessionId });
+    assert.strictEqual(((await refused) as any).code, "kick_pro");
+    assert.strictEqual(room.seats.length, 2);
+    host.send("room_look", { name: "  Les   loups ", style: "gold" }); // the host isn't VIP Pro: nothing
+    await new Promise((done) => setTimeout(done, 100));
+    assert.strictEqual(room.metadata.roomName, "");
+    room.seats[0].vip = "pro";
+    host.send("room_look", { name: "  Les   loups ", style: "gold" });
+    await new Promise((done) => setTimeout(done, 100));
+    assert.deepStrictEqual([room.metadata.roomName, room.metadata.roomStyle, room.metadata.hostVip], ["Les loups", "gold", "pro"]);
+  });
+
+  it("support's ban: the player is put out at once, the table told he was removed by support", async () => {
+    const room: any = await colyseus.createRoom("ludo", {});
+    const host = await colyseus.connectTo(room, { playerId: "host" });
+    const banned = await colyseus.connectTo(room, { playerId: "banned" });
+    for (const c of [host, banned]) c.onMessage("ludo", () => {});
+    room.members.set(banned.sessionId, "uid-banned"); // (an account's: test clients have none)
+    const name = room.seats[1].name;
+    const told = host.waitForMessage("removed");
+    room.removeBanned("uid-banned");
+    assert.deepStrictEqual(await told, { name });
+    await new Promise((done) => setTimeout(done, 200));
+    assert.deepStrictEqual(room.seats.map((s: any) => s.playerId), ["host"]);
+  });
+
   it("a host who leaves mid-game: the room keeps his face in the lists", async () => {
     const room: any = await colyseus.createRoom("ludo", {});
     const host = await colyseus.connectTo(room, { name: "Aya" });

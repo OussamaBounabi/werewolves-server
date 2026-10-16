@@ -31,6 +31,7 @@ export function periodEnds(now = Date.now()) {
 /** What a finished game adds to a player's mission counters. */
 export type Counters = { games: number; wins: number; wolfWins: number; villageWins: number; survived: number; minutes: number };
 export type Counter = keyof Counters;
+export const COUNTERS: readonly Counter[] = ["games", "wins", "wolfWins", "villageWins", "survived", "minutes"];
 
 export type Mission = {
   id: string;
@@ -57,11 +58,15 @@ export const MISSIONS: Mission[] = [
 export const DAILY_BONUS = { id: "d_all", coins: 100, xp: 50, diamonds: 0 };
 
 /** Whether [id] can be claimed from a period's progress document (counters + claimed ids). */
-export function claimable(id: string, progress: Partial<Counters> & { claimed?: Record<string, boolean> }): boolean {
+export function claimable(
+  id: string,
+  progress: Partial<Counters> & { claimed?: Record<string, boolean> },
+  missions: Mission[] = MISSIONS, // today's and this week's (plans.ts)
+): boolean {
   if (progress.claimed?.[id]) return false;
   if (id === DAILY_BONUS.id) {
-    return MISSIONS.filter((m) => m.period === "daily").every((m) => progress.claimed?.[m.id]);
+    return missions.filter((m) => m.period === "daily").every((m) => progress.claimed?.[m.id]);
   }
-  const m = MISSIONS.find((x) => x.id === id);
+  const m = missions.find((x) => x.id === id);
   return !!m && (progress[m.counter] ?? 0) >= m.target;
 }

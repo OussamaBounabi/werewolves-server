@@ -20,17 +20,21 @@ import { GuessRoom } from "./rooms/GuessRoom.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
 import { kickFromApp, PresenceRoom } from "./rooms/PresenceRoom.js";
-import { onlineCount, whereIs } from "./presence.js";
+import { onlineCount, roomsOf, whereIs } from "./presence.js";
 import { todayNow } from "./metrics.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
-  buyAvatar, buyFrame, claimMission, ClaimError, exchangeToken, isAdmin, ProfileError, StoreError, supportReply,
-  supportThread, supportThreads, updateProfile, type ProfileChanges,
+  buyAvatar, buyFrame, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError,
+  savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
-import { DAILY_BONUS, dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
+import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
+import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
+import {
+  avatarPrice, cardPrice, cleanMissionPlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
+} from "./plans.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
   return {
@@ -38,6 +42,9 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     host: r.metadata?.host ?? "",
     avatar: r.metadata?.hostAvatar ?? 0, // the host's, shown in the room lists
     frame: r.metadata?.hostFrame ?? 0,
+    hostVip: r.metadata?.hostVip ?? "", // "vip" | "pro": his badge
+    roomName: r.metadata?.roomName ?? "", // a VIP Pro host's name for his room…
+    roomStyle: r.metadata?.roomStyle ?? "", // …and its card's style
     roomType: r.metadata?.roomType ?? "public",
     players: r.metadata?.players ?? 0,
     maxPlayers: r.metadata?.maxPlayers ?? 0,
@@ -120,14 +127,21 @@ const server = defineServer({
     }),
     // Round-trip check for the app's ping display.
     api_ping: createEndpoint("/api/ping", { method: "GET" }, async () => ({ t: Date.now() })),
-    // Mission definitions and the current periods (the app reads progress from PocketBase).
-    api_missions: createEndpoint("/api/missions", { method: "GET" }, async () => ({
-      missions: MISSIONS,
-      dailyBonus: DAILY_BONUS,
-      day: dayKey(),
-      week: weekKey(),
-      ends: periodEnds(),
+    // Today's and this week's missions, and the current periods (the app reads progress from PocketBase).
+    api_missions: createEndpoint("/api/missions", { method: "GET" }, async () => {
+      const now = missionsNow(currentPlans().missions);
+      return { missions: [...now.daily, ...now.weekly], dailyBonus: now.bonus, day: dayKey(), week: weekKey(), ends: periodEnds() };
+    }),
+    // The store this week (it changes on Monday): avatars, frames and role cards on sale and their prices, VIP Pro's own
+    // avatars and frames, whether emojis are for VIPs only; VIP's diamonds a month and VIP Pro's kicks a month.
+    api_store: createEndpoint("/api/store", { method: "GET" }, async () => ({
+      ...storeNow(currentPlans().store),
+      ends: periodEnds().week,
+      vipDiamonds: VIP_DIAMONDS,
+      proKicks: PRO_KICKS,
     })),
+    // What each place of the weekly ranking wins (the ranking shows it): [{ from, to, coins, diamonds, vipDays }].
+    api_rewards: createEndpoint("/api/rewards", { method: "GET" }, async () => ({ tiers: currentPlans().rewards ?? [] })),
     // Claim a mission's reward: Authorization: Bearer <Firebase ID token>, body { id }.
     api_claim: createEndpoint("/api/missions/claim", { method: "POST" }, async (ctx) => {
       const token = bearer(ctx);
@@ -252,8 +266,64 @@ const server = defineServer({
     api_admin_ban: adminEndpoint("/api/admin/ban", "POST", async (ctx) => {
       const { uid, days, reason, phone } = (ctx.body ?? {}) as { uid?: unknown; days?: unknown; reason?: unknown; phone?: unknown };
       const done = await adminBan(String(uid), Number(days), reason, phone === true);
-      if (Number(days) !== 0) kickFromApp(String(uid)); // out now: his app finds the ban as it reconnects
+      if (Number(days) !== 0) {
+        kickFromApp(String(uid)); // out now: his app finds the ban as it reconnects…
+        for (const roomId of roomsOf(String(uid))) { // …and out of the rooms he's in ("removed by support")
+          (matchMaker.getLocalRoomById(roomId) as unknown as { removeBanned?: (uid: string) => void } | undefined)?.removeBanned?.(String(uid));
+        }
+      }
       return done;
+    }),
+    // Admins only, for the admin app's Store and Missions: each plan as saved (null: none yet) with what's live now and
+    // the defaults; saved back whole to …/save (body { plan } / { tiers }), checked first. VIP for a player: body { uid, level:
+    // "vip" | "pro" | "off", days: null for good }.
+    api_admin_store: adminEndpoint("/api/admin/store", "GET", async () => {
+      const plan = currentPlans().store;
+      const avatars = Object.keys(AVATARS).map(Number).filter((id) => !FREE_AVATARS.includes(id));
+      return {
+        plan,
+        now: storeNow(plan),
+        defaults: {
+          avatars: Object.fromEntries(avatars.map((id) => [id, avatarPrice(null, id)])),
+          frames: Object.fromEntries(Object.keys(FRAMES).map(Number).map((id) => [id, framePrice(null, id)])),
+          cards: Object.fromEntries(Object.keys(ROLE_CARDS).map((role) => [role, cardPrice(null, role)])),
+        },
+      };
+    }),
+    api_admin_store_save: adminEndpoint("/api/admin/store/save", "POST", async (ctx) => {
+      const plan = cleanStorePlan((ctx.body as { plan?: unknown } | undefined)?.plan);
+      await savePlan("store", plan);
+      return { plan, now: storeNow(plan) };
+    }),
+    api_admin_missions: adminEndpoint("/api/admin/missions", "GET", async () => {
+      const plan = currentPlans().missions;
+      const now = missionsNow(plan);
+      return {
+        plan,
+        day: dayKey(),
+        week: weekKey(),
+        dayIndex: now.dayIndex,
+        weekIndex: now.weekIndex,
+        defaults: { daily: MISSIONS.filter((m) => m.period === "daily"), weekly: MISSIONS.filter((m) => m.period === "weekly"), bonus: missionsNow(null).bonus },
+      };
+    }),
+    api_admin_missions_save: adminEndpoint("/api/admin/missions/save", "POST", async (ctx) => {
+      const plan = cleanMissionPlan((ctx.body as { plan?: unknown } | undefined)?.plan);
+      await savePlan("missions", plan);
+      const now = missionsNow(plan);
+      return { plan, dayIndex: now.dayIndex, weekIndex: now.weekIndex };
+    }),
+    api_admin_rewards: adminEndpoint("/api/admin/rewards", "GET", async () => ({ tiers: currentPlans().rewards ?? [] })),
+    api_admin_rewards_save: adminEndpoint("/api/admin/rewards/save", "POST", async (ctx) => {
+      const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
+      await savePlan("rewards", tiers);
+      return { tiers };
+    }),
+    api_admin_vip: adminEndpoint("/api/admin/vip", "POST", async (ctx) => {
+      const { uid, level, days } = (ctx.body ?? {}) as { uid?: unknown; level?: unknown; days?: unknown };
+      if (level !== "vip" && level !== "pro" && level !== "off") throw new Error("level");
+      const user = await grantVip(String(uid), level, days === null || days === undefined ? null : Number(days));
+      return { vip: user.vip === true, vipPro: user.vipPro === true, vipUntil: user.vipUntil ?? "", vipProUntil: user.vipProUntil ?? "" };
     }),
     api_admin_reply: adminEndpoint("/api/admin/support/reply", "POST", async (ctx) => {
       const { uid, text } = (ctx.body ?? {}) as { uid?: unknown; text?: unknown };

@@ -1,4 +1,6 @@
 import type { Client, Room } from "colyseus";
+import { vipLevel } from "../accounts.js";
+import { emojisOpen } from "./perks.js";
 
 /** The emojis a player can show over his avatar (the apps have their pictures under these names). */
 export const EMOJIS = [
@@ -19,8 +21,8 @@ export function emojiAllowed(last: Map<string, number>, id: string, emoji: unkno
   return true;
 }
 
-type Face = { id: string; name: string; avatar: number; frame: number };
-type Line = { from: string; name: string; avatar: number; frame: number; text: string; at: number };
+type Face = { id: string; name: string; avatar: number; frame: number; vip?: string };
+type Line = { from: string; name: string; avatar: number; frame: number; vip: string; text: string; at: number };
 
 /**
  * The chat of the card and board games. Everyone in the room writes (spectators too); the apps also pop each line
@@ -44,7 +46,9 @@ export class TableTalk {
     room.onMessage("emoji", (client, msg: { id?: unknown }) => {
       const seat = this.seatOf(client);
       const emoji = msg?.id;
-      if (seat && emojiAllowed(this.emojiAt, seat.id, emoji)) room.broadcast("emoji", { from: seat.id, id: emoji });
+      if (seat && emojisOpen(!!seat.vip) && emojiAllowed(this.emojiAt, seat.id, emoji)) {
+        room.broadcast("emoji", { from: seat.id, id: emoji });
+      }
     });
   }
 
@@ -59,9 +63,11 @@ export class TableTalk {
     const seat = this.seatOf(client);
     const account = client.auth?.account;
     const face: Face = seat
-      ? { id: seat.id, name: seat.name, avatar: seat.avatar, frame: seat.frame }
-      : { id: this.idOf(client), name: account?.name ?? "spectator", avatar: account?.avatar ?? 0, frame: account?.frame ?? 0 };
-    const line: Line = { from: face.id, name: face.name, avatar: face.avatar, frame: face.frame, text: clean, at: Date.now() };
+      ? { id: seat.id, name: seat.name, avatar: seat.avatar, frame: seat.frame, vip: seat.vip }
+      : { id: this.idOf(client), name: account?.name ?? "spectator", avatar: account?.avatar ?? 0, frame: account?.frame ?? 0, vip: vipLevel(account) };
+    const line: Line = {
+      from: face.id, name: face.name, avatar: face.avatar, frame: face.frame, vip: face.vip ?? "", text: clean, at: Date.now(),
+    };
     this.lines.push(line);
     if (this.lines.length > HISTORY) this.lines.shift();
     this.room.broadcast("chat", line);
