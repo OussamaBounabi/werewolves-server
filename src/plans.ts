@@ -10,10 +10,21 @@ import { COUNTERS, DAILY_BONUS, MISSIONS, dayKey, weekKey, type Mission } from "
 
 export type Price = { amount: number; currency: "coins" | "diamonds" };
 
-/** Role cards (play the role you picked in your next game): on show in the store, not sold yet. Diamonds. */
+/**
+ * Role cards, one for every role but the plain villager (play the role you picked in your next game): on show in the
+ * store, not sold yet. Diamonds, by how much the role weighs on a game; the admin app sets any other price.
+ */
 export const ROLE_CARDS: Record<string, number> = {
-  werewolf: 25, seer: 20, witch: 20, protector: 15, hunter: 15, wildhunter: 15, detective: 15, bear: 10, redhood: 10,
-  tripleface: 20,
+  // the pack
+  werewolf: 25, fatherwolf: 30, blackwolf: 25, bluewolf: 20, greenwolf: 25, redwolf: 25, juniorwolf: 20, seerwolf: 30,
+  bigbadwolf: 30, chameleonwolf: 25, wolfdog: 20,
+  // the loners
+  whitewolf: 30, alien: 30, bomber: 30, piper: 30, guitarist: 30, killer: 30,
+  // the village
+  seer: 20, witch: 20, protector: 15, hunter: 15, wildhunter: 15, detective: 15, bear: 10, redhood: 10, tripleface: 20,
+  cupid: 15, wildchild: 15, dragon: 25, barbe: 20, dictator: 20, judge: 20, trickster: 15, fox: 15, ancient: 15,
+  doubler: 20, joker: 20, raven: 15, owl: 15, idiot: 10, knight: 15, brothers: 10, cat: 15, littlegirl: 15, shepherd: 15,
+  rabbit: 15, policeman: 20, mirror: 15, priest: 20, alchemist: 25, servant: 15, puppet: 15,
 };
 
 export type StoreWeek = { avatars: number[]; frames: number[]; cards: string[] };

@@ -33,6 +33,7 @@ describe("the admin's plans", () => {
     // Nothing planned: everything, at the usual prices.
     const all = storeNow(null, now);
     assert.ok(all.avatars.length > 50 && !all.avatars.some((a) => a.id === 103));
+    assert.strictEqual(all.cards.length, 52); // every role but the plain villager
     assert.deepStrictEqual(all.avatars.find((a) => a.id === 601), { id: 601, amount: 300, currency: "diamonds" });
   });
 
