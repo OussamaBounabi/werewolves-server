@@ -53,8 +53,10 @@ export function cycleIndex(start: string, now: string, n: number, days: number):
 const sellableAvatars = () => Object.keys(AVATARS).map(Number).filter((id) => !FREE_AVATARS.includes(id));
 const frameIds = () => Object.keys(FRAMES).map(Number);
 
-export const avatarPrice = (plan: StorePlan | null, id: number): Price => plan?.prices.avatars[id] ?? PRICES[AVATARS[id]];
-export const framePrice = (plan: StorePlan | null, id: number): Price => plan?.prices.frames[id] ?? FRAMES[id];
+// (Copies: the web layer writes an object met twice in one answer as the text "[Circular ref-N]", and every avatar of
+// a rarity has the same usual price.)
+export const avatarPrice = (plan: StorePlan | null, id: number): Price => ({ ...(plan?.prices.avatars[id] ?? PRICES[AVATARS[id]]) });
+export const framePrice = (plan: StorePlan | null, id: number): Price => ({ ...(plan?.prices.frames[id] ?? FRAMES[id]) });
 export const cardPrice = (plan: StorePlan | null, role: string) => plan?.prices.cards[role] ?? ROLE_CARDS[role];
 
 /**
@@ -72,8 +74,8 @@ export function storeNow(plan: StorePlan | null, now = Date.now()) {
     avatars: week.avatars.filter((id) => !pro.has(id)).map((id) => ({ id, ...avatarPrice(plan, id) })),
     frames: week.frames.filter((id) => !pro.has(-id)).map((id) => ({ id, ...framePrice(plan, id) })),
     cards: week.cards.map((role) => ({ role, diamonds: cardPrice(plan, role) })),
-    proAvatars: plan?.proAvatars ?? [],
-    proFrames: plan?.proFrames ?? [],
+    proAvatars: [...(plan?.proAvatars ?? [])], // (copies too: the admin's answers hold the plan as well)
+    proFrames: [...(plan?.proFrames ?? [])],
     emojisVipOnly: plan?.emojisVipOnly === true,
   };
 }

@@ -746,6 +746,17 @@ describe("PocketBase", function () {
       }
     });
 
+    it("answers the admin's store with every usual price an object (the web layer writes a shared one as text)", async () => {
+      const p = await player();
+      process.env.ADMIN_EMAILS = p.email;
+      const res = await fetch(`http://127.0.0.1:${GAME_PORT}/api/admin/store`, { headers: { authorization: `Bearer ${p.idToken}` } });
+      delete process.env.ADMIN_EMAILS;
+      const text = await res.text();
+      assert.strictEqual(res.status, 200);
+      assert.ok(!text.includes("[Circular"), text.slice(0, 300));
+      for (const price of Object.values(JSON.parse(text).defaults.avatars)) assert.strictEqual(typeof price, "object");
+    });
+
     it("answers /api/auth/exchange and /api/profile", async () => {
       const p = await player();
       const post = (path: string, body: unknown, token?: string) =>
