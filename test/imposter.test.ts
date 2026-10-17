@@ -159,6 +159,28 @@ describe("ImposterRoom", () => {
     room.disconnect();
   });
 
+  it("up to four imposters, always fewer than the others (four need nine players); a talk of up to 15 minutes", async () => {
+    const room: any = await colyseus.createRoom("imposter", { imposters: 4, talk: 900 });
+    assert.deepStrictEqual([room.imposters, room.talkSeconds], [4, 900]);
+    room.applySettings({ imposters: 5, talk: 1000 }); // (not allowed: unchanged)
+    assert.deepStrictEqual([room.imposters, room.talkSeconds], [4, 900]);
+    let error = "";
+    const host = await colyseus.connectTo(room);
+    host.onMessage("imposter", () => {});
+    host.onMessage("imposter_error", (e: any) => (error = e.code));
+    for (let i = 0; i < 7; i++) (await colyseus.connectTo(room)).onMessage("imposter", () => {});
+    await until(() => room.seats.length === 8);
+    host.send("start_game");
+    await until(() => error === "too_few_imposters");
+    assert.strictEqual(room.phase, "lobby");
+    (await colyseus.connectTo(room)).onMessage("imposter", () => {}); // the ninth
+    await until(() => room.seats.length === 9);
+    host.send("start_game");
+    await until(() => room.phase !== "lobby");
+    assert.strictEqual(room.seats.filter((s: any) => s.imposter).length, 4);
+    room.disconnect();
+  });
+
   it("lets people watch a running game without a seat or a card, then sit down in the waiting room", async () => {
     const lobby: any = await colyseus.createRoom("imposter", {});
     await colyseus.connectTo(lobby, { name: "A" });

@@ -10,7 +10,7 @@ import { kickRefusal, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
- * Imposter: everyone gets the same secret word, except one or two imposters who only know its category. They
+ * Imposter: everyone gets the same secret word, except one to four imposters who only know its category. They
  * talk (the mic) until the timer ends or most of them want to vote, then everyone votes (or skips). The most
  * voted player is revealed: an imposter gets one guess at the word — right, and the imposters win anyway.
  * One vote decides the game, or (a room setting) the voted player is out and the rounds go on until the
@@ -46,7 +46,7 @@ type Seat = {
 type Phase = "lobby" | "reveal" | "talk" | "vote" | "verdict" | "guess" | "result";
 
 const ROOM_TYPES = ["public", "friends", "private"];
-const TALK_OPTIONS = [60, 120, 180, 240, 300];
+const TALK_OPTIONS = [60, 120, 180, 300, 600, 900]; // the talk: 1 to 15 minutes
 const MAX_SEATS = 12;
 const MAX_SPECTATORS = 20;
 const LOG_LINES = 30;
@@ -331,7 +331,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private applySettings(s: Settings) {
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     const n = Number(s.imposters);
-    if (n === 1 || n === 2) this.imposters = n;
+    if (Number.isInteger(n) && n >= 1 && n <= 4) this.imposters = n;
     if (s.category === "random" || CATEGORIES.includes(s.category as string)) this.category = s.category as string;
     if (TALK_OPTIONS.includes(Number(s.talk))) this.talkSeconds = Number(s.talk);
     if (s.mode === "single" || s.mode === "elimination") this.mode = s.mode;
@@ -341,7 +341,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < MIN_PLAYERS) return "not_enough_players";
-    if (this.seats.length < 2 * this.imposters + 1) return "too_few_for_two"; // two imposters: five players at least
+    // The imposters are always fewer than the others: two need five players, three seven, four nine.
+    if (this.seats.length < 2 * this.imposters + 1) return this.imposters === 2 ? "too_few_for_two" : "too_few_imposters";
     for (const id of this.spectators.keys()) this.sendGrave(this.connectionOf(id)); // still watching from the last game
     const pool = this.category === "random" ? WORDS : wordsOf(this.category);
     this.word = pool[Math.floor(Math.random() * pool.length)];
