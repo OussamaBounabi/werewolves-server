@@ -122,6 +122,7 @@ describe("LudoRoom", () => {
     await new Promise((done) => setTimeout(done, 100));
     assert.strictEqual(room.metadata.roomName, "");
     room.seats[0].vip = "pro";
+    room.looks.join(host.sessionId, { uid: "u-host", vipPro: true, roomLook: null }); // (his account's, as he joins)
     host.send("room_look", { name: "  Les   loups ", style: "gold" });
     await new Promise((done) => setTimeout(done, 100));
     assert.deepStrictEqual([room.metadata.roomName, room.metadata.roomStyle, room.metadata.hostVip], ["Les loups", "gold", "pro"]);

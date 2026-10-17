@@ -22,6 +22,9 @@ const rooms = voiceEnabled ? new RoomServiceClient(api, key, secret) : null;
 
 export type VoiceRights = { talk: boolean; hear: boolean };
 
+/** Nothing: what an access to a werewolf voice room carries (the room grants the rights of the moment once he's in). */
+export const NO_VOICE: VoiceRights = { talk: false, hear: false };
+
 /** Each game room has two voice rooms: the living one, and the graveyard for the dead and spectators. */
 const voiceRoom = (roomId: string, grave = false) => `werewolf-${roomId}${grave ? "-grave" : ""}`;
 
@@ -84,8 +87,24 @@ export async function setVoiceRights(roomId: string, identity: string, rights: V
 }
 
 /** He left the game room: out of its voice too (a modified app can't stay and listen). */
-export async function dropFromVoice(roomId: string, identity: string) {
-  await rooms?.removeParticipant(voiceRoom(roomId), identity);
+export async function dropFromVoice(roomId: string, identity: string, grave = false) {
+  await rooms?.removeParticipant(voiceRoom(roomId, grave), identity);
+}
+
+/** Who is in a game's voice room now, and what the voice server lets each of them do. */
+export async function voiceParticipants(roomId: string, grave = false) {
+  if (!rooms) return [];
+  return (await rooms.listParticipants(voiceRoom(roomId, grave))).map((p) => ({
+    identity: p.identity,
+    talk: !!p.permission?.canPublish,
+    hear: !!p.permission?.canSubscribe,
+  }));
+}
+
+/** One participant's rights, set now (no retries: the werewolf room checks its voice rooms again every second). */
+export async function grantVoice(roomId: string, identity: string, rights: VoiceRights, { grave = false, hidden = false } = {}) {
+  const permission = { canPublish: rights.talk, canSubscribe: rights.hear, canPublishData: false, hidden };
+  await rooms?.updateParticipant(voiceRoom(roomId, grave), identity, { permission });
 }
 
 export async function closeVoice(roomId: string, { graveOnly = false } = {}) {

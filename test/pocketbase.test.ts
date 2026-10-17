@@ -190,7 +190,7 @@ describe("PocketBase", function () {
     it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "" });
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roomLook: null });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
       // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
       const fresh = await newcomer();
@@ -246,7 +246,7 @@ describe("PocketBase", function () {
       await accounts.giveWelcomeGifts();
       await accounts.giveWelcomeGifts();
       const me = await user(p.id);
-      assert.deepStrictEqual([me.coins, me.diamonds, me.welcomeGift], [10_000, 1_000, true]);
+      assert.deepStrictEqual([me.coins, me.diamonds, me.welcomeGift], [1_000, 100, true]);
       assert.deepStrictEqual(me.stats, { games: 0, wins: 0, losses: 0 });
       assert.ok(Math.abs(Date.parse(me.createdAt.replace(" ", "T")) - Date.now()) < 60_000, me.createdAt);
       const info = await p.pb.collection("private_info").getOne(p.id);

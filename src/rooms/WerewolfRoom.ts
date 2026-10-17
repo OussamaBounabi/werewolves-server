@@ -1,7 +1,10 @@
 import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken, type VoiceRights } from "../voice.js";
+import {
+  closeVoice, dropFromVoice, grantVoice, NO_VOICE, setVoiceRights, voiceEnabled, voiceParticipants, voiceToken,
+  type VoiceRights,
+} from "../voice.js";
 import {
   accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, useRoleCard, vipLevel, type Account, type GameResult,
 } from "../accounts.js";
@@ -9,7 +12,7 @@ import { dayKey } from "../missions.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
-import { emojisOpen, kickRefusal, roomLook } from "./perks.js";
+import { emojisOpen, kickRefusal, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /** The first roles: each has its own switch in the room state. */
@@ -178,7 +181,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
   private vipPros = new Set<string>(); // …and of VIP Pro ones
   private roleCards = new Set<string>(); // VIPs whose Master card (their role, chosen once a day) isn't played today
-  private look = { name: "", style: "" }; // a VIP Pro host's name and style for his room in the lists
+  private looks = new RoomLooks(); // a VIP Pro host's name and style for his room in the lists (kept on his account)
+  private get look() {
+    return this.looks.of(this.state.hostId);
+  }
   private spokeAt = new Map<string, number>(); // VIP spectators: when their last "is speaking" line was written
   private nightNews: string[] = []; // what the narrator tells at dawn: "protected" | "redhood" | "ancient" | "infection"
   private seerNews: Role[] = []; // the talking seer's finds of the night (the role, not who), told at dawn
@@ -268,14 +274,15 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   onCreate(options: Settings = {}) {
     this.applySettings(options);
     this.clock.setTimeout(() => this.expire(), ROOM_LIFESPAN_MS);
+    if (voiceEnabled) this.clock.setInterval(() => { void this.checkVoice(); }, 1000);
 
     this.onMessage("settings", (client, msg: Settings) => {
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
     });
     this.onMessage("kick", (client, msg: { targetId: string }) => void this.handleKick(client, msg));
     this.onMessage("room_look", (client, msg) => {
-      if (client.sessionId !== this.state.hostId || !this.vipPros.has(client.sessionId)) return;
-      this.look = roomLook(msg); // a VIP Pro host names his room and picks its style, for the lists
+      // A VIP Pro host names his room and picks its style, for the lists (and every room he'll host).
+      if (client.sessionId !== this.state.hostId || !this.looks.set(client.sessionId, msg)) return;
       this.updateListing();
     });
     this.onMessage("pick_role", (client, msg: { role: string | null }) => this.pickRole(client.sessionId, msg?.role));
@@ -389,6 +396,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
+    this.looks.join(client.sessionId, client.auth?.account);
     if (client.auth?.admin) {
       this.admins.add(client.sessionId);
       this.sendGodHistory(client);
@@ -1425,7 +1433,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const client = this.clients.getById(id);
     const power = this.powerOf(id);
     if (power === "fatherwolf") client?.send("father_turn", { victim: this.wolfTarget });
-    if (power === "blackwolf") client?.send("black_turn", { blocked: this.lastSilenced.get(id) ?? null });
+    if (power === "blackwolf") {
+      // (night 1: the mayor has his first day ahead, he can't be silenced)
+      const mayor = this.state.dayNumber === 1 && this.state.mayorId ? this.state.mayorId : null;
+      client?.send("black_turn", { blocked: this.lastSilenced.get(id) ?? null, mayor });
+    }
   }
 
   /** Acting in the wolf powers step as [role] and still to act. */
@@ -1470,6 +1482,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (!id || !this.isAlive(target)) return; // himself too: no voice or vote tomorrow, but nobody votes against him
     if (target === this.lastSilenced.get(id)) {
       client.send("error", { code: "same_silence" });
+      return;
+    }
+    if (this.state.dayNumber === 1 && target === this.state.mayorId) {
+      client.send("error", { code: "mayor_first_day" }); // the new mayor has his first day
       return;
     }
     this.silences.set(id, target);
@@ -2128,6 +2144,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private morningNews() {
     for (const silenced of new Set(this.silences.values())) {
       if (!this.isAlive(silenced)) continue;
+      if (this.state.protectorShield && this.isProtected(silenced)) continue; // the shield stops the silence too
       this.state.players.get(silenced)!.silenced = true;
       this.clients.getById(silenced)?.send("silenced");
       this.logEvent("silenced", { name: this.nameOf(silenced) });
@@ -2926,6 +2943,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    */
   private voiceRightsOf(id: string): VoiceRights {
     if (this.admins.has(id)) return { talk: false, hear: true };
+    // Dusk and dawn (the night starting, the night ending): nobody talks and nobody hears until the voice server has
+    // made it so for everyone (checkVoice); only then the pack talks (night) or the village hears (day). Without it a
+    // wolf still talking at daybreak was heard by all, his circle lit, and the village heard the night's first words.
+    if (this.voiceGate && this.gameRunning()) return NO_VOICE;
     const phase = this.state.phase;
     const night = phase === "night";
     if (this.spectators.has(id)) return { talk: false, hear: !night };
@@ -2953,29 +2974,94 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   private graveSent = new Set<string>(); // given graveyard access
 
+  /** The graveyard: the dead talk among themselves; of those watching, only VIP Pro may talk to them. */
+  private graveRightsOf(id: string): VoiceRights {
+    return { talk: !this.admins.has(id) && (!this.spectators.has(id) || this.vipPros.has(id)), hear: true };
+  }
+
+  // A voice access gives no rights (NO_VOICE): checkVoice grants the rights of the moment once he's in. An access is
+  // good for hours, and LiveKit's app comes back with the same one after a dropped connection: with the rights it
+  // carried (those of the waiting room: hear everyone) a villager whose connection dropped at night heard the pack
+  // until the room closed, and one put out of the voice came straight back.
   private async sendGraveyard(id: string) {
     this.graveSent.add(id);
     const name = this.state.players.get(id)?.name ?? "spectator";
-    const admin = this.admins.has(id);
-    // The dead talk among themselves; of those watching, only VIP Pro may talk to them.
-    const talk = !admin && (!this.spectators.has(id) || this.vipPros.has(id));
-    const access = await voiceToken(this.roomId, id, name, { talk, hear: true }, true, admin);
+    const access = await voiceToken(this.roomId, id, name, NO_VOICE, true, this.admins.has(id));
     this.clients.getById(id)?.send("voice_grave", access);
   }
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
     const id = client.sessionId;
-    const rights = this.voiceRightsOf(id);
-    this.voiceRights.set(id, `${rights.talk},${rights.hear}`);
+    this.voiceRights.set(id, "joining"); // (checkVoice grants his rights once he's in)
     const name = this.state.players.get(id)?.name ?? "spectator";
     const hidden = this.admins.has(id);
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, id, name, rights, false, hidden)) });
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, id, name, NO_VOICE, false, hidden)) });
+  }
+
+  private voiceGate = false; // dusk or dawn: nobody talks or hears until the voice server has done it (voiceRightsOf)
+  private wasNight = false;
+  private checkingVoice = false;
+
+  /**
+   * The voice rooms as the voice server has them, against the game: whoever has other rights than his is corrected,
+   * and whoever the game doesn't know (he left, or was put out) is put out again. Every second; every 200 ms at dusk
+   * and dawn, whose gate opens once a check finds nobody to correct.
+   */
+  private async checkVoice() {
+    if (!voiceEnabled || this.checkingVoice) return;
+    this.checkingVoice = true;
+    try {
+      let corrected = false;
+      for (const p of await voiceParticipants(this.roomId)) {
+        if (!this.voiceRights.has(p.identity)) {
+          await dropFromVoice(this.roomId, p.identity).catch(() => {});
+          continue;
+        }
+        const rights = this.voiceRightsOf(p.identity);
+        this.voiceRights.set(p.identity, `${rights.talk},${rights.hear}`);
+        if (p.talk === rights.talk && p.hear === rights.hear) continue;
+        corrected = true;
+        await grantVoice(this.roomId, p.identity, rights, { hidden: this.admins.has(p.identity) }).catch(() => {});
+      }
+      if (this.voiceGate && !corrected) this.voiceGate = false; // all as the gate wants: the next patch opens it
+      if (this.graveSent.size > 0) {
+        for (const p of await voiceParticipants(this.roomId, true)) {
+          if (!this.graveSent.has(p.identity)) {
+            await dropFromVoice(this.roomId, p.identity, true).catch(() => {});
+            continue;
+          }
+          const rights = this.graveRightsOf(p.identity);
+          if (p.talk === rights.talk && p.hear === rights.hear) continue;
+          await grantVoice(this.roomId, p.identity, rights, { grave: true, hidden: this.admins.has(p.identity) }).catch(() => {});
+        }
+      }
+    } catch {
+      // (The voice server didn't answer: the next check tries again, and a gate stays shut until then.)
+    } finally {
+      this.checkingVoice = false;
+    }
+  }
+
+  /** At dusk and dawn: checks every 200 ms until the gate opens. */
+  private checkVoiceSoon() {
+    this.clock.setTimeout(async () => {
+      await this.checkVoice();
+      if (this.voiceGate) this.checkVoiceSoon();
+    }, 200);
   }
 
   /** Runs before each patch: pushes changed rights to LiveKit (only when they change). */
   private syncVoice() {
     if (!voiceEnabled) return;
+    const night = this.gameRunning() && this.state.phase === "night";
+    if (night !== this.wasNight) {
+      this.wasNight = night;
+      if (this.gameRunning() && !this.voiceGate) {
+        this.voiceGate = true; // (pushed below, before the clients learn of the new phase)
+        this.checkVoiceSoon();
+      }
+    }
     if (!this.gameRunning() && this.graveSent.size > 0) {
       this.graveSent.clear(); // game over: everyone back together in the living room
       closeVoice(this.roomId, { graveOnly: true }).catch(() => {});

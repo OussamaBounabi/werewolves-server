@@ -10,7 +10,7 @@ import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { kickRefusal, roomLook } from "./perks.js";
+import { kickRefusal, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -107,7 +107,10 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // …and whose face it shows
-  private look = { name: "", style: "" }; // a VIP Pro host's name and style for his room in the lists
+  private looks = new RoomLooks(); // a VIP Pro host's name and style for his room in the lists (kept on his account)
+  private get look() {
+    return this.looks.of(this.hostId);
+  }
   private hands = new Map<string, number[]>();
   private opened = new Set<string>(); // laid down this round
   private staged = new Map<string, number[][]>(); // melds being put together for the next lay-down (still in the hand)
@@ -217,6 +220,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const account: Account | null = client.auth?.account ?? null;
     const back = this.seatLeftBy(account?.uid ?? String(options.playerId ?? ""));
     if (back) this.returned.set(client.sessionId, back.id); // (first: everything below files him under his seat's id)
+    this.looks.join(this.idOf(client), client.auth?.account);
     if (account) {
       this.members.set(this.idOf(client), account.uid);
       enterRoom(account.uid, this.roomName, this.roomId);
@@ -336,7 +340,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
     }
     const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk: !!this.seat(this.idOf(client)), hear: true })) });
+    // Players talk; of those watching, only VIP Pro.
+    const talk = !!this.seat(this.idOf(client)) || client.auth?.account?.vipPro === true;
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk, hear: true })) });
   }
 
   // ---- the waiting room ----
@@ -499,8 +505,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   /** A VIP Pro host names his room and picks its style, for the lists. */
   private handleLook(client: Client, msg: unknown) {
-    if (this.idOf(client) !== this.hostId || this.seat(this.hostId)?.vip !== "pro") return;
-    this.look = roomLook(msg);
+    if (this.idOf(client) !== this.hostId || !this.looks.set(this.hostId, msg)) return;
     this.updateListing();
   }
 

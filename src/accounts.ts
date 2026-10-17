@@ -133,6 +133,7 @@ export type Account = {
   vip: boolean;
   vipPro: boolean;
   roleCardDay: string; // the day a VIP last played the role his Master card chose (one a day)
+  roomLook: unknown; // a VIP Pro's saved room name and style (rooms/perks.ts checks it)
 };
 
 /** "pro", "vip" or "": the badge a player wears by his name (a VIP Pro is a VIP too). */
@@ -153,7 +154,13 @@ export async function accountFor(idToken: string): Promise<Account> {
     vip: user.vip === true,
     vipPro: user.vipPro === true, // (a VIP Pro is a VIP too)
     roleCardDay: String(user.roleCardDay ?? ""),
+    roomLook: user.roomLook ?? null,
   };
+}
+
+/** A VIP Pro's room name and style, kept for every room he hosts (already checked by rooms/perks.ts). */
+export async function saveRoomLook(uid: string, look: { name: string; style: string }) {
+  await (await db()).collection("users").update(uid, { roomLook: look });
 }
 
 /** Whether this Firebase ID token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
@@ -836,7 +843,7 @@ export async function grantAllAvatars(email: string) {
 }
 
 /** For now, every new player starts with a gift. Given once, soon after his account appears. */
-const WELCOME_GIFT = { coins: 10_000, diamonds: 1_000 };
+const WELCOME_GIFT = { coins: 1_000, diamonds: 100 };
 const WELCOME_EVERY_MS = 10_000;
 
 /** The game server calls this once, at start: new accounts get their welcome gift (those it missed while down, too). */

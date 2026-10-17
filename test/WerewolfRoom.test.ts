@@ -1155,6 +1155,46 @@ describe("WerewolfRoom", () => {
     await waitFor(() => r.silences.get(black.sessionId) === black.sessionId);
   });
 
+  it("the black wolf can't silence the mayor on night 1; the protector's shield stops a silence", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 0, villagers: 4, blackwolf: true, mayor: false };
+    const { room, clients, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const black = byRole("blackwolf");
+    const [mayor, other] = clients.filter((c: any) => c !== black);
+    room.state.mayorId = mayor.sessionId; // (as if the village had elected him before the first night)
+    await waitFor(() => room.state.nightStep === "wolves");
+    black.send("wolf_target", { targetId: other.sessionId });
+    await waitFor(() => room.state.nightStep === "wolf_powers", STEP);
+    const refused = black.waitForMessage("error");
+    black.send("silence", { targetId: mayor.sessionId });
+    assert.deepStrictEqual(await refused, { code: "mayor_first_day" });
+    room.state.dayNumber = 2; // from night 2 on, he may…
+    r.protects.set("a-protector", mayor.sessionId); // …but the protector watches over him tonight
+    black.send("silence", { targetId: mayor.sessionId });
+    await waitFor(() => room.state.phase !== "night", STEP); // daybreak
+    // The shield (on unless the host turns it off) stopped the silence; without it, he's silenced.
+    assert.strictEqual(r.silences.get(black.sessionId), mayor.sessionId);
+    assert.strictEqual(room.state.players.get(mayor.sessionId)?.silenced, false);
+    room.state.protectorShield = false;
+    r.morningNews();
+    assert.strictEqual(room.state.players.get(mayor.sessionId)?.silenced, true);
+  });
+
+  it("dusk and dawn: nobody talks or hears in the village until the voice server has done it", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, mayor: false };
+    const { room, clients, roles } = await startGame(mix, 4);
+    const r = room as any;
+    await waitFor(() => room.state.phase === "night");
+    const rights = () => clients.map((c: any) => r.voiceRightsOf(c.sessionId));
+    r.voiceGate = true; // (the voice server hasn't confirmed yet)
+    assert.ok(rights().every((v: any) => !v.talk && !v.hear));
+    r.voiceGate = false; // confirmed: the pack talks and hears, the others hear nothing
+    assert.deepStrictEqual(
+      rights(),
+      roles.map((role: string) => (role === "werewolf" ? { talk: true, hear: true } : { talk: false, hear: false })),
+    );
+  });
+
   it("after the game, the host's new room takes the table: Play again gets in, even a private one", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
     const host = await colyseus.connectTo(room, { playerId: "host-device" });
