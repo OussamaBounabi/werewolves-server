@@ -1612,6 +1612,33 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual([state(white).alive, state(priest).alive], [false, true]);
   });
 
+  it("a protector's ward stops the dragon's fire, the white wolf and the holy water, not the guitarist's song", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, dragon: true, priest: true, guitarist: true, whitewolf: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 7);
+    const r = room as any;
+    const [dragon, priest, guitarist, wolf] = ["dragon", "priest", "guitarist", "werewolf"].map(byRole);
+    const [villager, other] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    const alive = (c: any) => room.state.players.get(c.sessionId)!.alive;
+
+    // The ward on a villager and on the wolf: the fire, the white wolf's kill and the holy water come to nothing.
+    r.protects = new Map([["a", villager.sessionId], ["b", wolf.sessionId]]);
+    r.dragonFires = new Map([[dragon.sessionId, villager.sessionId]]);
+    r.whiteTargets = new Set([wolf.sessionId]);
+    r.flasks = [{ by: priest.sessionId, target: wolf.sessionId, role: "priest" }];
+    r.spent.add(dragon.sessionId); // (as when he picks)
+    r.resolveNight();
+    assert.deepStrictEqual([villager, wolf, dragon, priest].map(alive), [true, true, true, true]);
+    assert.ok(r.spent.has(dragon.sessionId)); // his fire is gone all the same: it took nobody
+
+    // The guitarist's song still kills a protected player.
+    r.dragonFires = new Map();
+    r.whiteTargets = new Set();
+    r.flasks = [];
+    r.strums = [{ by: guitarist.sessionId, targets: [villager.sessionId, other.sessionId], role: "villager" }];
+    r.resolveNight();
+    assert.deepStrictEqual([villager, other].map(alive), [false, false]);
+  });
+
   it("the puppet takes the first dead pack wolf's role; the servant takes a dead village player's, fresh", async () => {
     const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, servant: true, puppet: true, seer: true, mayor: false };
     const { room, clients, roles, byRole } = await startGame(mix, 6);

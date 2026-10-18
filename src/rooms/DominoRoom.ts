@@ -18,7 +18,8 @@ import { gameStarted } from "../metrics.js";
  * Whoever plays his last tile scores every dot left in the opponents' hands; when nobody can play,
  * the fewest dots wins (a tie: nobody scores). 2 vs 2: partners face to face, one score per team; blocked, the
  * single lightest hand of the four wins for its team.
- * The first to the room's target wins the match.
+ * The first to the room's target wins the match. Then each player may press "play again": everyone did, the same table
+ * plays a new match from 0; one of them left, or a minute went by, whoever pressed goes back to the waiting room.
  *
  * No schema: each player gets his own "domino" message (the table, plus his tiles) after every change,
  * and "domino_fx" for what the apps animate (the deal, draws, plays, passes).
@@ -59,9 +60,12 @@ const PASS_MS = 1_200; // nothing fits and the pile is empty: shown, then the tu
 const READY_WAIT_MS = 30_000; // between rounds: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000;
 const RECONNECT_SECONDS = 600;
-const CLOSE_AFTER_GAME_MS = 60_000;
+const CLOSE_AFTER_GAME_MS = 60_000; // after a match: a minute to press "play again" (nobody did: the room closes)
 
 const MAX_SPECTATORS = 20;
+
+/** A bot the host put at the table (not a player's seat a bot plays on since he left). */
+const added = (s: Seat) => s.id.startsWith("bot-");
 
 export class DominoRoom extends Room<{ metadata: Meta }> {
   private abandon = new Abandon(this); // nobody left to play: the room closes by itself
@@ -126,6 +130,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     on<{ tile: number; side?: "left" | "right" }>("play", (c, m) => this.handlePlay(this.idOf(c), Number(m.tile), m.side));
     on("draw", (c) => this.handleDraw(this.idOf(c)));
     on("ready", (c) => this.handleReady(this.idOf(c)));
+    on("play_again", (c) => this.handlePlayAgain(this.idOf(c)));
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
@@ -262,6 +267,11 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
 
   onReconnect(client: Client) {
     const seat = this.seat(this.idOf(client));
+    // Away when the others went back to the waiting room without him: his seat went with the match.
+    if (!seat && !this.spectators.has(this.idOf(client)) && !this.admins.has(client.sessionId)) {
+      client.leave(4000);
+      return;
+    }
     if (seat) seat.connected = true;
     this.tableTalk.history(client);
     this.sync();
@@ -284,8 +294,9 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     }
     if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
-    else if (this.phase !== "gameover") this.becomeBot(id);
+    else this.becomeBot(id); // (after a match too: he won't play the next one)
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
+    this.afterGame(false); // (he was the one the others waited for)
     this.updateListing();
     this.sync();
   }
@@ -557,8 +568,9 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.broadcast("domino_fx", { type: "round_end", hands: Object.fromEntries(this.hands) });
     if (this.seats.some((s) => s.score >= this.target)) {
       this.phase = "gameover";
-      this.turnEndsAt = 0;
-      this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
+      this.ready = new Set(this.seats.filter(added).map((x) => x.id)); // (the host's bots always play again)
+      this.turnEndsAt = Date.now() + CLOSE_AFTER_GAME_MS;
+      this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), CLOSE_AFTER_GAME_MS);
       return;
     }
     this.phase = "round_end";
@@ -583,6 +595,72 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.timer?.clear();
     this.nextRoundAt = this.turnEndsAt = Date.now() + NEXT_ROUND_MS;
     this.timer = this.clock.setTimeout(() => (this.deal(), this.sync()), NEXT_ROUND_MS);
+  }
+
+  // ---- after a match ----
+
+  private handlePlayAgain(id: string) {
+    if (this.phase !== "gameover" || !this.seat(id) || this.seat(id)!.bot) return;
+    this.ready.add(id);
+    this.afterGame(false);
+  }
+
+  /**
+   * After a match. Everyone at the table pressed "play again": a new match from 0, same table, same settings. One of
+   * them left (a bot plays his seat), or the minute is up ([timeUp]): back to the waiting room with whoever pressed,
+   * the other seats free (who is still here goes home, as when the room closed). Nobody pressed: the room closes.
+   */
+  private afterGame(timeUp: boolean) {
+    if (this.phase !== "gameover") return;
+    const players = this.seats.filter((s) => !added(s));
+    if (!timeUp && players.some((s) => !s.bot && !this.ready.has(s.id))) return; // someone may still press
+    this.timer?.clear();
+    const again = players.filter((s) => this.pressed(s));
+    if (again.length === 0) {
+      this.abandon.closing = true; // (nobody's seat changes hands on the way out)
+      return void this.disconnect().catch(() => {});
+    }
+    if (again.length === players.length) return this.newMatch();
+    this.backToLobby();
+  }
+
+  /** The same table again, from 0: the highest double opens it, as a first game. */
+  private newMatch() {
+    this.clearMatch();
+    gameStarted(this.roomName); // (a new game in the admin app's numbers)
+    this.deal();
+  }
+
+  /** The waiting room again, with whoever pressed "play again" and the host's bots; those watching stay. */
+  private backToLobby() {
+    for (const s of [...this.seats]) {
+      if (added(s) || this.pressed(s)) continue;
+      const client = this.connectionOf(s.id);
+      this.removeSeat(s.id);
+      client?.leave(4000);
+    }
+    this.clearMatch();
+    this.hands.clear();
+    this.pile = [];
+    this.line = { first: null, left: [], right: [] };
+    this.turn = "";
+    this.turnEndsAt = 0;
+    this.phase = "lobby";
+    this.updateListing();
+  }
+
+  /** He pressed "play again" and is still here (one who left since is a bot now: he doesn't count). */
+  private pressed(s: Seat) {
+    return !s.bot && this.ready.has(s.id);
+  }
+
+  private clearMatch() {
+    this.round = 0;
+    this.lastWinner = "";
+    this.history = [];
+    this.teamScores = [0, 0];
+    for (const s of this.seats) s.score = 0;
+    this.ready.clear();
   }
 
   // ---- bots ----

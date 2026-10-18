@@ -207,7 +207,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private reviving = false;
   private poisons = new Map<string, string>(); // poisoner → target
   private paralysed = new Map<string, string>(); // red wolf → his pick: no power for that player tonight
-  private whiteTargets = new Set<string>(); // the white wolves' kills (even nights): nothing saves them
+  private whiteTargets = new Set<string>(); // the white wolves' kills (even nights): the cage and a protector's ward stop them
   private powerActors = new Set<string>(); // wolf powers step: father / black wolves still to act
   private infectNow = false; // a father wolf turned the pack's victim instead of killing him
   private silences = new Map<string, string>(); // black wolf → his pick, silenced tomorrow
@@ -2059,13 +2059,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (!this.isAlive(target) || this.isCaged(target)) return;
       if (potion && trapped(target)) return dies(by, "trap");
       if (cause === "witch" && UNTOUCHABLE.has(this.roles.get(target))) return; // her poison can't kill those loners
-      // A protector's ward (infected or not) stops the witch's poison and the alchemist's.
-      if ((cause === "witch" || cause === "alchemist") && this.isProtected(target)) return;
+      // A protector's ward (infected or not) stops them all: the witch's poison, the alchemist's, the priest's holy
+      // water, the dragon's fire (spent all the same). Of the night's deaths only the guitarist's song and a broken
+      // heart get past it (and those a player brings on himself: a trap, the mirror, a wolf's house).
+      if (this.isProtected(target)) return;
       if (this.mirrors(by, target)) return dies(by, "mirror");
       dies(target, cause);
     };
     for (const [poisoner, target] of this.poisons) strike(poisoner, target, "witch", true);
-    for (const target of this.whiteTargets) if (this.isAlive(target) && !this.isCaged(target)) dies(target, "whitewolf");
+    for (const target of this.whiteTargets) {
+      if (this.isAlive(target) && !this.isCaged(target) && !this.isProtected(target)) dies(target, "whitewolf");
+    }
     for (const [dragon, target] of this.dragonFires) strike(dragon, target, "dragon", false);
     for (const { by, target, role } of this.flasks) {
       if (role === "alchemist") strike(by, target, "alchemist", true);

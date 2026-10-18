@@ -153,4 +153,70 @@ describe("DominoRoom", () => {
     await other.leave();
     room.disconnect();
   });
+
+  it("after a match: all press play again, a new match from 0; one left, or the minute is up, the waiting room", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const room: any = await colyseus.createRoom("domino", {});
+    const join = async () => {
+      const c: any = await colyseus.connectTo(room);
+      c.onMessage("domino", () => {});
+      c.onMessage("domino_fx", () => {});
+      return c;
+    };
+    const host = await join(), guest = await join();
+    host.send("add_bot", { level: "easy" });
+    await sleep(100);
+    room.target = 1; // the first round wins the match
+    const play = async () => {
+      host.send("start_game");
+      while (room.phase !== "playing") await sleep(20);
+      room.endRound(host.sessionId, false);
+      assert.strictEqual(room.phase, "gameover");
+    };
+    await play();
+    // Both press: the same table, a new match from 0.
+    host.send("play_again");
+    guest.send("play_again");
+    while (room.phase !== "playing") await sleep(20);
+    assert.deepStrictEqual([room.round, room.history.length, room.seats.map((s: any) => s.score)], [1, 0, [0, 0, 0]]);
+
+    // The host presses, the guest leaves: back to the waiting room, his seat free, the host's bot still there.
+    room.endRound(host.sessionId, false);
+    host.send("play_again");
+    await guest.leave();
+    while (room.phase !== "lobby") await sleep(20);
+    assert.deepStrictEqual(room.seats.map((s: any) => s.id), [host.sessionId, room.seats[1].id]);
+    assert.ok(room.seats[1].id.startsWith("bot-"));
+    assert.deepStrictEqual([room.metadata.started, room.seats[0].score], [false, 0]);
+
+    // A newcomer who doesn't press: when the minute is up, he goes home and the others to the waiting room.
+    const late = await join();
+    let gone = false;
+    late.onLeave(() => (gone = true));
+    while (room.seats.length < 3) await sleep(20);
+    await play();
+    host.send("play_again");
+    await sleep(100);
+    room.afterGame(true);
+    assert.deepStrictEqual([room.phase, room.seats.length], ["lobby", 2]);
+    while (!gone) await sleep(20);
+
+    // One presses, then leaves before the host does: his seat doesn't go back to the waiting room (as a bot).
+    const third = await join();
+    while (room.seats.length < 3) await sleep(20);
+    await play();
+    third.send("play_again");
+    await sleep(100);
+    await third.leave();
+    while (!room.seat(third.sessionId)?.bot) await sleep(20);
+    host.send("play_again");
+    while (room.phase !== "lobby") await sleep(20);
+    assert.deepStrictEqual(room.seats.map((s: any) => s.id), [host.sessionId, room.seats[1].id]);
+    assert.ok(room.seats[1].id.startsWith("bot-"));
+
+    // Nobody presses: the room closes.
+    await play();
+    room.afterGame(true);
+    assert.ok(room.abandon.closing);
+  });
 });
