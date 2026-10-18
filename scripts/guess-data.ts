@@ -10,8 +10,12 @@
  *
  * Writes data/guess/catalog.json; FLAGS_DIR gets every nation's flag (flagcdn.com, public domain).
  * Re-run after a transfer window.
+ *
+ * Also writes data/guess/starters.json: every club's XI (and the catalogue's 250) for the football quiz, and
+ * the portrait sheets still to make: portrait-sheets.json (sheets 29 on) and portrait-prompts.md, one prompt each.
+ *   STARTERS_ONLY=1 npx tsx scripts/guess-data.ts   — leaves catalog.json (and Guess Who) as it is
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SEASON = "2026–27";
@@ -19,8 +23,16 @@ const TOP = 250;
 const UA = "PlayRoomGuessWho/1.0 (https://github.com/OussamaBounabi/werewolves-server)";
 const OUT = "data/guess";
 const FLAGS_DIR = process.env.FLAGS_DIR;
+const STARTERS_ONLY = !!process.env.STARTERS_ONLY;
 
 type Names = { en: string; fr: string; ar: string };
+
+/** The style of the first 28 sheets (data/guess/portrait-sheets.json), then the nine players of each. */
+const PROMPT = `One square image, 1254 x 1254 px: a 3 x 3 grid of nine equal square tiles with thin dark gaps between them, on a deep navy background (#0B1640).
+Each tile is a semi-realistic 3D portrait of the real footballer named below, his own face, hair, beard and skin tone as he looks today: head and shoulders, centered, facing the camera, a light friendly smile, soft studio lighting, plain deep navy background.
+Every player wears the same plain navy crew-neck shirt: no club badge, no logo, no number, no text.
+Same framing, head size and lighting in all nine tiles. No names, captions, borders or watermarks on the image.
+The nine players, left to right then top to bottom:`;
 
 const LEAGUES: { id: string; page: string; flag: string; name: Names }[] = [
   { id: "eng", page: "Premier League", flag: "gb-eng", name: { en: "Premier League", fr: "Premier League", ar: "الدوري الإنجليزي الممتاز" } },
@@ -221,11 +233,12 @@ async function pages(titles: string[]) {
 
 /** Wikidata: fame (sitelinks) and the French and Arabic names of [items]. */
 async function wikidata(items: string[]) {
-  const out = new Map<string, { links: number; fr?: string; ar?: string; en?: string }>();
+  const out = new Map<string, { links: number; fr?: string; ar?: string; en?: string; born?: number }>();
   for (let i = 0; i < items.length; i += 250) {
     const values = items.slice(i, i + 250).map((q) => `wd:${q}`).join(" ");
-    const query = `SELECT ?item ?links ?en ?fr ?ar WHERE { VALUES ?item { ${values} }
+    const query = `SELECT ?item ?links ?en ?fr ?ar ?born WHERE { VALUES ?item { ${values} }
       ?item wikibase:sitelinks ?links .
+      OPTIONAL { ?item wdt:P569 ?born }
       OPTIONAL { ?item rdfs:label ?en FILTER(lang(?en)="en") }
       OPTIONAL { ?item rdfs:label ?fr FILTER(lang(?fr)="fr") }
       OPTIONAL { ?item rdfs:label ?ar FILTER(lang(?ar)="ar") } }`;
@@ -236,7 +249,8 @@ async function wikidata(items: string[]) {
     });
     for (const b of j.results.bindings) {
       const q = b.item.value.split("/").pop();
-      out.set(q, { links: Number(b.links.value), en: b.en?.value, fr: b.fr?.value, ar: b.ar?.value });
+      const born = b.born ? Number(b.born.value.slice(0, 4)) : undefined;
+      out.set(q, { links: Number(b.links.value), en: b.en?.value, fr: b.fr?.value, ar: b.ar?.value, born });
     }
   }
   return out;
@@ -317,13 +331,13 @@ async function main() {
   const pageInfo = await pages([...rows.map((r) => r.title), ...clubs.map((c) => c.title)]);
   const items = [...new Set([...pageInfo.values()].map((p) => p.item).filter((q): q is string => !!q))];
   const data = await wikidata(items);
-  const ranked = rows
+  const known = rows
     .map((r) => ({ ...r, page: pageInfo.get(r.title) }))
     .filter((r) => r.page?.item && data.has(r.page.item))
-    .sort((a, b) => data.get(b.page!.item!)!.links - data.get(a.page!.item!)!.links)
-    .slice(0, TOP);
+    .sort((a, b) => data.get(b.page!.item!)!.links - data.get(a.page!.item!)!.links);
+  const ranked = known.slice(0, TOP);
 
-  const players = ranked.map((r) => {
+  const toPlayer = (r: (typeof known)[number]) => {
     const q = r.page!.item!;
     const d = data.get(q)!;
     return {
@@ -335,7 +349,48 @@ async function main() {
       num: r.num,
       photo: existsSync(`${OUT}/img/${q}.webp`), // his 3D portrait, once made
     };
+  };
+  const players = ranked.map(toPlayer);
+
+  const names = await nationNames();
+
+  // ---- every club's XI, for the football quiz ----
+  // ponytail: Wikipedia lists squads, not lineups — a club's XI is its best known GK, 4 DEF, 3 MID and 3 ATT
+  // (a short line filled by the next best known); a lineup source would make it the real one.
+  const xi = clubs.flatMap((c) => {
+    const squad = known.filter((r) => r.club === c.id);
+    const need: Record<string, number> = { GK: 1, DEF: 4, MID: 3, ATT: 3 };
+    const picked = squad.filter((r) => need[r.pos]-- > 0);
+    return [...picked, ...squad.filter((r) => !picked.includes(r)).slice(0, 11 - picked.length)];
   });
+  const old = existsSync(`${OUT}/catalog.json`) ? JSON.parse(readFileSync(`${OUT}/catalog.json`, "utf8")) : { players: [] };
+  const keep = new Set([...xi, ...ranked].map((r) => r.page!.item!).concat(old.players.map((p: any) => p.id)));
+  const starters = known.filter((r) => keep.has(r.page!.item!)).map((r) => ({ ...toPlayer(r), born: data.get(r.page!.item!)!.born }));
+  writeFileSync(`${OUT}/starters.json`, JSON.stringify({ version: new Date().toISOString().slice(0, 10), players: starters }));
+  console.log(`${starters.length} starters (${starters.filter((p) => p.photo).length} with a portrait)`);
+
+  // ---- the portrait sheets still to make: 9 a sheet, the best known first ----
+  const sheetsFile = `${OUT}/portrait-sheets.json`;
+  const sheets = JSON.parse(readFileSync(sheetsFile, "utf8"));
+  const listed = new Set(sheets.sheets.flat().map((e: string) => e.split(" ")[0]));
+  const todo = starters.filter((p) => !p.photo && !listed.has(p.id));
+  const first = sheets.sheets.length;
+  for (let i = 0; i < todo.length; i += 9) sheets.sheets.push(todo.slice(i, i + 9).map((p) => `${p.id} ${p.name.en}`));
+  writeFileSync(sheetsFile, JSON.stringify(sheets, null, 1) + "\n");
+  const nationName = new Map(nations.map((n) => [n.id, names.get(n.flag)?.en?.value ?? n.id]));
+  const byId = new Map(starters.map((p) => [p.id, p]));
+  const prompts = sheets.sheets.slice(first).map((sheet: string[], k: number) => {
+    const who = sheet.map((e, i) => {
+      const p = byId.get(e.split(" ")[0])!;
+      const club = clubs.find((c) => c.id === p.club)!.en;
+      return `${i + 1}. ${p.name.en} — ${nationName.get(p.nation)} footballer${p.born ? `, born ${p.born}` : ""}, plays for ${club}`;
+    });
+    for (let i = who.length; i < 9; i++) who.push(`${i + 1}. (empty tile: just the navy background)`);
+    return `## sheet-${String(first + k + 1).padStart(2, "0")}.png\n\n\`\`\`\n${PROMPT}\n${who.join("\n")}\n\`\`\`\n`;
+  });
+  writeFileSync(`${OUT}/portrait-prompts.md`, `# Portrait sheets ${first + 1}–${sheets.sheets.length}\n\n${prompts.join("\n")}`);
+  console.log(`${todo.length} portraits to make: sheets ${first + 1}–${sheets.sheets.length} in ${OUT}/portrait-prompts.md`);
+  if (STARTERS_ONLY) return;
 
   // ---- names: clubs, nations ----
   const outClubs = clubs.map((c) => {
@@ -343,7 +398,6 @@ async function main() {
     const ar = d?.ar?.replace(/^نادي\s+/, "") || c.en; // "نادي" (club) in front of most
     return { id: c.id, league: c.league, short: c.short, colors: c.colors, name: { en: plain(c.en), fr: plain(d?.fr ?? c.en), ar: plain(ar) } };
   });
-  const names = await nationNames();
   const outNations = nations.map((n) => {
     const b = names.get(n.flag);
     const name = { en: b?.en?.value ?? n.id, fr: b?.fr?.value ?? b?.en?.value ?? n.id, ar: b?.ar?.value ?? b?.en?.value ?? n.id };
