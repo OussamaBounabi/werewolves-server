@@ -29,6 +29,14 @@ for (const p of catalog.players) p.photo = existsSync(new URL(`../data/guess/img
 const byId = new Map(catalog.players.map((p) => [p.id, p]));
 export const player = (id: string) => byId.get(id);
 
+/** The legends (trust mode only: no tools to ask with): who they are, their level, their career and trophies for
+ * the info sheet (data/guess/legends.json, built by scripts/legends-data.ts); portraits in data/guess/legends/. */
+export type Legend = { id: string; name: Names; level: string; photo?: boolean; [detail: string]: unknown };
+export const legends: Legend[] = JSON.parse(readFileSync(new URL("../data/guess/legends.json", import.meta.url), "utf8")).legends;
+for (const l of legends) l.photo = existsSync(new URL(`../data/guess/legends/${l.id}.webp`, import.meta.url));
+const legendById = new Map(legends.map((l) => [l.id, l]));
+export const legend = (id: string) => legendById.get(id);
+
 // Each category's values, and the groups a question may name instead of them.
 const universe: Record<Category, Set<string>> = {
   pos: new Set(POSITIONS),
@@ -95,14 +103,27 @@ export function candidates(answers: Answer[], wrong: string[] = []): Player[] {
 
 const pick = <T>(list: T[], random: () => number) => list[Math.floor(random() * list.length)];
 
-/** How hard a drawn footballer is: how well known (the catalogue is in order of fame). */
-export const LEVELS: Record<string, [number, number]> = { easy: [0, 50], medium: [50, 100], hard: [100, 250] };
+/** How hard a drawn footballer is: his club — easy: the giants, medium: 20 well-known clubs, hard: the rest. */
+const EASY = new Set(("eng-MCI eng-MUN eng-LIV eng-ARS eng-CHE eng-TOT esp-RMA esp-BAR esp-ATM " +
+  "ita-JUV ita-INT ita-MIL ita-NAP ita-ROM ger-MUN ger-DOR fra-PSG fra-OM").split(" "));
+const MEDIUM = new Set(("eng-NEW eng-AVL eng-EVE esp-SEV esp-VIL esp-VAL esp-ATH esp-RSO esp-BET " +
+  "ita-LAZ ita-ATA ita-FIO ger-LEV ger-LEI ger-FRA ger-STU ger-SCH fra-OL fra-ASM fra-LIL").split(" "));
+export const LEVELS: Record<string, (club: string) => boolean> = {
+  easy: (c) => EASY.has(c),
+  medium: (c) => MEDIUM.has(c),
+  hard: (c) => !EASY.has(c) && !MEDIUM.has(c),
+};
 
-/** A footballer at random: among all of them, or a difficulty's — easy: the 50 best known, medium: the next
- * 50, hard: the rest. */
+/** A legend at random: among all of them, or a level's (easy 60, medium 60, hard 80). */
+export function randomLegend(level?: string, random = Math.random) {
+  const list = legends.filter((l) => !level || l.level === level);
+  return pick(list.length ? list : legends, random);
+}
+
+/** A footballer at random: among all of them, or a difficulty's clubs'. */
 export function randomPlayer(level?: string, random = Math.random) {
-  const [from, to] = LEVELS[level ?? ""] ?? [0, catalog.players.length];
-  const list = catalog.players.slice(from, to);
+  const inLevel = LEVELS[level ?? ""];
+  const list = inLevel ? catalog.players.filter((p) => inLevel(p.club)) : catalog.players;
   return pick(list.length ? list : catalog.players, random);
 }
 

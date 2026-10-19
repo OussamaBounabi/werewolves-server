@@ -3,7 +3,7 @@ import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
-  botMove, bracket, covers, found, LEVELS, nextSlot, player, randomPlayer, validQuestion, valueOf,
+  botMove, bracket, covers, found, legend, LEVELS, nextSlot, player, randomLegend, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
 } from "../guess.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -31,7 +31,7 @@ type Meta = {
   players: number; maxPlayers: number; spectators: number; mode: Mode;
 };
 type Settings = {
-  roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; time?: number; cupSize?: number; spectate?: boolean;
+  roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
@@ -70,8 +70,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private roomType = "public";
   private rounds = 3;
   private random = true; // the footballers are drawn; off: each player picks his own
-  private level = "easy"; // drawn among the 50 best known (easy), the next 50 (medium), the rest (hard)
+  private level = "easy"; // drawn from the giants' clubs (easy), 20 well-known ones (medium), the rest (hard)
   private trust = false;
+  private legends = false; // trust mode only: the legends instead of today's footballers
   private time = 180;
   private cupSize = 8;
   private spectate = false; // a cup's waiting players see both secrets
@@ -318,6 +319,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       this.trust = s.trust;
       if (this.trust) this.seats = this.seats.filter((x) => !x.bot); // bots can't talk
     }
+    if (typeof s.legends === "boolean") this.legends = s.legends;
+    this.legends &&= this.trust;
     const t = Number(s.time);
     if (Number.isInteger(t) && t >= TIME_MIN && t <= TIME_MAX && t % TIME_STEP === 0) this.time = t;
     const size = Number(s.cupSize);
@@ -428,16 +431,16 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.turn = "";
     for (const s of this.sides) Object.assign(s, { secret: "", answers: [], wrong: [], clockMs: this.time * 1000 });
     if (this.random) {
-      this.sides[0].secret = randomPlayer(this.level).id;
-      do this.sides[1].secret = randomPlayer(this.level).id;
+      this.sides[0].secret = this.draw();
+      do this.sides[1].secret = this.draw();
       while (this.sides[1].secret === this.sides[0].secret);
       return this.play();
     }
     this.phase = "pick";
     this.endsAt = Date.now() + PICK_MS * GuessRoom.pace;
-    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = randomPlayer(this.level).id;
+    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = this.draw();
     this.later(PICK_MS, () => {
-      for (const s of this.sides) s.secret ||= randomPlayer(this.level).id; // too slow: one at random
+      for (const s of this.sides) s.secret ||= this.draw(); // too slow: one at random
       this.play();
     });
   }
@@ -445,9 +448,14 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private handlePick(id: string, footballer: string) {
     const side = this.sides.find((s) => s.id === id);
     if (this.phase !== "pick" || !side || side.secret) return;
-    if (!player(footballer)) return "unknown_player";
+    if (!(this.legends ? legend(footballer) : player(footballer))) return "unknown_player";
     side.secret = footballer;
     if (this.sides.every((s) => s.secret)) this.play();
+  }
+
+  /** A secret at random, at the room's level: a legend, or one of today's footballers. */
+  private draw() {
+    return (this.legends ? randomLegend(this.level) : randomPlayer(this.level)).id;
   }
 
   private play() {
@@ -630,6 +638,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       random: this.random,
       level: this.level,
       trust: this.trust,
+      legends: this.legends,
       time: this.time,
       cupSize: this.cupSize,
       spectate: this.spectate,

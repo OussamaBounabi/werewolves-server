@@ -1,5 +1,5 @@
 /**
- * Builds Guess Who's catalogue from the big five leagues' current squads:
+ * Builds Guess Who's catalogue from the big five leagues' current squads (each club's XI, and the 250 best known):
  *  - each club's English Wikipedia page: shirt number, position, nationality (its "current squad" table)
  *    and kit colors (the club's badge is drawn from them);
  *  - Wikidata (CC0): names in Arabic and French, and fame (how many Wikipedias have an article) — the best
@@ -11,9 +11,7 @@
  * Writes data/guess/catalog.json; FLAGS_DIR gets every nation's flag (flagcdn.com, public domain).
  * Re-run after a transfer window.
  *
- * Also writes data/guess/starters.json: every club's XI (and the catalogue's 250) for the football quiz, and
- * the portrait sheets still to make: portrait-sheets.json (sheets 29 on) and portrait-prompts.md, one prompt each.
- *   STARTERS_ONLY=1 npx tsx scripts/guess-data.ts   — leaves catalog.json (and Guess Who) as it is
+ * Also the portrait sheets still to make: added to portrait-sheets.json, one prompt each in portrait-prompts.md.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,7 +21,6 @@ const TOP = 250;
 const UA = "PlayRoomGuessWho/1.0 (https://github.com/OussamaBounabi/werewolves-server)";
 const OUT = "data/guess";
 const FLAGS_DIR = process.env.FLAGS_DIR;
-const STARTERS_ONLY = !!process.env.STARTERS_ONLY;
 
 type Names = { en: string; fr: string; ar: string };
 
@@ -104,7 +101,7 @@ const nations = MEMBERS.trim()
 const nationIds = new Set(nations.map((n) => n.id));
 
 /** A name without the encyclopedia's note in brackets: "Nuno Mendes (footballer, born 2002)" → "Nuno Mendes". */
-const plain = (name: string) => name.replace(/\s*\(.*\)\s*$/, "").trim() || name;
+export const plain = (name: string) => name.replace(/\s*\(.*\)\s*$/, "").trim() || name;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -116,17 +113,17 @@ async function get(url: string, init: RequestInit = {}): Promise<Response> {
     await sleep(3000 * (attempt + 1));
   }
 }
-const getJson = async (url: string, init?: RequestInit): Promise<any> => (await get(url, init)).json();
-const wikiApi = (params: Record<string, string>) =>
+export const getJson = async (url: string, init?: RequestInit): Promise<any> => (await get(url, init)).json();
+export const wikiApi = (params: Record<string, string>) =>
   getJson("https://en.wikipedia.org/w/api.php?" + new URLSearchParams({ format: "json", formatversion: "2", ...params }));
 
-async function wikitext(title: string): Promise<string> {
+export async function wikitext(title: string): Promise<string> {
   const j = await wikiApi({ action: "query", prop: "revisions", rvprop: "content", rvslots: "main", redirects: "1", titles: title });
   return j.query.pages[0]?.revisions?.[0]?.slots?.main?.content ?? "";
 }
 
 /** Every {{name ...}} in [text], nested templates and links included. */
-function templates(text: string, name: RegExp): string[] {
+export function templates(text: string, name: RegExp): string[] {
   const found: string[] = [];
   const re = new RegExp(`\\{\\{\\s*(?:${name.source})\\s*\\|`, "gi");
   for (let m; (m = re.exec(text)); ) {
@@ -142,7 +139,7 @@ function templates(text: string, name: RegExp): string[] {
 }
 
 /** A template's named parameters (the pipes inside its links and nested templates kept). */
-function params(tpl: string): Record<string, string> {
+export function params(tpl: string): Record<string, string> {
   const inner = tpl.slice(2, -2), parts: string[] = [];
   let depth = 0, cur = "";
   for (let i = 0; i < inner.length; i++) {
@@ -213,11 +210,12 @@ async function leagueClubs(league: (typeof LEAGUES)[number]) {
 }
 
 /** Wikipedia titles → their article (redirects followed) and Wikidata item. */
-async function pages(titles: string[]) {
+export async function pages(titles: string[]) {
   const out = new Map<string, { title: string; item?: string }>();
   for (let i = 0; i < titles.length; i += 50) {
     const batch = titles.slice(i, i + 50);
     const j = await wikiApi({ action: "query", redirects: "1", titles: batch.join("|"), prop: "pageprops", ppprop: "wikibase_item" });
+    if (!j.query) throw new Error(`Wikipedia: ${JSON.stringify(j.error ?? j).slice(0, 300)} (${batch.join(" | ").slice(0, 300)})`);
     const hop = new Map<string, string>();
     for (const r of [...(j.query.normalized ?? []), ...(j.query.redirects ?? [])]) hop.set(r.from, r.to);
     const byTitle = new Map<string, any>((j.query.pages ?? []).map((p: any) => [p.title, p]));
@@ -232,7 +230,7 @@ async function pages(titles: string[]) {
 }
 
 /** Wikidata: fame (sitelinks) and the French and Arabic names of [items]. */
-async function wikidata(items: string[]) {
+export async function wikidata(items: string[]) {
   const out = new Map<string, { links: number; fr?: string; ar?: string; en?: string; born?: number }>();
   for (let i = 0; i < items.length; i += 250) {
     const values = items.slice(i, i + 250).map((q) => `wd:${q}`).join(" ");
@@ -350,11 +348,9 @@ async function main() {
       photo: existsSync(`${OUT}/img/${q}.webp`), // his 3D portrait, once made
     };
   };
-  const players = ranked.map(toPlayer);
-
   const names = await nationNames();
 
-  // ---- every club's XI, for the football quiz ----
+  // ---- the players: every club's XI, the best known, and whoever was already in (his portrait made) ----
   // ponytail: Wikipedia lists squads, not lineups — a club's XI is its best known GK, 4 DEF, 3 MID and 3 ATT
   // (a short line filled by the next best known); a lineup source would make it the real one.
   const xi = clubs.flatMap((c) => {
@@ -365,20 +361,18 @@ async function main() {
   });
   const old = existsSync(`${OUT}/catalog.json`) ? JSON.parse(readFileSync(`${OUT}/catalog.json`, "utf8")) : { players: [] };
   const keep = new Set([...xi, ...ranked].map((r) => r.page!.item!).concat(old.players.map((p: any) => p.id)));
-  const starters = known.filter((r) => keep.has(r.page!.item!)).map((r) => ({ ...toPlayer(r), born: data.get(r.page!.item!)!.born }));
-  writeFileSync(`${OUT}/starters.json`, JSON.stringify({ version: new Date().toISOString().slice(0, 10), players: starters }));
-  console.log(`${starters.length} starters (${starters.filter((p) => p.photo).length} with a portrait)`);
+  const players = known.filter((r) => keep.has(r.page!.item!)).map((r) => ({ ...toPlayer(r), born: data.get(r.page!.item!)!.born }));
 
   // ---- the portrait sheets still to make: 9 a sheet, the best known first ----
   const sheetsFile = `${OUT}/portrait-sheets.json`;
   const sheets = JSON.parse(readFileSync(sheetsFile, "utf8"));
   const listed = new Set(sheets.sheets.flat().map((e: string) => e.split(" ")[0]));
-  const todo = starters.filter((p) => !p.photo && !listed.has(p.id));
+  const todo = players.filter((p) => !p.photo && !listed.has(p.id));
   const first = sheets.sheets.length;
   for (let i = 0; i < todo.length; i += 9) sheets.sheets.push(todo.slice(i, i + 9).map((p) => `${p.id} ${p.name.en}`));
   writeFileSync(sheetsFile, JSON.stringify(sheets, null, 1) + "\n");
   const nationName = new Map(nations.map((n) => [n.id, names.get(n.flag)?.en?.value ?? n.id]));
-  const byId = new Map(starters.map((p) => [p.id, p]));
+  const byId = new Map(players.map((p) => [p.id, p]));
   const prompts = sheets.sheets.slice(first).map((sheet: string[], k: number) => {
     const who = sheet.map((e, i) => {
       const p = byId.get(e.split(" ")[0])!;
@@ -390,7 +384,6 @@ async function main() {
   });
   writeFileSync(`${OUT}/portrait-prompts.md`, `# Portrait sheets ${first + 1}–${sheets.sheets.length}\n\n${prompts.join("\n")}`);
   console.log(`${todo.length} portraits to make: sheets ${first + 1}–${sheets.sheets.length} in ${OUT}/portrait-prompts.md`);
-  if (STARTERS_ONLY) return;
 
   // ---- names: clubs, nations ----
   const outClubs = clubs.map((c) => {
@@ -426,7 +419,10 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Run, not imported (scripts/legends-data.ts borrows the Wikipedia helpers).
+if (process.argv[1]?.replace(/\\/g, "/").endsWith("scripts/guess-data.ts")) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

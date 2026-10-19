@@ -3,7 +3,8 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import {
-  botMove, bracket, candidates, catalog, covers, found, nextSlot, possible, randomPlayer, validQuestion, valueOf,
+  botMove, bracket, candidates, catalog, covers, found, legend, legends, LEVELS, nextSlot, possible, randomLegend, randomPlayer,
+  validQuestion, valueOf,
   type Answer,
 } from "../src/guess.js";
 import { GuessRoom } from "../src/rooms/GuessRoom.js";
@@ -49,14 +50,30 @@ describe("guess who", () => {
     assert.ok(!candidates([], [secret.id]).some((p) => p.id === secret.id), "a wrong guess is out");
   });
 
-  it("draws by difficulty: the 50 best known, the next 50, the rest", () => {
-    const rank = new Map(catalog.players.map((p, i) => [p.id, i]));
+  it("draws by difficulty: the giants' clubs, 20 well-known ones, the rest", () => {
+    const clubs = new Set(catalog.clubs.map((c) => c.id));
+    const easy = ["eng-LIV", "esp-RMA", "ita-INT", "ger-DOR", "fra-OM"], medium = ["eng-NEW", "esp-SEV", "fra-OL"];
+    assert.equal(catalog.clubs.filter((c) => LEVELS.easy(c.id)).length, 18);
+    assert.equal(catalog.clubs.filter((c) => LEVELS.medium(c.id)).length, 20);
+    for (const c of [...easy, ...medium]) assert.ok(clubs.has(c), c);
     for (let i = 0; i < 300; i++) {
-      assert.ok(rank.get(randomPlayer("easy").id)! < 50);
-      const m = rank.get(randomPlayer("medium").id)!;
-      assert.ok(m >= 50 && m < 100, `medium ${m}`);
-      assert.ok(rank.get(randomPlayer("hard").id)! >= 100);
+      assert.ok(LEVELS.easy(randomPlayer("easy").club));
+      assert.ok(LEVELS.medium(randomPlayer("medium").club));
+      const h = randomPlayer("hard").club;
+      assert.ok(!LEVELS.easy(h) && !LEVELS.medium(h), h);
     }
+  });
+
+  it("the legends: 60 easy, 60 medium, 80 hard, drawn by level, each with his career", () => {
+    assert.deepStrictEqual(["easy", "medium", "hard"].map((v) => legends.filter((l) => l.level === v).length), [60, 60, 80]);
+    for (let i = 0; i < 200; i++) assert.strictEqual(randomLegend("hard").level, "hard");
+    const zidane = legends.find((l) => l.name.en === "Zinedine Zidane")!;
+    assert.strictEqual(zidane.born, 1972);
+    assert.strictEqual(zidane.retired, 2006);
+    assert.ok((zidane.clubs as any[]).some((c) => c.name.en === "Real Madrid" && c.from === 2001 && c.to === 2006));
+    assert.ok((zidane.trophies as any[]).some((t) => t.icon === "worldcup" && t.years.includes("1998")));
+    assert.ok((zidane.awards as any[]).some((t) => t.icon === "ballon"));
+    assert.ok(legends.every((l) => (l.positions as string[]).length > 0));
   });
 
   it("bots find the footballer", () => {
@@ -158,6 +175,21 @@ describe("GuessRoom", () => {
     assert.strictEqual(room.matches.length, 7);
     assert.ok(room.matches.every((m: any) => m.winner));
     assert.strictEqual(room.champion, room.matches[6].winner);
+  });
+
+  it("legends only in trust mode: drawn at the room's level, the round ends when one is found", async () => {
+    const plain: any = await colyseus.createRoom("guess", { mode: "duel", legends: true });
+    assert.strictEqual(plain.legends, false, "no legends without trust mode");
+    const room: any = await colyseus.createRoom("guess", { mode: "duel", rounds: 1, trust: true, legends: true, level: "medium" });
+    const a = await player(room, true);
+    const b = await player(room, true);
+    await until(() => a.state()?.seats.length === 2);
+    assert.strictEqual(a.state().legends, true);
+    a.client.send("start_game");
+    await until(() => room.phase === "playing");
+    for (const s of room.sides) assert.strictEqual(legend(s.secret)?.level, "medium");
+    b.client.send("concede");
+    await until(() => room.phase === "gameover");
   });
 
   it("leaving a 1 vs 1 hands the match to the other", async () => {

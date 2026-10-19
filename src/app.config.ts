@@ -24,7 +24,7 @@ import { onlineCount, roomsOf, whereIs } from "./presence.js";
 import { todayNow } from "./metrics.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { catalog } from "./guess.js";
+import { catalog, legends } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
   buyAvatar, buyFrame, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError,
@@ -348,6 +348,10 @@ const server = defineServer({
     app.get("/api/guess/catalog", (_req, res) => {
       res.json(catalog);
     });
+    // The legends (trust mode): names, levels, careers and trophies for the info sheet. Fetched only when played.
+    app.get("/api/guess/legends", (_req, res) => {
+      res.json({ legends });
+    });
     // Mimic Party's takes: a player sends his (?room&session&token&round&score, a WAV), everyone hears them.
     app.post("/api/mimic/clip", express.raw({ type: "*/*", limit: "450kb" }), (req, res) => {
       const room = matchMaker.getLocalRoomById(String(req.query.room ?? ""));
@@ -364,6 +368,8 @@ const server = defineServer({
       res.type("audio/wav").send(wav);
     });
     app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/img", import.meta.url)), { maxAge: "7d" }));
+    // the legends' portraits at the same address: the app shows any face from /guess/img/<id>.webp
+    app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/legends", import.meta.url)), { maxAge: "7d" }));
 
     app.get("/hi", (req, res) => {
       res.send("It's time to kick ass and chew bubblegum!");
