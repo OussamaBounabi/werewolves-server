@@ -64,7 +64,10 @@ OFC: ASA as, COK ck, FIJ fj, NCL nc, NZL nz, PNG pg, SAM ws, SOL sb, TAH pf, TGA
 const ALIASES: Record<string, string> = { KOS: "KVX" }; // Wikipedia's spelling → FIFA's
 // Wikidata items for the flags no ISO code names.
 const NATION_ITEMS: Record<string, string> = { "gb-eng": "Q21", "gb-sct": "Q22", "gb-wls": "Q25", "gb-nir": "Q26", xk: "Q1246" };
-const NAME_FIXES: Record<string, Partial<Names>> = { CHN: { en: "China" }, TPE: { en: "Chinese Taipei" } };
+const NAME_FIXES: Record<string, Partial<Names>> = {
+  CHN: { en: "China", fr: "Chine" }, TPE: { en: "Chinese Taipei" }, OMA: { ar: "عُمان" },
+  NED: { en: "Netherlands", fr: "Pays-Bas", ar: "هولندا" }, PLE: { en: "Palestine", fr: "Palestine", ar: "فلسطين" },
+};
 const POSITIONS: Record<string, string> = { GK: "GK", DF: "DEF", MF: "MID", FW: "ATT" };
 /** Badge colors where the kit's first color misleads (stripes, halves, sashes): club, main, second. */
 const CLUB_COLORS = `

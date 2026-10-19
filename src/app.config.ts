@@ -16,7 +16,8 @@ import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
-import { GuessRoom } from "./rooms/GuessRoom.js";
+import { GuessRoom, MysteryRoom } from "./rooms/GuessRoom.js";
+import { ITEMS, MYSTERY_CATEGORIES } from "./mysteryItems.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
 import { kickFromApp, PresenceRoom } from "./rooms/PresenceRoom.js";
@@ -98,6 +99,7 @@ const server = defineServer({
     domino: defineRoom(DominoRoom),
     ludo: defineRoom(LudoRoom),
     guess: defineRoom(GuessRoom),
+    mystery: defineRoom(MysteryRoom),
     imposter: defineRoom(ImposterRoom),
     mimic: defineRoom(MimicRoom),
     presence: defineRoom(PresenceRoom), // every app, while open: who's online
@@ -117,11 +119,12 @@ const server = defineServer({
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
+    api_mystery_rooms: createEndpoint("/api/mystery/rooms", { method: "GET" }, async () => publicRooms("mystery")),
     api_imposter_rooms: createEndpoint("/api/imposter/rooms", { method: "GET" }, async () => publicRooms("imposter")),
     api_mimic_rooms: createEndpoint("/api/mimic/rooms", { method: "GET" }, async () => publicRooms("mimic")),
     // The home: how many public rooms each game has now, and how many players are online.
     api_room_counts: createEndpoint("/api/room-counts", { method: "GET" }, async () => {
-      const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic"];
+      const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic", "mystery"];
       const rooms = Object.fromEntries(await Promise.all(games.map(async (g) => [g, (await publicRooms(g)).length])));
       return { ...rooms, online: onlineCount() }; // (and how many have the app open)
     }),
@@ -348,6 +351,10 @@ const server = defineServer({
     app.get("/api/guess/catalog", (_req, res) => {
       res.json(catalog);
     });
+    // Mystery Item's categories and things (photo: its picture is at /guess/img/<id>.webp; a country shows its flag).
+    app.get("/api/mystery/items", (_req, res) => {
+      res.json({ categories: MYSTERY_CATEGORIES, items: ITEMS });
+    });
     // The legends (trust mode): names, levels, careers and trophies for the info sheet. Fetched only when played.
     app.get("/api/guess/legends", (_req, res) => {
       res.json({ legends });
@@ -370,6 +377,7 @@ const server = defineServer({
     app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/img", import.meta.url)), { maxAge: "7d" }));
     // the legends' portraits at the same address: the app shows any face from /guess/img/<id>.webp
     app.use("/guess/img", express.static(fileURLToPath(new URL("../data/guess/legends", import.meta.url)), { maxAge: "7d" }));
+    app.use("/guess/img", express.static(fileURLToPath(new URL("../data/mystery/img", import.meta.url)), { maxAge: "7d" })); // Mystery Item's
 
     app.get("/hi", (req, res) => {
       res.send("It's time to kick ass and chew bubblegum!");

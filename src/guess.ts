@@ -160,16 +160,30 @@ export function botMove(answers: Answer[], wrong: string[], random = Math.random
   return { cat, items };
 }
 
-/** A cup's matches in playing order: the first round's pairs (drawn at random), then the winners'. */
+/**
+ * A cup's matches in playing order: the first round's pairs (drawn at random), then the winners'. A cup of 6 is a
+ * cup of 8 with two byes, one in each half: those two go straight to the semi-finals (their first match already
+ * won, nobody against them), the other four play the quarter-finals.
+ */
 export function bracket(ids: string[], random = Math.random): Match[] {
   const order = [...ids];
   for (let i = order.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
+  const size = 2 ** Math.ceil(Math.log2(order.length));
+  const byes = size - order.length;
   const matches: Match[] = [];
-  for (let i = 0; i < order.length; i += 2) matches.push({ a: order[i], b: order[i + 1], winner: "", rounds: [] });
-  for (let n = order.length / 4; n >= 1; n /= 2) for (let i = 0; i < n; i++) matches.push({ a: "", b: "", winner: "", rounds: [] });
+  for (let k = 0; k < size / 2; k++) {
+    const a = order.shift()!;
+    const bye = k % 2 === 1 && (k - 1) / 2 < byes; // the second match of each pair: one bye per half
+    matches.push(bye ? { a, b: "", winner: a, rounds: [] } : { a, b: order.shift()!, winner: "", rounds: [] });
+  }
+  for (let n = size / 4; n >= 1; n /= 2) for (let i = 0; i < n; i++) matches.push({ a: "", b: "", winner: "", rounds: [] });
+  for (const [k, m] of matches.entries()) {
+    const slot = m.winner ? nextSlot(size, k) : null;
+    if (slot) matches[slot.match][slot.side] = m.winner;
+  }
   return matches;
 }
 

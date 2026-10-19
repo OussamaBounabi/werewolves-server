@@ -6,6 +6,7 @@ import {
   botMove, bracket, covers, found, legend, LEVELS, nextSlot, player, randomLegend, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
 } from "../guess.js";
+import { item, itemsOf, MYSTERY_CATEGORIES } from "../mysteryItems.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
@@ -19,11 +20,15 @@ import { gameStarted } from "../metrics.js";
  * running on his turn only: out of time, he loses the round. Best of 1, 3 or 5.
  * Trust mode: no questions on screen — they ask out loud, and whoever's footballer is found says so (the
  * other wins the round); one clock for both, and when it runs out the round is played again.
- * 1 vs 1, or a cup of 4 or 8: one match at a time, the others waiting (and, a room setting, seeing both
- * secrets). Who leaves loses his match; his next opponent goes through.
+ * 1 vs 1, or a cup of 4, 6 (two byes into the semi-finals) or 8 — chosen in the waiting room: one match at a time,
+ * the others waiting (and, a room setting, seeing both secrets). Who leaves loses his match; his next opponent goes
+ * through.
  *
  * No schema: everyone gets the "guess" message after every change (the secrets only to who may see them),
  * and "guess_fx" (answers, guesses, round ends) to animate.
+ *
+ * Mystery Item (MysteryRoom, below) is this game with things instead of footballers: always in trust mode, an item
+ * from a category (one chosen, or any: the same for both or each his own), whose category everyone sees.
  */
 type Mode = "duel" | "cup";
 type Meta = {
@@ -31,14 +36,15 @@ type Meta = {
   players: number; maxPlayers: number; spectators: number; mode: Mode;
 };
 type Settings = {
-  roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
+  mode?: string; category?: string; same?: boolean; roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
 /** One of the match's two players: a (blue) or b (red). */
 type Side = {
   id: string;
-  secret: string; // his footballer
+  secret: string; // his footballer (Mystery Item: his item)
+  cat: string; // Mystery Item: his item's category (everyone sees it)
   answers: Answer[]; // his questions about the other's, answered
   wrong: string[]; // the footballers he guessed wrong
   clockMs: number; // what's left of his time this round
@@ -47,7 +53,7 @@ type Phase = "lobby" | "bracket" | "pick" | "playing" | "round" | "between" | "g
 
 const ROOM_TYPES = ["public", "friends", "private"];
 const ROUNDS = [1, 3, 5];
-const CUP_SIZES = [4, 8];
+const CUP_SIZES = [4, 6, 8];
 const TIME_MIN = 30, TIME_MAX = 900, TIME_STEP = 30; // seconds per player and round
 const PICK_MS = 30_000; // picking one's footballer (random off)
 const ANSWER_MS = 1_600; // the answer shows, then the turn passes
@@ -60,6 +66,7 @@ const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Wali
 const MAX_SPECTATORS = 20;
 
 export class GuessRoom extends Room<{ metadata: Meta }> {
+  protected game: "guess" | "mystery" = "guess";
   private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static botSpeed = 1; // tests: bots think faster
   static pace = 1; // tests: every pause shorter
@@ -73,6 +80,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private level = "easy"; // drawn from the giants' clubs (easy), 20 well-known ones (medium), the rest (hard)
   private trust = false;
   private legends = false; // trust mode only: the legends instead of today's footballers
+  private category = "all"; // Mystery Item: one category, or all of them…
+  private same = true; // …the same one for both players each round, or each his own
   private time = 180;
   private cupSize = 8;
   private spectate = false; // a cup's waiting players see both secrets
@@ -105,8 +114,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private botTimer: { clear(): void } | null = null;
 
   onCreate(options: JoinOptions = {}) {
-    this.mode = options.mode === "cup" ? "cup" : "duel";
-    this.maxClients = (this.mode === "cup" ? Math.max(...CUP_SIZES) : 2) + MAX_SPECTATORS; // the seats are counted in onAuth
+    this.maxClients = Math.max(...CUP_SIZES) + MAX_SPECTATORS; // the seats are counted in onAuth (the mode may change)
+    if (this.game === "mystery") this.trust = true; // no tools to ask with: always out loud
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -311,20 +320,24 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   private applySettings(s: Settings) {
+    // 1 vs 1 or a cup, in the waiting room (back to 1 vs 1 only with two seated at most)
+    if (s.mode === "cup" || (s.mode === "duel" && this.seats.length <= 2)) this.mode = s.mode;
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (ROUNDS.includes(Number(s.rounds))) this.rounds = Number(s.rounds);
     if (typeof s.random === "boolean") this.random = s.random;
     if (typeof s.level === "string" && Object.hasOwn(LEVELS, s.level)) this.level = s.level;
-    if (typeof s.trust === "boolean") {
+    if (s.category === "all" || MYSTERY_CATEGORIES.includes(s.category as string)) this.category = s.category as string;
+    if (typeof s.same === "boolean") this.same = s.same;
+    if (typeof s.trust === "boolean" && this.game === "guess") {
       this.trust = s.trust;
       if (this.trust) this.seats = this.seats.filter((x) => !x.bot); // bots can't talk
     }
-    if (typeof s.legends === "boolean") this.legends = s.legends;
+    if (typeof s.legends === "boolean" && this.game === "guess") this.legends = s.legends;
     this.legends &&= this.trust;
     const t = Number(s.time);
     if (Number.isInteger(t) && t >= TIME_MIN && t <= TIME_MAX && t % TIME_STEP === 0) this.time = t;
     const size = Number(s.cupSize);
-    if (this.mode === "cup" && CUP_SIZES.includes(size) && size >= this.seats.length) this.cupSize = size;
+    if (CUP_SIZES.includes(size) && size >= this.seats.length) this.cupSize = size;
     if (typeof s.spectate === "boolean") this.spectate = s.spectate;
     this.updateListing();
   }
@@ -410,7 +423,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   // ---- a match ----
 
-  private startMatch(index: number) {
+  private startMatch(index: number): void {
+    if (this.matches[index]?.winner) return this.startMatch(index + 1); // a bye: already through
     this.current = index;
     const m = this.matches[index];
     // Someone who left loses without playing (both gone: the first one goes through — and loses his next).
@@ -419,7 +433,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       m.winner = gone(m.a) && !gone(m.b) ? m.b : m.a;
       return this.afterMatch();
     }
-    this.sides = [m.a, m.b].map((id): Side => ({ id, secret: "", answers: [], wrong: [], clockMs: 0 }));
+    this.sides = [m.a, m.b].map((id): Side => ({ id, secret: "", cat: "", answers: [], wrong: [], clockMs: 0 }));
     this.firstTurn = Math.floor(Math.random() * 2);
     this.roundNo = 0;
     this.startRound();
@@ -429,18 +443,19 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.roundNo++;
     this.roundWinner = -1;
     this.turn = "";
-    for (const s of this.sides) Object.assign(s, { secret: "", answers: [], wrong: [], clockMs: this.time * 1000 });
+    const cats = this.categories();
+    for (const [k, s] of this.sides.entries()) {
+      Object.assign(s, { secret: "", cat: cats[k], answers: [], wrong: [], clockMs: this.time * 1000 });
+    }
     if (this.random) {
-      this.sides[0].secret = this.draw();
-      do this.sides[1].secret = this.draw();
-      while (this.sides[1].secret === this.sides[0].secret);
+      for (const s of this.sides) s.secret = this.draw(s);
       return this.play();
     }
     this.phase = "pick";
     this.endsAt = Date.now() + PICK_MS * GuessRoom.pace;
-    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = this.draw();
+    for (const s of this.sides) if (this.seat(s.id)?.bot) s.secret = this.draw(s);
     this.later(PICK_MS, () => {
-      for (const s of this.sides) s.secret ||= this.draw(); // too slow: one at random
+      for (const s of this.sides) s.secret ||= this.draw(s); // too slow: one at random
       this.play();
     });
   }
@@ -448,14 +463,31 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private handlePick(id: string, footballer: string) {
     const side = this.sides.find((s) => s.id === id);
     if (this.phase !== "pick" || !side || side.secret) return;
-    if (!(this.legends ? legend(footballer) : player(footballer))) return "unknown_player";
+    const known = this.game === "mystery" ? item(footballer)?.cat === side.cat : this.legends ? legend(footballer) : player(footballer);
+    if (!known) return "unknown_player";
     side.secret = footballer;
     if (this.sides.every((s) => s.secret)) this.play();
   }
 
-  /** A secret at random, at the room's level: a legend, or one of today's footballers. */
-  private draw() {
-    return (this.legends ? randomLegend(this.level) : randomPlayer(this.level)).id;
+  /** [side]'s secret at random, not the other's: an item of his category, or (at the room's level) a legend or one
+   * of today's footballers. */
+  private draw(side: Side) {
+    const taken = this.sides.find((s) => s !== side)?.secret;
+    for (;;) {
+      const id =
+        this.game === "mystery"
+          ? pick(itemsOf(side.cat)).id
+          : (this.legends ? randomLegend(this.level) : randomPlayer(this.level)).id;
+      if (id !== taken) return id;
+    }
+  }
+
+  /** Mystery Item: the round's categories, [a's, b's] — the room's one, or any: the same for both or two apart. */
+  private categories(): [string, string] {
+    if (this.game !== "mystery") return ["", ""];
+    if (this.category !== "all") return [this.category, this.category];
+    const a = pick(MYSTERY_CATEGORIES);
+    return [a, this.same ? a : pick(MYSTERY_CATEGORIES.filter((c) => c !== a))];
   }
 
   private play() {
@@ -639,6 +671,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       level: this.level,
       trust: this.trust,
       legends: this.legends,
+      game: this.game,
+      category: this.category,
+      same: this.same,
       time: this.time,
       cupSize: this.cupSize,
       spectate: this.spectate,
@@ -661,10 +696,17 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     for (const client of this.clients) {
       const me = this.idOf(client);
       const sides = this.sides.map((s) => ({
-        id: s.id, answers: s.answers, wrong: s.wrong, clockMs: s.clockMs, secret: this.sees(me, s) ? s.secret : "",
+        id: s.id, cat: s.cat, answers: s.answers, wrong: s.wrong, clockMs: s.clockMs, secret: this.sees(me, s) ? s.secret : "",
       }));
       client.send("guess", { ...table, sides, me });
     }
     for (const id of this.admins) this.clients.getById(id)?.send("god", { secrets: Object.fromEntries(this.sides.map((s) => [s.id, s.secret])) });
   }
 }
+
+/** Mystery Item: Guess Who's room with things to find instead of footballers (see above). */
+export class MysteryRoom extends GuessRoom {
+  protected override game = "mystery" as const;
+}
+
+const pick = <T>(list: T[]) => list[Math.floor(Math.random() * list.length)];

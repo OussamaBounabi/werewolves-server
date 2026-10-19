@@ -7,6 +7,7 @@ import {
   validQuestion, valueOf,
   type Answer,
 } from "../src/guess.js";
+import { item, itemsOf, MYSTERY_CATEGORIES } from "../src/mysteryItems.js";
 import { GuessRoom } from "../src/rooms/GuessRoom.js";
 
 const ask = (secret: ReturnType<typeof randomPlayer>, cat: Answer["cat"], items: string[]): Answer => ({
@@ -105,6 +106,19 @@ describe("guess who", () => {
     assert.deepStrictEqual(nextSlot(4, 1), { match: 2, side: "b" });
     assert.strictEqual(nextSlot(4, 2), null);
   });
+
+  it("draws a cup of 6: two byes, one in each half, straight into the semi-finals", () => {
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    for (let i = 0; i < 50; i++) {
+      const m = bracket(ids);
+      assert.strictEqual(m.length, 7);
+      assert.deepStrictEqual(m.slice(0, 4).flatMap((x) => [x.a, x.b]).filter(Boolean).sort(), ids);
+      assert.deepStrictEqual([m[1].b, m[3].b], ["", ""], "the byes: quarter-finals 2 and 4");
+      assert.deepStrictEqual([m[1].winner, m[3].winner], [m[1].a, m[3].a]);
+      assert.deepStrictEqual([m[4].b, m[5].b], [m[1].a, m[3].a], "waiting in the semi-finals");
+      assert.ok(m[0].b && m[2].b && !m[0].winner && !m[2].winner, "the other four play");
+    }
+  });
 });
 
 describe("GuessRoom", () => {
@@ -190,6 +204,92 @@ describe("GuessRoom", () => {
     for (const s of room.sides) assert.strictEqual(legend(s.secret)?.level, "medium");
     b.client.send("concede");
     await until(() => room.phase === "gameover");
+  });
+
+  it("1 vs 1 or a cup is chosen in the waiting room; a cup of 6 is played to its champion", async () => {
+    const room: any = await colyseus.createRoom("guess", { rounds: 1 });
+    room.setSimulationInterval(() => {}, 5);
+    const me = await player(room);
+    await until(() => me.state()?.seats.length === 1);
+    assert.strictEqual(me.state().mode, "duel");
+    me.client.send("settings", { mode: "cup", cupSize: 6 });
+    await until(() => me.state()?.maxPlayers === 6);
+    for (let i = 0; i < 5; i++) me.client.send("add_bot");
+    await until(() => me.state()?.seats.length === 6);
+    me.client.send("settings", { mode: "duel" });
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual(me.state().mode, "cup", "six seated: not back to 1 vs 1");
+    me.client.send("start_game");
+    await until(() => room.phase === "gameover", 120_000);
+    assert.strictEqual(room.matches.filter((m: any) => m.b === "").length, 2);
+    assert.ok(room.matches.every((m: any) => m.winner));
+    assert.strictEqual(room.champion, room.matches[6].winner);
+  });
+
+  // ---- Mystery Item: the same room with things ----
+
+  /** Two players in a Mystery Item room made with [options]; their last states and any errors. */
+  async function mysteryPair(options: Record<string, unknown>) {
+    const room: any = await colyseus.createRoom("mystery", { rounds: 1, ...options });
+    const join = async () => {
+      const client = await colyseus.connectTo(room);
+      const seen = { state: null as any, errors: [] as string[] };
+      client.onMessage("guess_fx", () => {});
+      client.onMessage("guess", (s: any) => (seen.state = s));
+      client.onMessage("guess_error", (e: any) => seen.errors.push(e.code));
+      return { client, seen };
+    };
+    const a = await join(), b = await join();
+    await until(() => a.seen.state?.seats.length === 2);
+    return { room, a, b };
+  }
+
+  it("Mystery Item: 7 categories of 50 well-known things, countries by their flag", () => {
+    assert.deepStrictEqual(MYSTERY_CATEGORIES, ["animals", "food", "fruits", "things", "vehicles", "places", "countries"]);
+    for (const c of MYSTERY_CATEGORIES) assert.strictEqual(itemsOf(c).length, 50, c);
+    assert.ok(itemsOf("countries").every((i) => i.flag && i.name.ar));
+    assert.strictEqual(item("animals-polar-bear")?.name.fr, "Ours polaire");
+  });
+
+  it("Mystery Item: always trust mode; one category for both, then any category, the same or each his own", async () => {
+    const { room, a, b } = await mysteryPair({ category: "animals" });
+    a.client.send("settings", { trust: false, legends: true });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.strictEqual(a.seen.state.trust, true);
+    assert.strictEqual(a.seen.state.legends, false);
+    assert.strictEqual(a.seen.state.game, "mystery");
+    a.client.send("start_game");
+    await until(() => room.phase === "playing");
+    const [x, y] = room.sides;
+    assert.ok(x.secret !== y.secret && item(x.secret)?.cat === "animals" && item(y.secret)?.cat === "animals");
+    await until(() => a.seen.state.phase === "playing");
+    const theirs = a.seen.state.sides.find((s: any) => s.id !== a.seen.state.me);
+    assert.deepStrictEqual([theirs.secret, theirs.cat], ["", "animals"], "their category shows, not their item");
+    b.client.send("concede");
+    await until(() => room.phase === "gameover");
+
+    for (const same of [true, false]) {
+      for (let i = 0; i < 3; i++) {
+        const { room: r, a: p } = await mysteryPair({ category: "all", same });
+        p.client.send("start_game");
+        await until(() => r.phase === "playing");
+        const [c1, c2] = r.sides.map((s: any) => item(s.secret)!.cat);
+        assert.strictEqual(c1 === c2, same, `same: ${same} (${c1}, ${c2})`);
+        await r.disconnect();
+      }
+    }
+  });
+
+  it("Mystery Item: picking my own thing, only in my category", async () => {
+    const { room, a, b } = await mysteryPair({ category: "fruits", random: false });
+    a.client.send("start_game");
+    await until(() => room.phase === "pick");
+    a.client.send("pick", { player: "animals-lion" });
+    await until(() => a.seen.errors.includes("unknown_player"));
+    a.client.send("pick", { player: "fruits-mango" });
+    b.client.send("pick", { player: "fruits-banana" });
+    await until(() => room.phase === "playing");
+    assert.deepStrictEqual(room.sides.map((s: any) => s.secret).sort(), ["fruits-banana", "fruits-mango"]);
   });
 
   it("leaving a 1 vs 1 hands the match to the other", async () => {

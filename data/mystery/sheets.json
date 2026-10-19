@@ -1,0 +1,377 @@
+{
+ "about": "Mystery Item's picture sheets (3x3, reading order): mystery-01.png is the first list.",
+ "sheets": [
+  [
+   "animals-lion Lion",
+   "animals-tiger Tiger",
+   "animals-elephant Elephant",
+   "animals-giraffe Giraffe",
+   "animals-zebra Zebra",
+   "animals-monkey Monkey",
+   "animals-gorilla Gorilla",
+   "animals-bear Bear",
+   "animals-polar-bear Polar bear"
+  ],
+  [
+   "animals-panda Panda",
+   "animals-kangaroo Kangaroo",
+   "animals-koala Koala",
+   "animals-wolf Wolf",
+   "animals-fox Fox",
+   "animals-rabbit Rabbit",
+   "animals-squirrel Squirrel",
+   "animals-deer Deer",
+   "animals-camel Camel"
+  ],
+  [
+   "animals-horse Horse",
+   "animals-donkey Donkey",
+   "animals-cow Cow",
+   "animals-sheep Sheep",
+   "animals-goat Goat",
+   "animals-dog Dog",
+   "animals-cat Cat",
+   "animals-hedgehog Hedgehog",
+   "animals-hippopotamus Hippopotamus"
+  ],
+  [
+   "animals-rhinoceros Rhinoceros",
+   "animals-cheetah Cheetah",
+   "animals-crocodile Crocodile",
+   "animals-snake Snake",
+   "animals-turtle Turtle",
+   "animals-frog Frog",
+   "animals-chameleon Chameleon",
+   "animals-shark Shark",
+   "animals-dolphin Dolphin"
+  ],
+  [
+   "animals-whale Whale",
+   "animals-octopus Octopus",
+   "animals-crab Crab",
+   "animals-owl Owl",
+   "animals-eagle Eagle",
+   "animals-parrot Parrot",
+   "animals-penguin Penguin",
+   "animals-flamingo Flamingo",
+   "animals-peacock Peacock"
+  ],
+  [
+   "animals-chicken Chicken",
+   "animals-duck Duck",
+   "animals-ostrich Ostrich",
+   "animals-butterfly Butterfly",
+   "animals-bee Bee"
+  ],
+  [
+   "food-pizza Pizza",
+   "food-burger Burger",
+   "food-sandwich Sandwich",
+   "food-hot-dog Hot dog",
+   "food-french-fries French fries",
+   "food-spaghetti Spaghetti",
+   "food-lasagna Lasagna",
+   "food-rice Rice",
+   "food-couscous Couscous"
+  ],
+  [
+   "food-tajine Tajine",
+   "food-shawarma Shawarma",
+   "food-kebab Kebab",
+   "food-falafel Falafel",
+   "food-hummus Hummus",
+   "food-soup Soup",
+   "food-salad Salad",
+   "food-sushi Sushi",
+   "food-tacos Tacos"
+  ],
+  [
+   "food-noodles Noodles",
+   "food-omelette Omelette",
+   "food-fried-egg Fried egg",
+   "food-roast-chicken Roast chicken",
+   "food-steak Steak",
+   "food-grilled-fish Grilled fish",
+   "food-sausage Sausage",
+   "food-chicken-nuggets Chicken nuggets",
+   "food-bread Bread"
+  ],
+  [
+   "food-croissant Croissant",
+   "food-cheese Cheese",
+   "food-butter Butter",
+   "food-yogurt Yogurt",
+   "food-honey Honey",
+   "food-jam Jam",
+   "food-cereal Cereal",
+   "food-pancakes Pancakes",
+   "food-waffle Waffle"
+  ],
+  [
+   "food-cake Cake",
+   "food-cupcake Cupcake",
+   "food-cookie Cookie",
+   "food-donut Donut",
+   "food-ice-cream Ice cream",
+   "food-chocolate Chocolate",
+   "food-candy Candy",
+   "food-popcorn Popcorn",
+   "food-baklava Baklava"
+  ],
+  [
+   "food-kunafa Kunafa",
+   "food-milk Milk",
+   "food-tea Tea",
+   "food-coffee Coffee",
+   "food-orange-juice Orange juice"
+  ],
+  [
+   "fruits-apple Apple",
+   "fruits-banana Banana",
+   "fruits-orange Orange",
+   "fruits-lemon Lemon",
+   "fruits-strawberry Strawberry",
+   "fruits-grapes Grapes",
+   "fruits-watermelon Watermelon",
+   "fruits-melon Melon",
+   "fruits-pineapple Pineapple"
+  ],
+  [
+   "fruits-mango Mango",
+   "fruits-peach Peach",
+   "fruits-pear Pear",
+   "fruits-cherry Cherry",
+   "fruits-kiwi Kiwi",
+   "fruits-pomegranate Pomegranate",
+   "fruits-fig Fig",
+   "fruits-dates Dates",
+   "fruits-coconut Coconut"
+  ],
+  [
+   "fruits-avocado Avocado",
+   "fruits-apricot Apricot",
+   "fruits-plum Plum",
+   "fruits-raspberry Raspberry",
+   "fruits-blueberry Blueberry",
+   "fruits-olive Olive",
+   "fruits-tomato Tomato",
+   "fruits-potato Potato",
+   "fruits-carrot Carrot"
+  ],
+  [
+   "fruits-onion Onion",
+   "fruits-garlic Garlic",
+   "fruits-cucumber Cucumber",
+   "fruits-lettuce Lettuce",
+   "fruits-cabbage Cabbage",
+   "fruits-broccoli Broccoli",
+   "fruits-cauliflower Cauliflower",
+   "fruits-eggplant Eggplant",
+   "fruits-zucchini Zucchini"
+  ],
+  [
+   "fruits-bell-pepper Bell pepper",
+   "fruits-chili-pepper Chili pepper",
+   "fruits-corn Corn",
+   "fruits-peas Peas",
+   "fruits-green-beans Green beans",
+   "fruits-pumpkin Pumpkin",
+   "fruits-mushroom Mushroom",
+   "fruits-spinach Spinach",
+   "fruits-radish Radish"
+  ],
+  [
+   "fruits-beetroot Beetroot",
+   "fruits-sweet-potato Sweet potato",
+   "fruits-artichoke Artichoke",
+   "fruits-turnip Turnip",
+   "fruits-ginger Ginger"
+  ],
+  [
+   "things-phone Phone",
+   "things-laptop Laptop",
+   "things-television Television",
+   "things-remote-control Remote control",
+   "things-headphones Headphones",
+   "things-camera Camera",
+   "things-watch Watch",
+   "things-alarm-clock Alarm clock",
+   "things-glasses Glasses"
+  ],
+  [
+   "things-umbrella Umbrella",
+   "things-key Key",
+   "things-wallet Wallet",
+   "things-backpack Backpack",
+   "things-book Book",
+   "things-pen Pen",
+   "things-pencil Pencil",
+   "things-scissors Scissors",
+   "things-calculator Calculator"
+  ],
+  [
+   "things-chair Chair",
+   "things-table Table",
+   "things-bed Bed",
+   "things-sofa Sofa",
+   "things-lamp Lamp",
+   "things-light-bulb Light bulb",
+   "things-mirror Mirror",
+   "things-pillow Pillow",
+   "things-refrigerator Refrigerator"
+  ],
+  [
+   "things-washing-machine Washing machine",
+   "things-microwave Microwave",
+   "things-kettle Kettle",
+   "things-iron Iron",
+   "things-vacuum-cleaner Vacuum cleaner",
+   "things-broom Broom",
+   "things-fan Fan",
+   "things-cup Cup",
+   "things-spoon Spoon"
+  ],
+  [
+   "things-fork Fork",
+   "things-plate Plate",
+   "things-bottle Bottle",
+   "things-toothbrush Toothbrush",
+   "things-comb Comb",
+   "things-soap Soap",
+   "things-towel Towel",
+   "things-candle Candle",
+   "things-hammer Hammer"
+  ],
+  [
+   "things-screwdriver Screwdriver",
+   "things-ladder Ladder",
+   "things-flashlight Flashlight",
+   "things-football Football",
+   "things-teddy-bear Teddy bear"
+  ],
+  [
+   "vehicles-car Car",
+   "vehicles-bus Bus",
+   "vehicles-school-bus School bus",
+   "vehicles-double-decker-bus Double-decker bus",
+   "vehicles-taxi Taxi",
+   "vehicles-police-car Police car",
+   "vehicles-ambulance Ambulance",
+   "vehicles-fire-truck Fire truck",
+   "vehicles-truck Truck"
+  ],
+  [
+   "vehicles-garbage-truck Garbage truck",
+   "vehicles-tow-truck Tow truck",
+   "vehicles-cement-mixer Cement mixer",
+   "vehicles-pickup-truck Pickup truck",
+   "vehicles-van Van",
+   "vehicles-jeep Jeep",
+   "vehicles-limousine Limousine",
+   "vehicles-race-car Race car",
+   "vehicles-motorcycle Motorcycle"
+  ],
+  [
+   "vehicles-scooter Scooter",
+   "vehicles-bicycle Bicycle",
+   "vehicles-tricycle Tricycle",
+   "vehicles-electric-scooter Electric scooter",
+   "vehicles-skateboard Skateboard",
+   "vehicles-quad-bike Quad bike",
+   "vehicles-tractor Tractor",
+   "vehicles-excavator Excavator",
+   "vehicles-bulldozer Bulldozer"
+  ],
+  [
+   "vehicles-forklift Forklift",
+   "vehicles-tank Tank",
+   "vehicles-train Train",
+   "vehicles-tram Tram",
+   "vehicles-metro Metro",
+   "vehicles-cable-car Cable car",
+   "vehicles-airplane Airplane",
+   "vehicles-helicopter Helicopter",
+   "vehicles-fighter-jet Fighter jet"
+  ],
+  [
+   "vehicles-hot-air-balloon Hot air balloon",
+   "vehicles-rocket Rocket",
+   "vehicles-drone Drone",
+   "vehicles-ship Ship",
+   "vehicles-cruise-ship Cruise ship",
+   "vehicles-sailboat Sailboat",
+   "vehicles-speedboat Speedboat",
+   "vehicles-yacht Yacht",
+   "vehicles-fishing-boat Fishing boat"
+  ],
+  [
+   "vehicles-canoe Canoe",
+   "vehicles-submarine Submarine",
+   "vehicles-jet-ski Jet ski",
+   "vehicles-sled Sled",
+   "vehicles-horse-carriage Horse carriage"
+  ],
+  [
+   "places-beach Beach",
+   "places-desert Desert",
+   "places-forest Forest",
+   "places-jungle Jungle",
+   "places-mountain Mountain",
+   "places-volcano Volcano",
+   "places-island Island",
+   "places-waterfall Waterfall",
+   "places-lake Lake"
+  ],
+  [
+   "places-river River",
+   "places-cave Cave",
+   "places-farm Farm",
+   "places-garden Garden",
+   "places-park Park",
+   "places-zoo Zoo",
+   "places-playground Playground",
+   "places-amusement-park Amusement park",
+   "places-school School"
+  ],
+  [
+   "places-classroom Classroom",
+   "places-university University",
+   "places-library Library",
+   "places-museum Museum",
+   "places-hospital Hospital",
+   "places-pharmacy Pharmacy",
+   "places-mosque Mosque",
+   "places-airport Airport",
+   "places-train-station Train station"
+  ],
+  [
+   "places-port Port",
+   "places-gas-station Gas station",
+   "places-police-station Police station",
+   "places-fire-station Fire station",
+   "places-bank Bank",
+   "places-post-office Post office",
+   "places-supermarket Supermarket",
+   "places-market Market",
+   "places-shopping-mall Shopping mall"
+  ],
+  [
+   "places-restaurant Restaurant",
+   "places-cafe Café",
+   "places-bakery Bakery",
+   "places-barbershop Barbershop",
+   "places-hotel Hotel",
+   "places-cinema Cinema",
+   "places-stadium Stadium",
+   "places-swimming-pool Swimming pool",
+   "places-gym Gym"
+  ],
+  [
+   "places-castle Castle",
+   "places-lighthouse Lighthouse",
+   "places-bridge Bridge",
+   "places-skyscraper Skyscraper",
+   "places-kitchen Kitchen"
+  ]
+ ]
+}
