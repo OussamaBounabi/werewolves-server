@@ -244,9 +244,9 @@ describe("GuessRoom", () => {
     return { room, a, b };
   }
 
-  it("Mystery Item: 7 categories of 50 well-known things, countries by their flag", () => {
+  it("Mystery Item: 7 categories of 50 well-known things (49 fruits and vegetables), countries by their flag", () => {
     assert.deepStrictEqual(MYSTERY_CATEGORIES, ["animals", "food", "fruits", "things", "vehicles", "places", "countries"]);
-    for (const c of MYSTERY_CATEGORIES) assert.strictEqual(itemsOf(c).length, 50, c);
+    for (const c of MYSTERY_CATEGORIES) assert.strictEqual(itemsOf(c).length, c === "fruits" ? 49 : 50, c);
     assert.ok(itemsOf("countries").every((i) => i.flag && i.name.ar));
     assert.strictEqual(item("animals-polar-bear")?.name.fr, "Ours polaire");
   });

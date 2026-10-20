@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { catalog } from "./guess.js";
 
 /**
- * Mystery Item's things to find, by category: English | French | Arabic, one per line (50 each, the best known).
+ * Mystery Item's things to find, by category: English | French | Arabic, one per line (50 each, the best known; 49 fruits and vegetables: Ginger's picture never came).
  * An item's id is its category and English name ("animals-polar-bear"): its picture is data/mystery/img/<id>.webp.
  * Countries are the 50 best known, by FIFA code: their names and flags are Guess Who's.
  */
@@ -159,8 +159,7 @@ Radish|Radis|فجل
 Beetroot|Betterave|شمندر
 Sweet potato|Patate douce|بطاطا حلوة
 Artichoke|Artichaut|خرشوف
-Turnip|Navet|لفت
-Ginger|Gingembre|زنجبيل`,
+Turnip|Navet|لفت`,
   things: `
 Phone|Téléphone|هاتف
 Laptop|Ordinateur portable|حاسوب محمول
