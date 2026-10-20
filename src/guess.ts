@@ -37,6 +37,11 @@ for (const l of legends) l.photo = existsSync(new URL(`../data/guess/legends/${l
 const legendById = new Map(legends.map((l) => [l.id, l]));
 export const legend = (id: string) => legendById.get(id);
 
+/** The easy level's footballers' info sheets (trust mode), by id: data/guess/player-info.json (scripts/legends-data.ts). */
+export const playerInfo: { version: string; players: Record<string, unknown> } = JSON.parse(
+  readFileSync(new URL("../data/guess/player-info.json", import.meta.url), "utf8"),
+);
+
 // Each category's values, and the groups a question may name instead of them.
 const universe: Record<Category, Set<string>> = {
   pos: new Set(POSITIONS),

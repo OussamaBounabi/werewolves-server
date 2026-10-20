@@ -25,7 +25,7 @@ import { onlineCount, roomsOf, whereIs } from "./presence.js";
 import { todayNow } from "./metrics.js";
 import express from "express";
 import { fileURLToPath } from "node:url";
-import { catalog, legends } from "./guess.js";
+import { catalog, legends, playerInfo } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
   buyAvatar, buyFrame, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError,
@@ -358,6 +358,10 @@ const server = defineServer({
     // The legends (trust mode): names, levels, careers and trophies for the info sheet. Fetched only when played.
     app.get("/api/guess/legends", (_req, res) => {
       res.json({ legends });
+    });
+    // The easy level's footballers' info sheets (trust mode): {version, players: {id: details}}.
+    app.get("/api/guess/player-info", (_req, res) => {
+      res.json(playerInfo);
     });
     // Mimic Party's takes: a player sends his (?room&session&token&round&score, a WAV), everyone hears them.
     app.post("/api/mimic/clip", express.raw({ type: "*/*", limit: "450kb" }), (req, res) => {

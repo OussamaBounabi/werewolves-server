@@ -1,0 +1,841 @@
+{
+ "about": "Hand corrections to the info sheets (scripts/legends-data.ts applies them), by Wikidata id: checked one by one.",
+ "Q615": {
+  "positions": [
+   "AMF",
+   "RWF",
+   "SS",
+   "CF"
+  ],
+  "set": {
+   "Pichichi Trophy": {
+    "years": [
+     "2009–10",
+     "2011–12",
+     "2012–13",
+     "2016–17",
+     "2017–18",
+     "2018–19",
+     "2019–20",
+     "2020–21"
+    ]
+   },
+   "FIFA World Player of the Year": {
+    "years": [
+     "2009"
+    ],
+    "award": true,
+    "icon": "best",
+    "fr": "Joueur mondial de la FIFA",
+    "ar": "أفضل لاعب في العالم من الفيفا"
+   },
+   "The Best FIFA Men's Player": {
+    "years": [
+     "2019",
+     "2022",
+     "2023"
+    ],
+    "award": true,
+    "icon": "best",
+    "fr": "The Best, joueur FIFA",
+    "ar": "جائزة الأفضل من الفيفا"
+   }
+  }
+ },
+ "Q12897": {
+  "drop": [
+   "France Footballs Ballon d'Or"
+  ],
+  "positions": [
+   "AMF",
+   "SS",
+   "CF"
+  ]
+ },
+ "Q17515": {
+  "set": {
+   "Argentine Primera División top scorers": {
+    "years": [
+     "1978 Metropolitano",
+     "1979 Metropolitano",
+     "1979 Nacional",
+     "1980 Metropolitano",
+     "1980 Nacional"
+    ]
+   }
+  }
+ },
+ "Q10520": {
+  "positions": [
+   "CMF",
+   "RMF"
+  ]
+ },
+ "Q46896": {
+  "set": {
+   "Guldbollen (Swedish Footballer of the Year)": {
+    "years": [
+     "2005",
+     "2007",
+     "2008",
+     "2009",
+     "2010",
+     "2011",
+     "2012",
+     "2013",
+     "2014",
+     "2015",
+     "2016",
+     "2020"
+    ],
+    "award": true,
+    "icon": "star",
+    "fr": "Guldbollen (meilleur joueur suédois)",
+    "ar": "الكرة الذهبية السويدية"
+   }
+  }
+ },
+ "Q1912": {
+  "retired": null
+ },
+ "Q45901": {
+  "drop": [
+   "Golden Boot Landmark Award 10",
+   "Golden Boot Landmark Award 20"
+  ],
+  "positions": [
+   "LWF",
+   "CF"
+  ]
+ },
+ "Q266613": {
+  "positions": [
+   "AMF",
+   "SS",
+   "CF"
+  ]
+ },
+ "Q2339": {
+  "drop": [
+   "Premier League Golden Boot Landmark Award"
+  ]
+ },
+ "Q17500": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q162043": {
+  "drop": [
+   "Scottish PFA Merit Award"
+  ]
+ },
+ "Q482931": {
+  "set": {
+   "Hungarian League": {
+    "years": [
+     "1949–50",
+     "1950",
+     "1952",
+     "1954",
+     "1955"
+    ],
+    "icon": "league",
+    "fr": "Championnat de Hongrie",
+    "ar": "الدوري المجري"
+   }
+  }
+ },
+ "Q164546": {
+  "positions": [
+   "AMF",
+   "SS",
+   "CF"
+  ]
+ },
+ "Q483629": {
+  "drop": [
+   "World Golden Boot",
+   "Planète Foots 50 of the World's Best Players"
+  ]
+ },
+ "Q164521": {
+  "drop": [
+   "Rothmans Golden Boots Awards"
+  ]
+ },
+ "Q43682": {
+  "drop": [
+   "FIFA Ballon d'Or"
+  ]
+ },
+ "Q43926": {
+  "positions": [
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q83006": {
+  "drop": [
+   "La Liga's Top Assisting Player",
+   "NYCFC Most Valuable Player",
+   "NYCFC Offensive Player of the Year"
+  ]
+ },
+ "Q429039": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q167828": {
+  "drop": [
+   "Ballon d'Or Winner"
+  ],
+  "set": {
+   "Ballon d'Or": {
+    "years": [
+     "1963"
+    ],
+    "award": true,
+    "icon": "ballon",
+    "fr": "Ballon d'Or",
+    "ar": "الكرة الذهبية"
+   }
+  }
+ },
+ "Q36386": {
+  "retired": 2000,
+  "dropClubs": [
+   "1. FC Herzogenaurach 2018"
+  ],
+  "drop": [
+   "MLS Eastern Division Champion",
+   "U.S. Cup"
+  ]
+ },
+ "Q172720": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q102027": {
+  "drop": [
+   "Serie A"
+  ]
+ },
+ "Q38136": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q170328": {
+  "drop": [
+   "Cup of the Alps"
+  ]
+ },
+ "Q180642": {
+  "drop": [
+   "International Quadrangular Tournament",
+   "Interclub Tournament Pentagonal Mexico",
+   "International Tournament of Colombia",
+   "International Tournament in Costa Rica",
+   "Torneio Início do Campeonato Carioca",
+   "Torneio Pentagonal do México",
+   "Taça dos Campeões Estaduais Rio-São Paulo",
+   "Torneio de Paris",
+   "Torneio Jubileu de Ouro da Associação",
+   "Torneio de Futebol de La Paz",
+   "Torneio Ibero-Americano",
+   "Torneio Quadrangular do Suriname"
+  ]
+ },
+ "Q482955": {
+  "retired": 2011,
+  "dropClubs": [
+   "Noordwijk 2016"
+  ]
+ },
+ "Q439722": {
+  "positions": [
+   "LWF",
+   "CF"
+  ]
+ },
+ "Q57079": {
+  "retired": 1998,
+  "dropClubs": [
+   "Orange County Blue Star 2003"
+  ],
+  "drop": [
+   "Summer Olympic Games"
+  ]
+ },
+ "Q47526": {
+  "drop": [
+   "J.League Suntory Series"
+  ]
+ },
+ "Q184277": {
+  "positions": [
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q173972": {
+  "set": {
+   "Ballon d'Or": {
+    "years": [
+     "1987"
+    ],
+    "award": true,
+    "icon": "ballon",
+    "fr": "Ballon d'Or",
+    "ar": "الكرة الذهبية"
+   }
+  }
+ },
+ "Q483137": {
+  "rename": {
+   "Golden Ball": {
+    "en": "Czech Golden Ball",
+    "fr": "Ballon d'or tchèque",
+    "ar": "الكرة الذهبية التشيكية"
+   }
+  }
+ },
+ "Q483417": {
+  "positions": [
+   "CB"
+  ]
+ },
+ "Q80306": {
+  "positions": [
+   "CB",
+   "LB"
+  ]
+ },
+ "Q169098": {
+  "drop": [
+   "European Cup/UEFA Champions League"
+  ],
+  "set": {
+   "UEFA Champions League": {
+    "years": [
+     "1988–89",
+     "1989–90",
+     "1994–95"
+    ]
+   }
+  }
+ },
+ "Q659634": {
+  "drop": [
+   "CNID Best Portuguese Athlete Abroad"
+  ],
+  "positions": [
+   "CMF",
+   "AMF"
+  ]
+ },
+ "Q188720": {
+  "drop": [
+   "Scandinavia Best Player Ever"
+  ]
+ },
+ "Q187125": {
+  "drop": [
+   "Central Division"
+  ]
+ },
+ "Q192635": {
+  "drop": [
+   "European Cup/UEFA Champions League"
+  ],
+  "set": {
+   "European Cup": {
+    "years": [
+     "1987–88",
+     "1991–92"
+    ]
+   }
+  }
+ },
+ "Q180661": {
+  "drop": [
+   "FIFA World Cup Best Goalkeeper"
+  ]
+ },
+ "Q189892": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q201381": {
+  "drop": [
+   "The Best Golden Shoe Team"
+  ]
+ },
+ "Q189217": {
+  "nation": "CRO",
+  "set": {
+   "FIFA World Cup Golden Boot": {
+    "years": [
+     "1998"
+    ],
+    "award": true,
+    "icon": "boot",
+    "fr": "Soulier d'or de la Coupe du monde",
+    "ar": "الحذاء الذهبي لكأس العالم"
+   }
+  }
+ },
+ "Q178683": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q116980": {
+  "positions": [
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q182314": {
+  "set": {
+   "Primeira Liga": {
+    "years": [
+     "1999–2000"
+    ],
+    "icon": "league",
+    "fr": "Championnat du Portugal",
+    "ar": "الدوري البرتغالي"
+   }
+  }
+ },
+ "Q171295": {
+  "rename": {
+   "Golden Ball": {
+    "en": "Czech Golden Ball",
+    "fr": "Ballon d'or tchèque",
+    "ar": "الكرة الذهبية التشيكية"
+   }
+  }
+ },
+ "Q187238": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q102331": {
+  "retired": 1989,
+  "dropClubs": [
+   "Garforth Town 2004"
+  ],
+  "drop": [
+   "Torneio Vicente Feola",
+   "Brazil-England Cup"
+  ]
+ },
+ "Q193625": {
+  "drop": [
+   "European Super Cup"
+  ],
+  "set": {
+   "UEFA Super Cup": {
+    "years": [
+     "1994",
+     "1998"
+    ]
+   }
+  }
+ },
+ "Q188632": {
+  "positions": [
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q187198": {
+  "drop": [
+   "Drybrough Cup",
+   "Glasgow Cup"
+  ]
+ },
+ "Q213879": {
+  "drop": [
+   "Rothman's Golden Boot Awards"
+  ]
+ },
+ "Q44073": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q179334": {
+  "retired": 2009,
+  "dropClubs": [
+   "Råå IF 2012",
+   "Högaborgs BK 2013"
+  ],
+  "drop": [
+   "Division 1 Södra promotion",
+   "Joe Robbie Cup Best Player",
+   "Premier League"
+  ]
+ },
+ "Q15802": {
+  "drop": [
+   "Primera B Nacional"
+  ]
+ },
+ "Q13494": {
+  "drop": [
+   "FIFA World Player of the Year"
+  ]
+ },
+ "Q191492": {
+  "drop": [
+   "West Ham Player of the Year",
+   "Rothmans Golden Boots Awards"
+  ]
+ },
+ "Q295262": {
+  "rename": {
+   "Campeoanato Brasileiro": {
+    "en": "Campeonato Brasileiro",
+    "fr": "Championnat du Brésil",
+    "ar": "الدوري البرازيلي"
+   }
+  }
+ },
+ "Q159622": {
+  "drop": [
+   "LG Cup",
+   "AFC–OFC Challenge Cup"
+  ]
+ },
+ "Q9354": {
+  "drop": [
+   "European Super Cup"
+  ],
+  "set": {
+   "UEFA Super Cup": {
+    "years": [
+     "1993",
+     "1998"
+    ]
+   }
+  }
+ },
+ "Q336916": {
+  "drop": [
+   "FIFA World Player of the Year"
+  ]
+ },
+ "Q176426": {
+  "drop": [
+   "Summer Olympics",
+   "FIFA World Cup",
+   "Mediterranean Games",
+   "Algerian League goalscorer",
+   "Africa Cup of Nations goalscorer"
+  ],
+  "set": {
+   "Algerian League top scorer": {
+    "years": [
+     "1978–79"
+    ],
+    "award": true,
+    "icon": "boot",
+    "fr": "Meilleur buteur du championnat d'Algérie",
+    "ar": "هداف الدوري الجزائري"
+   }
+  }
+ },
+ "Q381686": {
+  "set": {
+   "AFC Asian Footballer of the Year": {
+    "years": [
+     "1994"
+    ],
+    "award": true,
+    "icon": "star",
+    "fr": "Joueur asiatique de l'année",
+    "ar": "أفضل لاعب في آسيا"
+   }
+  }
+ },
+ "Q401433": {
+  "drop": [
+   "Baghdad Championship"
+  ]
+ },
+ "Q401238": {
+  "drop": [
+   "Kuneitra Cup",
+   "Kuneitra Cup Top Goalscorer"
+  ]
+ },
+ "Q2536802": {
+  "set": {
+   "Algerian Championship": {
+    "years": [
+     "1980–81"
+    ],
+    "icon": "league",
+    "fr": "Championnat d'Algérie",
+    "ar": "الدوري الجزائري"
+   }
+  }
+ },
+ "Q958968": {
+  "set": {
+   "African Footballer of the Year": {
+    "years": [
+     "1977"
+    ],
+    "award": true,
+    "icon": "star",
+    "fr": "Ballon d'or africain",
+    "ar": "أفضل لاعب في أفريقيا"
+   }
+  }
+ },
+ "Q253945": {
+  "set": {
+   "Arabian Gulf Cup": {
+    "years": [
+     "1996",
+     "1998"
+    ],
+    "icon": "continental",
+    "fr": "Coupe du Golfe",
+    "ar": "كأس الخليج العربي"
+   }
+  }
+ },
+ "Q180649": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q28967995": {
+  "set": {
+   "Premier League Golden Boot": {
+    "years": [
+     "2022–23",
+     "2023–24",
+     "2025–26"
+    ]
+   }
+  }
+ },
+ "Q20090225": {
+  "drop": [
+   "Ballon d'Or"
+  ]
+ },
+ "Q20806743": {
+  "rename": {
+   "Primeira Liga": {
+    "en": "Primeira Liga do Brasil",
+    "fr": "Primeira Liga du Brésil",
+    "ar": "الدوري الأول البرازيلي"
+   }
+  }
+ },
+ "Q29901014": {
+  "drop": [
+   "Schleswig-Holstein Cup"
+  ]
+ },
+ "Q26932598": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q27569376": {
+  "positions": [
+   "RB",
+   "CMF"
+  ]
+ },
+ "Q13865408": {
+  "positions": [
+   "RB",
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q93563": {
+  "positions": [
+   "CB",
+   "LB"
+  ]
+ },
+ "Q30729096": {
+  "positions": [
+   "CMF",
+   "AMF",
+   "LWF",
+   "RWF"
+  ]
+ },
+ "Q19599124": {
+  "positions": [
+   "CB",
+   "RB"
+  ]
+ },
+ "Q22082505": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q15915040": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q23884186": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q96396963": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q23540953": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q72648": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q19882816": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q39076401": {
+  "positions": [
+   "RB",
+   "CMF"
+  ]
+ },
+ "Q105681392": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q44080929": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q921324": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q67198835": {
+  "positions": [
+   "RB",
+   "RWF"
+  ]
+ },
+ "Q93555": {
+  "positions": [
+   "CB",
+   "LB"
+  ]
+ },
+ "Q14831282": {
+  "positions": [
+   "CB",
+   "RB"
+  ]
+ },
+ "Q6526099": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q26255506": {
+  "positions": [
+   "LB",
+   "RB"
+  ]
+ },
+ "Q22082590": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q78752401": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q87715532": {
+  "positions": [
+   "DMF",
+   "CMF"
+  ]
+ },
+ "Q5370912": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q28717698": {
+  "positions": [
+   "LB",
+   "RB"
+  ]
+ },
+ "Q50628268": {
+  "positions": [
+   "RB"
+  ]
+ },
+ "Q15830919": {
+  "positions": [
+   "CB"
+  ]
+ },
+ "Q17579981": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q20994068": {
+  "positions": [
+   "LB"
+  ]
+ },
+ "Q26266244": {
+  "positions": [
+   "LB",
+   "RB"
+  ]
+ },
+ "Q23679804": {
+  "positions": [
+   "CB",
+   "LB"
+  ]
+ },
+ "Q22279773": {
+  "positions": [
+   "AMF",
+   "LWF",
+   "RWF"
+  ]
+ }
+}

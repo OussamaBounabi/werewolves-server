@@ -3,7 +3,7 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import {
-  botMove, bracket, candidates, catalog, covers, found, legend, legends, LEVELS, nextSlot, possible, randomLegend, randomPlayer,
+  botMove, bracket, candidates, catalog, covers, found, legend, legends, LEVELS, nextSlot, playerInfo, possible, randomLegend, randomPlayer,
   validQuestion, valueOf,
   type Answer,
 } from "../src/guess.js";
@@ -65,8 +65,9 @@ describe("guess who", () => {
     }
   });
 
-  it("the legends: 60 easy, 60 medium, 80 hard, drawn by level, each with his career", () => {
-    assert.deepStrictEqual(["easy", "medium", "hard"].map((v) => legends.filter((l) => l.level === v).length), [60, 60, 80]);
+  it("the legends: 60 easy, 60 medium, 78 hard, all with a portrait, drawn by level, each with his career", () => {
+    assert.deepStrictEqual(["easy", "medium", "hard"].map((v) => legends.filter((l) => l.level === v).length), [60, 60, 78]);
+    assert.ok(legends.every((l) => l.photo), "no legend without a portrait");
     for (let i = 0; i < 200; i++) assert.strictEqual(randomLegend("hard").level, "hard");
     const zidane = legends.find((l) => l.name.en === "Zinedine Zidane")!;
     assert.strictEqual(zidane.born, 1972);
@@ -75,6 +76,18 @@ describe("guess who", () => {
     assert.ok((zidane.trophies as any[]).some((t) => t.icon === "worldcup" && t.years.includes("1998")));
     assert.ok((zidane.awards as any[]).some((t) => t.icon === "ballon"));
     assert.ok(legends.every((l) => (l.positions as string[]).length > 0));
+    // the checks by hand stick: no false Ballon d'Or (Ibrahimović's nominations, Xavi's podiums), the real ones kept
+    const ballons = (n: string) => ((legends.find((l) => l.name.en === n)!.awards as any[]).find((a) => a.icon === "ballon")?.years ?? []).length;
+    assert.deepStrictEqual(["Lionel Messi", "Cristiano Ronaldo", "Zlatan Ibrahimović", "Xavi", "Ruud Gullit", "Mario Kempes"].map(ballons), [8, 5, 0, 0, 1, 0]);
+  });
+
+  it("the easy level's footballers have an info sheet", () => {
+    const easy = catalog.players.filter((p) => LEVELS.easy(p.club));
+    assert.ok(easy.every((p) => playerInfo.players[p.id]), "every easy footballer");
+    const mbappe = playerInfo.players[catalog.players.find((p) => p.name.en === "Kylian Mbappé")!.id] as any;
+    assert.strictEqual(mbappe.retired, null);
+    assert.ok(mbappe.clubs.some((c: any) => c.name.en === "Real Madrid" && c.to === null));
+    assert.ok(mbappe.trophies.some((t: any) => t.icon === "worldcup" && t.years.includes("2018")));
   });
 
   it("bots find the footballer", () => {

@@ -9,12 +9,14 @@
     "ar": "ليونيل ميسي"
    },
    "level": "easy",
-   "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons (\"Leo Messi Argentina v Egypt 7 July 2026-1.jpg\"), cropped, rainbow frame added",
+   "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons (\"Leo Messi Argentina v Egypt 7 July 2026-1.jpg\"), cropped",
    "born": 1987,
    "retired": null,
    "nation": "ARG",
    "positions": [
-    "CMF",
+    "AMF",
+    "RWF",
+    "SS",
     "CF"
    ],
    "clubs": [
@@ -293,29 +295,11 @@
     },
     {
      "name": {
-      "en": "FIFA World Player of the Year/FIFA Ballon d'Or/The Best FIFA Men's Player",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "2009",
-      "2010",
-      "2011",
-      "2012",
-      "2015",
-      "2019",
-      "2022",
-      "2023"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Cup Golden Ball",
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2014",
       "2022"
@@ -327,7 +311,7 @@
       "fr": "FIFA Club World Cup Golden Ball",
       "ar": "قائمة جوائز كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2009",
       "2011"
@@ -394,7 +378,7 @@
       "fr": "Copa América Golden Ball",
       "ar": "Copa América awards"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2015",
       "2021"
@@ -450,11 +434,11 @@
      },
      "icon": "boot",
      "years": [
-      "2009",
+      "2009–10",
       "2011–12",
-      "2012",
+      "2012–13",
       "2016–17",
-      "2017",
+      "2017–18",
       "2018–19",
       "2019–20",
       "2020–21"
@@ -507,6 +491,30 @@
       "2022",
       "2023"
      ]
+    },
+    {
+     "name": {
+      "en": "FIFA World Player of the Year",
+      "fr": "Joueur mondial de la FIFA",
+      "ar": "أفضل لاعب في العالم من الفيفا"
+     },
+     "icon": "best",
+     "years": [
+      "2009"
+     ]
+    },
+    {
+     "name": {
+      "en": "The Best FIFA Men's Player",
+      "fr": "The Best, joueur FIFA",
+      "ar": "جائزة الأفضل من الفيفا"
+     },
+     "icon": "best",
+     "years": [
+      "2019",
+      "2022",
+      "2023"
+     ]
     }
    ]
   },
@@ -518,7 +526,7 @@
     "ar": "كريستيانو رونالدو"
    },
    "level": "easy",
-   "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons (\"Cristiano Ronaldo Croatia v Portugal 2 July 2026-075 (cropped).jpg\"), cropped, rainbow frame added",
+   "credit": "Photo: Bryan Berlin, CC BY-SA 4.0, Wikimedia Commons (\"Cristiano Ronaldo Croatia v Portugal 2 July 2026-075 (cropped).jpg\"), cropped",
    "born": 1985,
    "retired": null,
    "nation": "POR",
@@ -850,17 +858,6 @@
     },
     {
      "name": {
-      "en": "The Best FIFA Special Award for Outstanding Career Achievement",
-      "fr": "The Best FIFA Football Awards",
-      "ar": "جوائز الفيفا للأفضل كرويا"
-     },
-     "icon": "best",
-     "years": [
-      "2021"
-     ]
-    },
-    {
-     "name": {
       "en": "UEFA Club Footballer of the Year",
       "fr": "UEFA Club Footballer of the Year",
       "ar": "جائزة اليويفا لأفضل لاعب"
@@ -868,26 +865,6 @@
      "icon": "star",
      "years": [
       "2007–08"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Men's Player of the Year Award",
-      "fr": "Prix UEFA du joueur de l'année",
-      "ar": "جائزة أفضل لاعب في أوروبا"
-     },
-     "icon": "star",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "The Best Special Award of UEFA Champions League All-Time Top Scorer",
-      "fr": "Meilleurs buteurs de la Ligue des champions de l'UEFA",
-      "ar": "قائمة هدافي دوري أبطال أوروبا"
-     },
-     "icon": "boot",
-     "years": [
-      "2024"
      ]
     },
     {
@@ -907,7 +884,7 @@
       "fr": "FIFA Club World Cup Golden Ball",
       "ar": "قائمة جوائز كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2016"
      ]
@@ -964,6 +941,18 @@
      "years": [
       "2019",
       "2025"
+     ]
+    },
+    {
+     "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2006–07",
+      "2007–08"
      ]
     },
     {
@@ -1038,17 +1027,6 @@
     },
     {
      "name": {
-      "en": "Primeira Liga Best Player of All Time Award",
-      "fr": "championnat du Portugal de football",
-      "ar": "الدوري البرتغالي الممتاز"
-     },
-     "icon": "star",
-     "years": [
-      "2025"
-     ]
-    },
-    {
-     "name": {
       "en": "FPF Portuguese Player of the Year",
       "fr": "Fédération portugaise de football",
       "ar": "اتحاد البرتغال لكرة القدم"
@@ -1074,9 +1052,9 @@
    "level": "easy",
    "born": 1940,
    "retired": 1977,
-   "nation": "BRA",
    "positions": [
-    "CMF",
+    "AMF",
+    "SS",
     "CF"
    ],
    "clubs": [
@@ -1179,7 +1157,6 @@
       "1967",
       "1968",
       "1969",
-      "1973",
       "1973"
      ]
     },
@@ -1304,23 +1281,6 @@
     },
     {
      "name": {
-      "en": "France Footballs Ballon d'Or",
-      "fr": "France Football",
-      "ar": "فرانس فوتبول"
-     },
-     "icon": "ballon",
-     "years": [
-      "1958",
-      "1959",
-      "1960",
-      "1961",
-      "1963",
-      "1964",
-      "1970"
-     ]
-    },
-    {
-     "name": {
       "en": "South American Championship Best Player",
       "fr": "Copa América",
       "ar": "كوبا أمريكا"
@@ -1405,7 +1365,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1970"
      ]
@@ -1431,72 +1391,9 @@
      "years": [
       "1976"
      ]
-    },
-    {
-     "name": {
-      "en": "Football Player of the Century, elected by France Footballs Ballon d'Or Winners",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1999"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Ballon d'Or Prix d'Honneur",
-      "fr": "FIFA Ballon d'or 2013",
-      "ar": "كرة الفيفا الذهبية 2013"
-     },
-     "icon": "ballon",
-     "years": [
-      "2013"
-     ]
-    },
-    {
-     "name": {
-      "en": "South America's Best Player in History, L'Équipe",
-      "fr": "South America's Best Player in History, L'Équipe",
-      "ar": "South America's Best Player in History, L'Équipe"
-     },
-     "icon": "star",
-     "years": [
-      "2015"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Best Special Award",
-      "fr": "The Best FIFA Football Awards",
-      "ar": "جوائز الفيفا للأفضل كرويا"
-     },
-     "icon": "best",
-     "years": [
-      "2022"
-     ]
-    },
-    {
-     "name": {
-      "en": "Most seasons as Campeonato Paulista Top Scorer",
-      "fr": "championnat de São Paulo de football",
-      "ar": "بطولة باوليستا"
-     },
-     "icon": "boot",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "Most consecutive seasons as Campeonato Paulista Top Scorer",
-      "fr": "Most consecutive seasons as Campeonato Paulista Top Scorer",
-      "ar": "Most consecutive seasons as Campeonato Paulista Top Scorer"
-     },
-     "icon": "boot",
-     "years": [
-      "1957–1965"
-     ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q17515",
@@ -1691,11 +1588,11 @@
      },
      "icon": "boot",
      "years": [
-      "1978",
-      "1979",
-      "1979",
-      "1980",
-      "1980"
+      "1978 Metropolitano",
+      "1979 Metropolitano",
+      "1979 Nacional",
+      "1980 Metropolitano",
+      "1980 Nacional"
      ]
     },
     {
@@ -1704,7 +1601,7 @@
       "fr": "Guerin Sportivo",
       "ar": "جورين سبورتيفو"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "1979",
       "1986",
@@ -1747,7 +1644,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1986"
      ]
@@ -1785,17 +1682,6 @@
      "years": [
       "1987–88"
      ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or for services to football",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1995"
-     ]
     }
    ]
   },
@@ -1809,7 +1695,6 @@
    "level": "easy",
    "born": 1992,
    "retired": null,
-   "nation": "BRA",
    "positions": [
     "AMF",
     "LWF",
@@ -2183,17 +2068,6 @@
     },
     {
      "name": {
-      "en": "FIFA Confederations Cup Golden Ball",
-      "fr": "FIFA Confederations Cup Golden Ball",
-      "ar": "سجلات كأس القارات"
-     },
-     "icon": "ballon",
-     "years": [
-      "2013"
-     ]
-    },
-    {
-     "name": {
       "en": "UEFA Champions League top scorer",
       "fr": "Meilleurs buteurs de la Ligue des champions de l'UEFA",
       "ar": "قائمة هدافي دوري أبطال أوروبا"
@@ -2242,12 +2116,13 @@
       "fr": "Copa América 2021",
       "ar": "كوبا أمريكا 2021"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2021"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q1835",
@@ -2398,17 +2273,6 @@
     },
     {
      "name": {
-      "en": "Syrenka Cup",
-      "fr": "Syrenka Cup",
-      "ar": "Syrenka Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1987"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Cup",
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
@@ -2539,17 +2403,6 @@
     },
     {
      "name": {
-      "en": "2nd French Player of the Century",
-      "fr": "Joueur français de l'année",
-      "ar": "جائزة أفضل لاعب فرنسي"
-     },
-     "icon": "star",
-     "years": [
-      "2000"
-     ]
-    },
-    {
-     "name": {
       "en": "Serie A Footballer of the Year",
       "fr": "Meilleur joueur de l'année de Serie A",
       "ar": "جائزة لاعب العام الإيطالي"
@@ -2576,20 +2429,9 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
-     "years": [
-      "2006"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Champions League Best Player of the Past 20 Years",
-      "fr": "UEFA Champions League Best Player of the Past 20 Years",
-      "ar": "UEFA Champions League Best Player of the Past 20 Years"
-     },
      "icon": "star",
      "years": [
-      "2011"
+      "2006"
      ]
     }
    ]
@@ -2606,7 +2448,8 @@
    "retired": 2013,
    "nation": "ENG",
    "positions": [
-    "CMF"
+    "CMF",
+    "RMF"
    ],
    "clubs": [
     {
@@ -3054,19 +2897,6 @@
     },
     {
      "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1971",
-      "1973",
-      "1974"
-     ]
-    },
-    {
-     "name": {
       "en": "Don Balón Award for Best LaLiga Foreign Player",
       "fr": "prix Don Balón",
       "ar": "جائزة دون بالون"
@@ -3087,20 +2917,22 @@
      "years": [
       "1979"
      ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup All-Time Team",
-      "fr": "récompenses de la Coupe du monde de football",
-      "ar": "قائمة جوائز كأس العالم"
-     },
-     "icon": "cup",
-     "years": [
-      "1994"
-     ]
     }
    ],
    "awards": [
+    {
+     "name": {
+      "en": "Ballon d'Or",
+      "fr": "Ballon d'or",
+      "ar": "جائزة الكرة الذهبية"
+     },
+     "icon": "ballon",
+     "years": [
+      "1971",
+      "1973",
+      "1974"
+     ]
+    },
     {
      "name": {
       "en": "Eredivisie top scorer",
@@ -3141,24 +2973,26 @@
     },
     {
      "name": {
-      "en": "FIFA World Cup Golden Ball",
-      "fr": "récompenses de la Coupe du monde de football",
-      "ar": "قائمة جوائز كأس العالم"
+      "en": "Dutch Footballer of the Year",
+      "fr": "Soulier d'or néerlandais",
+      "ar": "جائزة أفضل لاعب هولندي"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
-      "1974"
+      "1968",
+      "1972",
+      "1984"
      ]
     },
     {
      "name": {
-      "en": "IFFHS World's Best Man Player of All Time",
-      "fr": "IFFHS World's Best Man Player of All Time",
-      "ar": "أفضل لاعب في العالم الاتحاد الدولي لتاريخ وإحصاءات كرة القدم"
+      "en": "FIFA World Cup Golden Ball",
+      "fr": "récompenses de la Coupe du monde de football",
+      "ar": "قائمة جوائز كأس العالم"
      },
      "icon": "star",
      "years": [
-      "2025"
+      "1974"
      ]
     }
    ]
@@ -3322,7 +3156,6 @@
    "level": "easy",
    "born": 1976,
    "retired": 2011,
-   "nation": "BRA",
    "positions": [
     "CF"
    ],
@@ -3589,18 +3422,6 @@
     },
     {
      "name": {
-      "en": "Trofeo EFE La Liga Ibero-American Player of the Year",
-      "fr": "trophée EFE",
-      "ar": "جائزة إفي"
-     },
-     "icon": "star",
-     "years": [
-      "1996–97",
-      "2002–03"
-     ]
-    },
-    {
-     "name": {
       "en": "Pichichi Trophy",
       "fr": "trophée Pichichi",
       "ar": "جائزة بيتشيشي"
@@ -3628,22 +3449,11 @@
       "fr": "World Soccer",
       "ar": "مجلة وورد سوكر"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "1996",
       "1997",
       "2002"
-     ]
-    },
-    {
-     "name": {
-      "en": "Don Balón Award La Liga Foreign Player of the Year",
-      "fr": "prix Don Balón",
-      "ar": "جائزة دون بالون"
-     },
-     "icon": "star",
-     "years": [
-      "1996–97"
      ]
     },
     {
@@ -3754,7 +3564,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1998"
      ]
@@ -3792,7 +3602,8 @@
       "2002"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q46896",
@@ -4102,108 +3913,9 @@
      "years": [
       "2016–17"
      ]
-    },
-    {
-     "name": {
-      "en": "The only player to score in the UEFA Champions League with six teams",
-      "fr": "Ligue des champions de l'UEFA",
-      "ar": "دوري أبطال أوروبا"
-     },
-     "icon": "ucl",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "The only foreign player to have won Capocannoniere with two teams, in addition to two teams from the same city",
-      "fr": "The only foreign player to have won Capocannoniere with two teams, in addition to two teams from the same city",
-      "ar": "كابوكانونيري"
-     },
-     "icon": "boot",
-     "years": [
-      "2008–09",
-      "2011–12"
-     ]
-    },
-    {
-     "name": {
-      "en": "Most Ligue 1 goals in a single season",
-      "fr": "Most Ligue 1 goals in a single season",
-      "ar": "Most Ligue 1 goals in a single season"
-     },
-     "icon": "league",
-     "years": [
-      "2015–16"
-     ]
-    },
-    {
-     "name": {
-      "en": "Fastest Ligue 1 hat-trick",
-      "fr": "Fastest Ligue 1 hat-trick",
-      "ar": "Fastest Ligue 1 hat-trick"
-     },
-     "icon": "league",
-     "years": [
-      "2016"
-     ]
-    },
-    {
-     "name": {
-      "en": "Longest goalscoring run in Ligue 1",
-      "fr": "Longest goalscoring run in Ligue 1",
-      "ar": "Longest goalscoring run in Ligue 1"
-     },
-     "icon": "league",
-     "years": [
-      "2015–16"
-     ]
-    },
-    {
-     "name": {
-      "en": "Most MLS regular season goals in a season",
-      "fr": "Major League Soccer",
-      "ar": "الدوري الأمريكي لكرة القدم"
-     },
-     "icon": "league",
-     "years": [
-      "2019"
-     ]
-    },
-    {
-     "name": {
-      "en": "Sweden's only player to score in three consecutive UEFA European Championship tournaments",
-      "fr": "championnat d'Europe de football",
-      "ar": "بطولة أمم أوروبا"
-     },
-     "icon": "continental",
-     "years": [
-      "2004",
-      "2008",
-      "2012"
-     ]
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Ballon d'Or nominations",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2003",
-      "2004",
-      "2005",
-      "2007",
-      "2008",
-      "2009",
-      "2012",
-      "2013",
-      "2014",
-      "2015",
-      "2016"
-     ]
-    },
     {
      "name": {
       "en": "FIFA Puskás Award",
@@ -4317,12 +4029,25 @@
     },
     {
      "name": {
-      "en": "All-time top scorer in Le Classique",
-      "fr": "Olympique de Marseille-Paris Saint-Germain en football",
-      "ar": "كلاسيكو فرنسا"
+      "en": "Guldbollen (Swedish Footballer of the Year)",
+      "fr": "Guldbollen (meilleur joueur suédois)",
+      "ar": "الكرة الذهبية السويدية"
      },
-     "icon": "boot",
-     "years": []
+     "icon": "star",
+     "years": [
+      "2005",
+      "2007",
+      "2008",
+      "2009",
+      "2010",
+      "2011",
+      "2012",
+      "2013",
+      "2014",
+      "2015",
+      "2016",
+      "2020"
+     ]
     }
    ]
   },
@@ -4379,17 +4104,6 @@
     }
    ],
    "trophies": [
-    {
-     "name": {
-      "en": "Regionalliga Süd",
-      "fr": "Regionalliga Sud",
-      "ar": "Regionalliga Süd"
-     },
-     "icon": "league",
-     "years": [
-      "1964–65"
-     ]
-    },
     {
      "name": {
       "en": "Bundesliga",
@@ -4491,6 +4205,19 @@
     },
     {
      "name": {
+      "en": "FIFA World Cup Best Young Player Award",
+      "fr": "récompenses de la Coupe du monde de football",
+      "ar": "قائمة جوائز كأس العالم"
+     },
+     "icon": "cup",
+     "years": [
+      "1966"
+     ]
+    }
+   ],
+   "awards": [
+    {
+     "name": {
       "en": "Ballon d'Or",
       "fr": "Ballon d'or",
       "ar": "جائزة الكرة الذهبية"
@@ -4503,13 +4230,16 @@
     },
     {
      "name": {
-      "en": "FIFA World Cup Best Young Player Award",
-      "fr": "récompenses de la Coupe du monde de football",
-      "ar": "قائمة جوائز كأس العالم"
+      "en": "Footballer of the Year",
+      "fr": "footballeur allemand de l'année",
+      "ar": "لاعب العام في ألمانيا"
      },
-     "icon": "cup",
+     "icon": "star",
      "years": [
-      "1966"
+      "1966",
+      "1968",
+      "1974",
+      "1976"
      ]
     },
     {
@@ -4518,13 +4248,12 @@
       "fr": "North American Soccer League",
       "ar": "دوري أمريكا الشمالية لكرة القدم"
      },
-     "icon": "league",
+     "icon": "star",
      "years": [
       "1977"
      ]
     }
-   ],
-   "awards": []
+   ]
   },
   {
    "id": "Q39444",
@@ -4536,7 +4265,6 @@
    "level": "easy",
    "born": 1980,
    "retired": null,
-   "nation": "BRA",
    "positions": [
     "AMF",
     "LWF",
@@ -4797,28 +4525,6 @@
     },
     {
      "name": {
-      "en": "FIFA Confederations Cup Golden Ball",
-      "fr": "FIFA Confederations Cup Golden Ball",
-      "ar": "سجلات كأس القارات"
-     },
-     "icon": "ballon",
-     "years": [
-      "1999"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Confederations Cup Golden Shoe",
-      "fr": "FIFA Confederations Cup Golden Shoe",
-      "ar": "سجلات كأس القارات"
-     },
-     "icon": "boot",
-     "years": [
-      "1999"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Player of the Year",
       "fr": "Meilleur footballeur de l'année FIFA",
       "ar": "جائزة أفضل لاعب كرة قدم في العالم"
@@ -4835,7 +4541,7 @@
       "fr": "World Soccer",
       "ar": "مجلة وورد سوكر"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "2004",
       "2005"
@@ -4870,7 +4576,7 @@
       "fr": "FIFPRO",
       "ar": "فيفبرو"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "2005",
       "2006"
@@ -4909,7 +4615,8 @@
       "2013"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q26517",
@@ -5220,17 +4927,6 @@
     },
     {
      "name": {
-      "en": "Copa América Best Player",
-      "fr": "Copa América Best Player",
-      "ar": "سجلات وإحصائيات كوبا أمريكا"
-     },
-     "icon": "star",
-     "years": [
-      "2011"
-     ]
-    },
-    {
-     "name": {
       "en": "European Golden Shoe",
       "fr": "Soulier d'or européen",
       "ar": "جائزة الحذاء الذهبي الأوروبي"
@@ -5239,6 +4935,17 @@
      "years": [
       "2013–14",
       "2015–16"
+     ]
+    },
+    {
+     "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2013–14"
      ]
     },
     {
@@ -5280,7 +4987,7 @@
       "fr": "FIFA Club World Cup Golden Ball",
       "ar": "قائمة جوائز كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2015"
      ]
@@ -5316,6 +5023,17 @@
      "icon": "star",
      "years": [
       "2023"
+     ]
+    },
+    {
+     "name": {
+      "en": "WhoScored Player of the Season in Europe",
+      "fr": "Opta Sports",
+      "ar": "أوبتا سبورت"
+     },
+     "icon": "star",
+     "years": [
+      "2013–14"
      ]
     }
    ]
@@ -5542,7 +5260,7 @@
       "fr": "The Best, Gardien de but de la FIFA",
       "ar": "جائزة الفيفا لأفضل حارس"
      },
-     "icon": "best",
+     "icon": "glove",
      "years": [
       "2017"
      ]
@@ -5558,7 +5276,7 @@
    },
    "level": "easy",
    "born": 1987,
-   "retired": 2026,
+   "retired": null,
    "nation": "FRA",
    "positions": [
     "CF"
@@ -5807,12 +5525,35 @@
     },
     {
      "name": {
+      "en": "UEFA Champions League Player of the Season",
+      "fr": "Ligue des champions de l'UEFA",
+      "ar": "دوري أبطال أوروبا"
+     },
+     "icon": "star",
+     "years": [
+      "2021–22"
+     ]
+    },
+    {
+     "name": {
       "en": "UEFA Champions League top goalscorer",
       "fr": "Meilleurs buteurs de la Ligue des champions de l'UEFA",
       "ar": "قائمة هدافي دوري أبطال أوروبا"
      },
      "icon": "boot",
      "years": [
+      "2021–22"
+     ]
+    },
+    {
+     "name": {
+      "en": "La Liga Player of the Season",
+      "fr": "prix LFP",
+      "ar": "جوائز الدوري الإسباني"
+     },
+     "icon": "star",
+     "years": [
+      "2019–20",
       "2021–22"
      ]
     },
@@ -5905,6 +5646,28 @@
      "icon": "star",
      "years": [
       "2021"
+     ]
+    },
+    {
+     "name": {
+      "en": "Kicker Player of the Season",
+      "fr": "Kicker Sportmagazin",
+      "ar": "كيكر"
+     },
+     "icon": "star",
+     "years": [
+      "2022"
+     ]
+    },
+    {
+     "name": {
+      "en": "Saudi Pro League Player of the Season",
+      "fr": "Championnat d'Arabie saoudite de football",
+      "ar": "الدوري السعودي للمحترفين"
+     },
+     "icon": "star",
+     "years": [
+      "2024–25"
      ]
     }
    ]
@@ -6562,39 +6325,6 @@
       "1984",
       "1985"
      ]
-    },
-    {
-     "name": {
-      "en": "Intercontinental Cup Most Valuable Player of the Match Award",
-      "fr": "Intercontinental Cup Most Valuable Player of the Match Award",
-      "ar": "Intercontinental Cup Most Valuable Player of the Match Award"
-     },
-     "icon": "star",
-     "years": [
-      "1985"
-     ]
-    },
-    {
-     "name": {
-      "en": "Planète Foots 50 Best Player of All Time",
-      "fr": "Planète Foots 50 Best Player of All Time",
-      "ar": "Planète Foots 50 Best Player of All Time"
-     },
-     "icon": "star",
-     "years": [
-      "1996"
-     ]
-    },
-    {
-     "name": {
-      "en": "French Player of the Century",
-      "fr": "Joueur français de l'année",
-      "ar": "جائزة أفضل لاعب فرنسي"
-     },
-     "icon": "star",
-     "years": [
-      "1999"
-     ]
     }
    ]
   },
@@ -6760,6 +6490,17 @@
     },
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2004–05"
+     ]
+    },
+    {
+     "name": {
       "en": "England Player of the Year",
       "fr": "England Player of the Year",
       "ar": "جوائز الاتحاد الإنجليزي لكرة القدم"
@@ -6784,6 +6525,7 @@
    "retired": 2014,
    "nation": "FRA",
    "positions": [
+    "LWF",
     "CF"
    ],
    "clubs": [
@@ -6980,17 +6722,6 @@
     },
     {
      "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1997"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Cup",
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
@@ -7042,7 +6773,7 @@
       "fr": "Coupe des confédérations",
       "ar": "كأس القارات"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2003"
      ]
@@ -7084,6 +6815,18 @@
     },
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2003–04",
+      "2005–06"
+     ]
+    },
+    {
+     "name": {
       "en": "Premier League Golden Boot",
       "fr": "Premier League Golden Boot",
       "ar": "جائزة الحذاء الذهبي في الدوري الإنجليزي الممتاز"
@@ -7094,28 +6837,6 @@
       "2003–04",
       "2004–05",
       "2005–06"
-     ]
-    },
-    {
-     "name": {
-      "en": "Golden Boot Landmark Award 10",
-      "fr": "Golden Boot Landmark Award 10",
-      "ar": "جائزة الحذاء الذهبي في الدوري الإنجليزي الممتاز"
-     },
-     "icon": "boot",
-     "years": [
-      "2004–05"
-     ]
-    },
-    {
-     "name": {
-      "en": "Golden Boot Landmark Award 20",
-      "fr": "Golden Boot Landmark Award 20",
-      "ar": "جائزة الحذاء الذهبي في الدوري الإنجليزي الممتاز"
-     },
-     "icon": "boot",
-     "years": [
-      "2004–05"
      ]
     },
     {
@@ -7265,15 +6986,6 @@
      "years": [
       "2014"
      ]
-    },
-    {
-     "name": {
-      "en": "UEFA European Championship",
-      "fr": "championnat d'Europe de football",
-      "ar": "بطولة أمم أوروبا"
-     },
-     "icon": "continental",
-     "years": []
     }
    ],
    "awards": [
@@ -7301,11 +7013,33 @@
     },
     {
      "name": {
+      "en": "Bundesliga Player of the Season",
+      "fr": "Vereinigung der Vertragsfußballspieler",
+      "ar": "Vereinigung der Vertragsfussballspieler"
+     },
+     "icon": "star",
+     "years": [
+      "2005–06"
+     ]
+    },
+    {
+     "name": {
       "en": "Bundesliga top goalscorer",
       "fr": "Bundesliga top goalscorer",
       "ar": "list of Bundesliga top scorers"
      },
      "icon": "boot",
+     "years": [
+      "2005–06"
+     ]
+    },
+    {
+     "name": {
+      "en": "VDV Bundesliga Player of the Season",
+      "fr": "Vereinigung der Vertragsfußballspieler",
+      "ar": "Vereinigung der Vertragsfussballspieler"
+     },
+     "icon": "star",
      "years": [
       "2005–06"
      ]
@@ -7324,7 +7058,8 @@
    "retired": 2021,
    "nation": "ENG",
    "positions": [
-    "CMF",
+    "AMF",
+    "SS",
     "CF"
    ],
    "clubs": [
@@ -7522,6 +7257,17 @@
     },
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2009–10"
+     ]
+    },
+    {
+     "name": {
       "en": "England Senior Men's Player of the Year",
       "fr": "England Senior Men's Player of the Year",
       "ar": "جوائز الاتحاد الإنجليزي لكرة القدم"
@@ -7540,7 +7286,7 @@
       "fr": "Coupe du monde des clubs de la FIFA",
       "ar": "كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2008"
      ]
@@ -7557,7 +7303,6 @@
    "level": "easy",
    "born": 1982,
    "retired": 2017,
-   "nation": "BRA",
    "positions": [
     "AMF",
     "LWF",
@@ -7773,7 +7518,7 @@
       "fr": "FIFPRO",
       "ar": "فيفبرو"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "2007"
      ]
@@ -7831,7 +7576,7 @@
       "fr": "Coupe du monde des clubs de la FIFA",
       "ar": "كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2007"
      ]
@@ -7842,12 +7587,13 @@
       "fr": "Coupe des confédérations",
       "ar": "كأس القارات"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2009"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q11584",
@@ -8010,17 +7756,6 @@
      "icon": "supercup",
      "years": [
       "2018"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA–CAF Meridian Cup",
-      "fr": "Coupe Méridien",
-      "ar": "كأس ميريديان"
-     },
-     "icon": "cup",
-     "years": [
-      "1999"
      ]
     },
     {
@@ -8216,19 +7951,6 @@
     },
     {
      "name": {
-      "en": "Premier League Golden Boot Landmark Award",
-      "fr": "Premier League Golden Boot Landmark Award",
-      "ar": "جائزة الحذاء الذهبي في الدوري الإنجليزي الممتاز"
-     },
-     "icon": "boot",
-     "years": [
-      "2011–12",
-      "2011–12",
-      "2011–12"
-     ]
-    },
-    {
-     "name": {
       "en": "Premier League Golden Boot",
       "fr": "Premier League Golden Boot",
       "ar": "جائزة الحذاء الذهبي في الدوري الإنجليزي الممتاز"
@@ -8260,15 +7982,6 @@
      "years": [
       "2012–13"
      ]
-    },
-    {
-     "name": {
-      "en": "Telegraaf Footballer of the Year Gala 2019",
-      "fr": "Telegraaf Footballer of the Year Gala 2019",
-      "ar": "Telegraaf Footballer of the Year Gala 2019"
-     },
-     "icon": "star",
-     "years": []
     }
    ]
   },
@@ -8666,19 +8379,6 @@
      "years": [
       "2010"
      ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2009",
-      "2010",
-      "2011"
-     ]
     }
    ]
   },
@@ -8974,28 +8674,6 @@
      "years": [
       "1970",
       "1973"
-     ]
-    },
-    {
-     "name": {
-      "en": "Portuguese Golden Ball career award",
-      "fr": "Portuguese Golden Ball career award",
-      "ar": "Portuguese Golden Ball"
-     },
-     "icon": "ballon",
-     "years": [
-      "1991"
-     ]
-    },
-    {
-     "name": {
-      "en": "Scottish PFA Merit Award",
-      "fr": "Scottish PFA Merit Award",
-      "ar": "PFA Scotland Players' Player of the Year"
-     },
-     "icon": "star",
-     "years": [
-      "2007"
      ]
     }
    ]
@@ -9316,6 +8994,21 @@
      "years": [
       "1947"
      ]
+    },
+    {
+     "name": {
+      "en": "Hungarian League",
+      "fr": "Championnat de Hongrie",
+      "ar": "الدوري المجري"
+     },
+     "icon": "league",
+     "years": [
+      "1949–50",
+      "1950",
+      "1952",
+      "1954",
+      "1955"
+     ]
     }
    ],
    "awards": [
@@ -9390,297 +9083,6 @@
      "icon": "boot",
      "years": [
       "1948"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "Q173139",
-   "name": {
-    "en": "George Weah",
-    "fr": "George Weah",
-    "ar": "جورج ويا"
-   },
-   "level": "easy",
-   "born": 1966,
-   "retired": 2003,
-   "nation": "LBR",
-   "positions": [
-    "CF"
-   ],
-   "clubs": [
-    {
-     "name": {
-      "en": "Mighty Barrolle",
-      "fr": "Mighty Barrolle",
-      "ar": "مايتي بارولي"
-     },
-     "from": 1985,
-     "to": 1986
-    },
-    {
-     "name": {
-      "en": "Invincible Eleven",
-      "fr": "Invincible Eleven",
-      "ar": "Invincible Eleven"
-     },
-     "from": 1986,
-     "to": 1987
-    },
-    {
-     "name": {
-      "en": "Africa Sports",
-      "fr": "Africa Sports National",
-      "ar": "أفريكا سبورتس"
-     },
-     "from": 1987,
-     "to": 1987
-    },
-    {
-     "name": {
-      "en": "Tonnerre Yaoundé",
-      "fr": "Tonnerre Yaoundé",
-      "ar": "تونير ياوندي"
-     },
-     "from": 1987,
-     "to": 1988
-    },
-    {
-     "name": {
-      "en": "Monaco",
-      "fr": "AS Monaco FC",
-      "ar": "موناكو"
-     },
-     "from": 1988,
-     "to": 1992
-    },
-    {
-     "name": {
-      "en": "Paris Saint-Germain",
-      "fr": "Paris Saint-Germain FC",
-      "ar": "باريس سان جيرمان"
-     },
-     "from": 1992,
-     "to": 1995
-    },
-    {
-     "name": {
-      "en": "AC Milan",
-      "fr": "AC Milan",
-      "ar": "إيه سي ميلان"
-     },
-     "from": 1995,
-     "to": 2000
-    },
-    {
-     "name": {
-      "en": "Chelsea",
-      "fr": "Chelsea FC",
-      "ar": "تشيلسي"
-     },
-     "from": 2000,
-     "to": 2000,
-     "loan": true
-    },
-    {
-     "name": {
-      "en": "Manchester City",
-      "fr": "Manchester City FC",
-      "ar": "مانشستر سيتي"
-     },
-     "from": 2000,
-     "to": 2000
-    },
-    {
-     "name": {
-      "en": "Marseille",
-      "fr": "Olympique de Marseille",
-      "ar": "أولمبيك مرسيليا"
-     },
-     "from": 2000,
-     "to": 2001
-    },
-    {
-     "name": {
-      "en": "Al Jazira",
-      "fr": "Al-Jazira Club",
-      "ar": "الجزيرة"
-     },
-     "from": 2001,
-     "to": 2003
-    }
-   ],
-   "trophies": [
-    {
-     "name": {
-      "en": "Liberian Premier League",
-      "fr": "championnat du Liberia de football",
-      "ar": "الدوري الليبيري الممتاز"
-     },
-     "icon": "league",
-     "years": [
-      "1986",
-      "1987"
-     ]
-    },
-    {
-     "name": {
-      "en": "Liberian FA Cup",
-      "fr": "Coupe du Liberia de football",
-      "ar": "كأس ليبيريا"
-     },
-     "icon": "cup",
-     "years": [
-      "1986"
-     ]
-    },
-    {
-     "name": {
-      "en": "Coupe de France",
-      "fr": "Coupe de France de football",
-      "ar": "كأس فرنسا"
-     },
-     "icon": "cup",
-     "years": [
-      "1990–91",
-      "1992–93",
-      "1994–95"
-     ]
-    },
-    {
-     "name": {
-      "en": "Division 1",
-      "fr": "championnat de France de football",
-      "ar": "الدوري الفرنسي الدرجة الأولى"
-     },
-     "icon": "league",
-     "years": [
-      "1993–94"
-     ]
-    },
-    {
-     "name": {
-      "en": "Coupe de la Ligue",
-      "fr": "Coupe de la Ligue française de football",
-      "ar": "كأس الرابطة الفرنسية"
-     },
-     "icon": "cup",
-     "years": [
-      "1994–95"
-     ]
-    },
-    {
-     "name": {
-      "en": "Serie A",
-      "fr": "championnat d'Italie de football",
-      "ar": "الدوري الإيطالي"
-     },
-     "icon": "league",
-     "years": [
-      "1995–96",
-      "1998–99"
-     ]
-    },
-    {
-     "name": {
-      "en": "FA Cup",
-      "fr": "Coupe d'Angleterre de football",
-      "ar": "كأس الاتحاد الإنجليزي"
-     },
-     "icon": "cup",
-     "years": [
-      "1999–2000"
-     ]
-    }
-   ],
-   "awards": [
-    {
-     "name": {
-      "en": "African Footballer of the Year",
-      "fr": "Joueur africain de l'année",
-      "ar": "جائزة أفضل لاعب أفريقي خلال العام"
-     },
-     "icon": "star",
-     "years": [
-      "1989",
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Division 1 Foreign Player of the Year",
-      "fr": "Division 1 Foreign Player of the Year",
-      "ar": "Division 1 Foreign Player of the Year"
-     },
-     "icon": "star",
-     "years": [
-      "1990–91"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Champions League top scorer",
-      "fr": "Meilleurs buteurs de la Ligue des champions de l'UEFA",
-      "ar": "قائمة هدافي دوري أبطال أوروبا"
-     },
-     "icon": "boot",
-     "years": [
-      "1994–95"
-     ]
-    },
-    {
-     "name": {
-      "en": "BBC African Footballer of the Year",
-      "fr": "footballeur africain de l'année",
-      "ar": "جائزة بي بي سي لأفضل لاعب كرة قدم أفريقي في السنة"
-     },
-     "icon": "star",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "RSSSF Player of the Year",
-      "fr": "Rec.Sport.Soccer Statistics Foundation",
-      "ar": "مؤسسة إحصاءات وثيقة لرياضة كرة القدم"
-     },
-     "icon": "star",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Planète Foots 50 Best Players of all Time",
-      "fr": "Planète Foots 50 Best Players of all Time",
-      "ar": "Planète Foots 50 Best Players of all Time"
-     },
-     "icon": "star",
-     "years": [
-      "1996"
      ]
     }
    ]
@@ -9918,6 +9320,17 @@
    "awards": [
     {
      "name": {
+      "en": "VDV Bundesliga Player of the Season",
+      "fr": "Vereinigung der Vertragsfußballspieler",
+      "ar": "Vereinigung der Vertragsfussballspieler"
+     },
+     "icon": "star",
+     "years": [
+      "2009–10"
+     ]
+    },
+    {
+     "name": {
       "en": "Footballer of the Year in Germany",
       "fr": "footballeur allemand de l'année",
       "ar": "لاعب العام في ألمانيا"
@@ -9939,7 +9352,6 @@
    "level": "easy",
    "born": 1991,
    "retired": 2023,
-   "nation": "BEL",
    "positions": [
     "AMF",
     "LWF",
@@ -10147,6 +9559,17 @@
     },
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2014–15"
+     ]
+    },
+    {
+     "name": {
       "en": "FWA Footballer of the Year",
       "fr": "Footballeur de l'année de la FWA",
       "ar": "جائزة أفضل لاعب في إنجلترا من اتحاد كتاب كرة القدم"
@@ -10168,225 +9591,20 @@
       "2018",
       "2019"
      ]
-    }
-   ]
-  },
-  {
-   "id": "Q17507",
-   "name": {
-    "en": "Gerard Piqué",
-    "fr": "Gerard Piqué",
-    "ar": "جيرارد بيكيه"
-   },
-   "level": "easy",
-   "born": 1987,
-   "retired": 2022,
-   "nation": "ESP",
-   "positions": [
-    "CB"
-   ],
-   "clubs": [
-    {
-     "name": {
-      "en": "Manchester United",
-      "fr": "Manchester United FC",
-      "ar": "مانشستر يونايتد"
-     },
-     "from": 2004,
-     "to": 2008
     },
     {
      "name": {
-      "en": "Zaragoza",
-      "fr": "Real Saragosse",
-      "ar": "ريال سرقسطة"
-     },
-     "from": 2006,
-     "to": 2007,
-     "loan": true
-    },
-    {
-     "name": {
-      "en": "Barcelona",
-      "fr": "FC Barcelone",
-      "ar": "برشلونة"
-     },
-     "from": 2008,
-     "to": 2022
-    }
-   ],
-   "trophies": [
-    {
-     "name": {
-      "en": "Premier League",
-      "fr": "championnat d'Angleterre de football",
-      "ar": "الدوري الإنجليزي الممتاز"
-     },
-     "icon": "league",
-     "years": [
-      "2007–08"
-     ]
-    },
-    {
-     "name": {
-      "en": "Football League Cup",
-      "fr": "Coupe de la Ligue anglaise de football",
-      "ar": "كأس رابطة الأندية الإنجليزية المحترفة"
-     },
-     "icon": "cup",
-     "years": [
-      "2005–06"
-     ]
-    },
-    {
-     "name": {
-      "en": "FA Community Shield",
-      "fr": "Community Shield",
-      "ar": "درع المجتمع الإنجليزي"
-     },
-     "icon": "supercup",
-     "years": [
-      "2007"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Champions League",
-      "fr": "Ligue des champions de l'UEFA",
-      "ar": "دوري أبطال أوروبا"
-     },
-     "icon": "ucl",
-     "years": [
-      "2007–08",
-      "2008–09",
-      "2010–11",
-      "2014–15"
-     ]
-    },
-    {
-     "name": {
-      "en": "La Liga",
-      "fr": "championnat d'Espagne de football",
-      "ar": "الدوري الإسباني"
-     },
-     "icon": "league",
-     "years": [
-      "2008–09",
-      "2009–10",
-      "2010–11",
-      "2012–13",
-      "2014–15",
-      "2015–16",
-      "2017–18",
-      "2018–19",
-      "2022–23"
-     ]
-    },
-    {
-     "name": {
-      "en": "Copa del Rey",
-      "fr": "Coupe d'Espagne de football",
-      "ar": "كأس ملك إسبانيا"
-     },
-     "icon": "cup",
-     "years": [
-      "2008–09",
-      "2011–12",
-      "2014–15",
-      "2015–16",
-      "2016–17",
-      "2017–18",
-      "2020–21"
-     ]
-    },
-    {
-     "name": {
-      "en": "Supercopa de España",
-      "fr": "Supercoupe d'Espagne de football",
-      "ar": "كأس السوبر الإسباني"
-     },
-     "icon": "supercup",
-     "years": [
-      "2009",
-      "2010",
-      "2011",
-      "2013",
-      "2016",
-      "2018"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Super Cup",
-      "fr": "Supercoupe de l'UEFA",
-      "ar": "كأس السوبر الأوروبي"
-     },
-     "icon": "supercup",
-     "years": [
-      "2009",
-      "2015"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Club World Cup",
-      "fr": "Coupe du monde des clubs de la FIFA",
-      "ar": "كأس العالم للأندية"
-     },
-     "icon": "clubworld",
-     "years": [
-      "2009",
-      "2011",
-      "2015"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "worldcup",
-     "years": [
-      "2010"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA European Championship",
-      "fr": "championnat d'Europe de football",
-      "ar": "بطولة أمم أوروبا"
-     },
-     "icon": "continental",
-     "years": [
-      "2012"
-     ]
-    }
-   ],
-   "awards": [
-    {
-     "name": {
-      "en": "La Liga Breakthrough Player of the Year",
-      "fr": "prix Don Balón",
-      "ar": "جائزة دون بالون"
+      "en": "UEFA Europa League Player of the Season",
+      "fr": "Ligue Europa",
+      "ar": "الدوري الأوروبي"
      },
      "icon": "star",
      "years": [
-      "2008–09"
-     ]
-    },
-    {
-     "name": {
-      "en": "Footballer of the Year in Catalonia",
-      "fr": "Footballer of the Year in Catalonia",
-      "ar": "Footballer of the Year in Catalonia"
-     },
-     "icon": "star",
-     "years": [
-      "2019"
+      "2018–19"
      ]
     }
-   ]
+   ],
+   "nation": "BEL"
   },
   {
    "id": "Q48892",
@@ -10736,17 +9954,6 @@
    "trophies": [
     {
      "name": {
-      "en": "Regionalliga Süd",
-      "fr": "Regionalliga Sud",
-      "ar": "Regionalliga Süd"
-     },
-     "icon": "league",
-     "years": [
-      "1964–65"
-     ]
-    },
-    {
-     "name": {
       "en": "Bundesliga",
       "fr": "championnat d'Allemagne de football",
       "ar": "الدوري الألماني"
@@ -11083,41 +10290,7 @@
      ]
     }
    ],
-   "awards": [
-    {
-     "name": {
-      "en": "Premier League Player of the Year by Northwest Football Awards",
-      "fr": "Premier League Player of the Year by Northwest Football Awards",
-      "ar": "Premier League Player of the Year by Northwest Football Awards"
-     },
-     "icon": "star",
-     "years": [
-      "2008"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA European Championship Golden Boot",
-      "fr": "Statistiques et records du Championnat d'Europe de football",
-      "ar": "إحصائيات وأرقام قياسية في بطولة أمم أوروبا"
-     },
-     "icon": "boot",
-     "years": [
-      "2012"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Confederations Cup Golden Shoe",
-      "fr": "FIFA Confederations Cup Golden Shoe",
-      "ar": "سجلات كأس القارات"
-     },
-     "icon": "boot",
-     "years": [
-      "2013"
-     ]
-    }
-   ]
+   "awards": []
   },
   {
    "id": "Q483309",
@@ -11337,7 +10510,7 @@
       "fr": "FIFA Club World Cup Golden Ball",
       "ar": "قائمة جوائز كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2014"
      ]
@@ -11475,22 +10648,11 @@
    "awards": [
     {
      "name": {
-      "en": "UEFA Cup Winners' Cup Top Scorer",
-      "fr": "UEFA Cup Winners' Cup Top Scorer",
-      "ar": "UEFA Cup Winners' Cup records and statistics"
-     },
-     "icon": "boot",
-     "years": [
-      "1990–91"
-     ]
-    },
-    {
-     "name": {
       "en": "World Soccers World Player of the Year",
       "fr": "World Soccer",
       "ar": "مجلة وورد سوكر"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "1993"
      ]
@@ -11824,13 +10986,36 @@
     },
     {
      "name": {
+      "en": "African Cup of Nations top goalscorer",
+      "fr": "Coupe d'Afrique des nations de football",
+      "ar": "كأس الأمم الإفريقية"
+     },
+     "icon": "boot",
+     "years": [
+      "2006",
+      "2008"
+     ]
+    },
+    {
+     "name": {
       "en": "FIFA Club World Cup Golden Ball",
       "fr": "Coupe du monde des clubs de la FIFA",
       "ar": "كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2010"
+     ]
+    },
+    {
+     "name": {
+      "en": "Coppa Italia top goalscorer",
+      "fr": "Coupe d'Italie de football",
+      "ar": "كأس إيطاليا"
+     },
+     "icon": "boot",
+     "years": [
+      "2010–11"
      ]
     }
    ]
@@ -12043,17 +11228,6 @@
      "years": [
       "2014–15"
      ]
-    },
-    {
-     "name": {
-      "en": "Premier League Player of the Year by Northwest Football Awards",
-      "fr": "Premier League Player of the Year by Northwest Football Awards",
-      "ar": "Premier League Player of the Year by Northwest Football Awards"
-     },
-     "icon": "star",
-     "years": [
-      "2015"
-     ]
     }
    ]
   },
@@ -12069,7 +11243,8 @@
    "retired": 1966,
    "nation": "ARG",
    "positions": [
-    "CMF",
+    "AMF",
+    "SS",
     "CF"
    ],
    "clubs": [
@@ -12266,7 +11441,7 @@
       "fr": "Super Ballon d'or",
       "ar": "جائزة الكرة الذهبية السوبر"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1989"
      ]
@@ -12341,26 +11516,6 @@
      "icon": "boot",
      "years": [
       "1957–58"
-     ]
-    },
-    {
-     "name": {
-      "en": "IFFHS Top 10 Europe's Best Players of the 20th century",
-      "fr": "International Federation of Football History & Statistics",
-      "ar": "الاتحاد الدولي لتاريخ وإحصاءات كرة القدم"
-     },
-     "icon": "star",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "IFFHS World's Best Man Player of All Time",
-      "fr": "IFFHS World's Best Man Player of All Time",
-      "ar": "أفضل لاعب في العالم الاتحاد الدولي لتاريخ وإحصاءات كرة القدم"
-     },
-     "icon": "star",
-     "years": [
-      "2025"
      ]
     }
    ]
@@ -12610,17 +11765,6 @@
     },
     {
      "name": {
-      "en": "World Golden Boot",
-      "fr": "World Golden Boot",
-      "ar": "World Golden Boot"
-     },
-     "icon": "boot",
-     "years": [
-      "1985–86"
-     ]
-    },
-    {
-     "name": {
       "en": "IFFHS World's Best Player",
       "fr": "International Federation of Football History & Statistics",
       "ar": "الاتحاد الدولي لتاريخ وإحصاءات كرة القدم"
@@ -12639,9 +11783,7 @@
      },
      "icon": "star",
      "years": [
-      "1987",
       "1988",
-      "1989",
       "1992"
      ]
     },
@@ -12654,28 +11796,6 @@
      "icon": "star",
      "years": [
       "1992"
-     ]
-    },
-    {
-     "name": {
-      "en": "Planète Foots 50 of the World's Best Players",
-      "fr": "Planète Foots 50 of the World's Best Players",
-      "ar": "Planète Foots 50 of the World's Best Players"
-     },
-     "icon": "star",
-     "years": [
-      "1996"
-     ]
-    },
-    {
-     "name": {
-      "en": "Placars 100 Best Players of the Century 26th",
-      "fr": "Placar",
-      "ar": "Placar"
-     },
-     "icon": "star",
-     "years": [
-      "1999"
      ]
     }
    ]
@@ -12970,17 +12090,6 @@
       "fr": "FIFA Club World Cup Golden Ball",
       "ar": "قائمة جوائز كأس العالم للأندية"
      },
-     "icon": "ballon",
-     "years": [
-      "2013"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Club World Cup Most Valuable Player of the Final",
-      "fr": "FIFA Club World Cup Most Valuable Player of the Final",
-      "ar": "قائمة جوائز كأس العالم للأندية"
-     },
      "icon": "star",
      "years": [
       "2013"
@@ -13242,18 +12351,6 @@
      "years": [
       "1971–72"
      ]
-    },
-    {
-     "name": {
-      "en": "Rothmans Golden Boots Awards",
-      "fr": "Rothmans Golden Boots Awards",
-      "ar": "Rothmans Golden Boots Awards"
-     },
-     "icon": "boot",
-     "years": [
-      "1970",
-      "1971"
-     ]
     }
    ]
   },
@@ -13450,17 +12547,6 @@
       "1990–91",
       "1991–92"
      ]
-    },
-    {
-     "name": {
-      "en": "Intercontinental Cup Most Valuable Player of the Match Award",
-      "fr": "Coupe intercontinentale",
-      "ar": "كأس الإنتركونتيننتال"
-     },
-     "icon": "star",
-     "years": [
-      "1999"
-     ]
     }
    ]
   },
@@ -13536,6 +12622,21 @@
     }
    ],
    "trophies": [
+    {
+     "name": {
+      "en": "Vyshcha Liha",
+      "fr": "championnat d'Ukraine de football",
+      "ar": "الدوري الأوكراني الممتاز"
+     },
+     "icon": "league",
+     "years": [
+      "1994–95",
+      "1995–96",
+      "1996–97",
+      "1997–98",
+      "1998–99"
+     ]
+    },
     {
      "name": {
       "en": "Ukrainian Cup",
@@ -13681,6 +12782,17 @@
     },
     {
      "name": {
+      "en": "CIS Cup top goalscorer",
+      "fr": "Coupe de la CEI de football",
+      "ar": "كأس رابطة الدول المستقلة"
+     },
+     "icon": "boot",
+     "years": [
+      "1997"
+     ]
+    },
+    {
+     "name": {
       "en": "Vyscha Liha Footballer of the Year",
       "fr": "Vyscha Liha Footballer of the Year",
       "ar": "Ukrainian Footballer of the Year"
@@ -13723,18 +12835,6 @@
      "years": [
       "1999–2000",
       "2003–04"
-     ]
-    },
-    {
-     "name": {
-      "en": "Baltic and Commonwealth of Independent States Footballer of the Year",
-      "fr": "Baltic and Commonwealth of Independent States Footballer of the Year",
-      "ar": "Footballer of the Year in Baltic and Commonwealth of Independent States"
-     },
-     "icon": "star",
-     "years": [
-      "2004",
-      "2005"
      ]
     }
    ]
@@ -13892,17 +12992,6 @@
    "awards": [
     {
      "name": {
-      "en": "FIFA Ballon d'Or",
-      "fr": "FIFA Ballon d'or",
-      "ar": "كرة الفيفا الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2014"
-     ]
-    },
-    {
-     "name": {
       "en": "Footballer of the Year in Germany",
       "fr": "footballeur allemand de l'année",
       "ar": "لاعب العام في ألمانيا"
@@ -13968,17 +13057,6 @@
     }
    ],
    "trophies": [
-    {
-     "name": {
-      "en": "Torneo di Viareggio",
-      "fr": "tournoi de Viareggio",
-      "ar": "Torneo di Viareggio"
-     },
-     "icon": "league",
-     "years": [
-      "1994"
-     ]
-    },
     {
      "name": {
       "en": "Serie A",
@@ -14349,6 +13427,7 @@
    "retired": 2017,
    "nation": "ITA",
    "positions": [
+    "DMF",
     "CMF"
    ],
    "clubs": [
@@ -15046,6 +14125,17 @@
    "awards": [
     {
      "name": {
+      "en": "Coppa Italia top goalscorer",
+      "fr": "Coppa Italia top goalscorer",
+      "ar": "Coppa Italia top goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "2011–12"
+     ]
+    },
+    {
+     "name": {
       "en": "Capocannoniere",
       "fr": "Capocannoniere",
       "ar": "كابوكانونيري"
@@ -15076,6 +14166,41 @@
      "years": [
       "2016–17",
       "2017–18"
+     ]
+    },
+    {
+     "name": {
+      "en": "Coupe de la Ligue top goalscorer",
+      "fr": "Coupe de la Ligue top goalscorer",
+      "ar": "Coupe de la Ligue top goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "2013–14",
+      "2014–15",
+      "2016–17"
+     ]
+    },
+    {
+     "name": {
+      "en": "Coupe de France top goalscorer",
+      "fr": "Coupe de France top goalscorer",
+      "ar": "Coupe de France top goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "2014–15"
+     ]
+    },
+    {
+     "name": {
+      "en": "CONMEBOL FIFA World Cup qualification top goalscorer",
+      "fr": "Confédération sud-américaine de football",
+      "ar": "كونميبول"
+     },
+     "icon": "boot",
+     "years": [
+      "2018"
      ]
     }
    ]
@@ -15283,37 +14408,6 @@
      "years": [
       "2008"
      ]
-    },
-    {
-     "name": {
-      "en": "La Liga's Top Assisting Player",
-      "fr": "championnat d'Espagne de football",
-      "ar": "الدوري الإسباني"
-     },
-     "icon": "league",
-     "years": [
-      "2006–07"
-     ]
-    },
-    {
-     "name": {
-      "en": "Most goals scored in one World Cup",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "worldcup",
-     "years": [
-      "2010"
-     ]
-    },
-    {
-     "name": {
-      "en": "Largest streak of games having scored",
-      "fr": "Largest streak of games having scored",
-      "ar": "Largest streak of games having scored"
-     },
-     "icon": "olympic",
-     "years": []
     }
    ],
    "awards": [
@@ -15327,48 +14421,6 @@
      "years": [
       "2005–06"
      ]
-    },
-    {
-     "name": {
-      "en": "NYCFC Most Valuable Player",
-      "fr": "New York City FC",
-      "ar": "نيويورك سيتي"
-     },
-     "icon": "star",
-     "years": [
-      "2015",
-      "2016",
-      "2017"
-     ]
-    },
-    {
-     "name": {
-      "en": "NYCFC Offensive Player of the Year",
-      "fr": "New York City FC",
-      "ar": "نيويورك سيتي"
-     },
-     "icon": "star",
-     "years": [
-      "2016"
-     ]
-    },
-    {
-     "name": {
-      "en": "Spain all-time top scorer",
-      "fr": "Spain all-time top scorer",
-      "ar": "Spain all-time top scorer"
-     },
-     "icon": "boot",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "Spain's all-time top scorer in FIFA World Cup matches",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "boot",
-     "years": []
     }
    ]
   },
@@ -15615,7 +14667,6 @@
    "level": "easy",
    "born": 1973,
    "retired": 2016,
-   "nation": "BRA",
    "positions": [
     "LB",
     "RB"
@@ -15847,54 +14898,10 @@
      "years": [
       "1997"
      ]
-    },
-    {
-     "name": {
-      "en": "Umbro Cup",
-      "fr": "Coupe Umbro",
-      "ar": "Umbro Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Lunar New Year Cup",
-      "fr": "Lunar New Year Cup",
-      "ar": "Lunar New Year Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "2005"
-     ]
     }
    ],
-   "awards": [
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "1997"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2002"
-     ]
-    }
-   ]
+   "awards": [],
+   "nation": "BRA"
   },
   {
    "id": "Q483027",
@@ -16514,6 +15521,72 @@
      "years": [
       "2008"
      ]
+    },
+    {
+     "name": {
+      "en": "Egyptian Second Division top goalscorer",
+      "fr": "Egyptian Second Division top goalscorer",
+      "ar": "Egyptian Second Division top goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "1999–00"
+     ]
+    },
+    {
+     "name": {
+      "en": "Egyptian Premier League top goalscorer",
+      "fr": "championnat d'Égypte de football",
+      "ar": "الدوري المصري الممتاز"
+     },
+     "icon": "boot",
+     "years": [
+      "2005–06"
+     ]
+    },
+    {
+     "name": {
+      "en": "CAF Champions League top goalscorer",
+      "fr": "Ligue des champions de la CAF",
+      "ar": "دوري أبطال إفريقيا"
+     },
+     "icon": "boot",
+     "years": [
+      "2006"
+     ]
+    },
+    {
+     "name": {
+      "en": "FIFA Club World Cup top goalscorer",
+      "fr": "Coupe du monde des clubs de la FIFA",
+      "ar": "كأس العالم للأندية"
+     },
+     "icon": "boot",
+     "years": [
+      "2006"
+     ]
+    },
+    {
+     "name": {
+      "en": "Egypt Cup top goalscorer",
+      "fr": "Coupe d'Égypte de football",
+      "ar": "كأس مصر"
+     },
+     "icon": "boot",
+     "years": [
+      "2007"
+     ]
+    },
+    {
+     "name": {
+      "en": "FIFA World Cup qualification top goalscorer",
+      "fr": "tours préliminaires à la Coupe du monde de football",
+      "ar": "تصفيات كأس العالم"
+     },
+     "icon": "boot",
+     "years": [
+      "2014"
+     ]
     }
    ]
   },
@@ -16524,7 +15597,7 @@
     "fr": "Gary Lineker",
     "ar": "غاري لينيكر"
    },
-   "level": "medium",
+   "level": "easy",
    "born": 1960,
    "retired": 1994,
    "nation": "ENG",
@@ -16693,7 +15766,7 @@
     "fr": "Lev Yachine",
     "ar": "ليف ياشين"
    },
-   "level": "medium",
+   "level": "easy",
    "born": 1929,
    "retired": 1970,
    "nation": "RUS",
@@ -16757,7 +15830,7 @@
       "fr": "championnat d'Europe de football",
       "ar": "بطولة أمم أوروبا"
      },
-     "icon": "league",
+     "icon": "continental",
      "years": [
       "1960"
      ]
@@ -16766,22 +15839,13 @@
    "awards": [
     {
      "name": {
-      "en": "Ballon d'Or Winner",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
+      "en": "Ballon d'Or",
+      "fr": "Ballon d'Or",
+      "ar": "الكرة الذهبية"
      },
      "icon": "ballon",
      "years": [
-      "1963",
-      "1956",
-      "1957",
-      "1958",
-      "1959",
-      "1960",
-      "1961",
-      "1964",
-      "1965",
-      "1966"
+      "1963"
      ]
     }
    ]
@@ -17057,9 +16121,31 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2010"
+     ]
+    },
+    {
+     "name": {
+      "en": "FIFA World Cup top goalscorer",
+      "fr": "FIFA World Cup top goalscorer",
+      "ar": "صدارة هدافي كأس العالم"
+     },
+     "icon": "boot",
+     "years": [
+      "2010"
+     ]
+    },
+    {
+     "name": {
+      "en": "Campeonato Gaúcho top goalscorer",
+      "fr": "Campeonato Gaúcho top goalscorer",
+      "ar": "Campeonato Gaúcho top goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "2013"
      ]
     }
    ]
@@ -17073,7 +16159,7 @@
    },
    "level": "medium",
    "born": 1961,
-   "retired": 2018,
+   "retired": 2000,
    "nation": "GER",
    "positions": [
     "CB",
@@ -17124,15 +16210,6 @@
      },
      "from": 2000,
      "to": 2000
-    },
-    {
-     "name": {
-      "en": "1. FC Herzogenaurach",
-      "fr": "1. FC Herzogenaurach",
-      "ar": "1. FC Herzogenaurach"
-     },
-     "from": 2018,
-     "to": 2018
     }
    ],
    "trophies": [
@@ -17224,17 +16301,6 @@
     },
     {
      "name": {
-      "en": "MLS Eastern Division Champion",
-      "fr": "Association de l'Est de la MLS",
-      "ar": "القسم الشرقي"
-     },
-     "icon": "league",
-     "years": [
-      "2000"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Cup",
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
@@ -17253,17 +16319,6 @@
      "icon": "continental",
      "years": [
       "1980"
-     ]
-    },
-    {
-     "name": {
-      "en": "U.S. Cup",
-      "fr": "US Cup",
-      "ar": "كأس الولايات المتحدة"
-     },
-     "icon": "cup",
-     "years": [
-      "1993"
      ]
     }
    ],
@@ -17347,10 +16402,7 @@
    "level": "medium",
    "born": 1983,
    "retired": 2023,
-   "nation": "BRA",
    "positions": [
-    "CB",
-    "LB",
     "RB"
    ],
    "clubs": [
@@ -17669,12 +16721,13 @@
       "fr": "Copa América Golden Ball",
       "ar": "Copa América awards"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2019"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q102027",
@@ -17788,18 +16841,6 @@
      "icon": "europa",
      "years": [
       "1998–99"
-     ]
-    },
-    {
-     "name": {
-      "en": "Serie A",
-      "fr": "championnat d'Italie de football",
-      "ar": "الدوري الإيطالي"
-     },
-     "icon": "league",
-     "years": [
-      "2004–05",
-      "2005–06"
      ]
     },
     {
@@ -17941,28 +16982,6 @@
    "trophies": [
     {
      "name": {
-      "en": "Oberliga Baden-Württemberg",
-      "fr": "Fußball-Oberliga Baden-Württemberg",
-      "ar": "Oberliga Baden-Württemberg"
-     },
-     "icon": "league",
-     "years": [
-      "1989–90"
-     ]
-    },
-    {
-     "name": {
-      "en": "Verbandsliga Nordbaden",
-      "fr": "Verbandsliga Nordbaden",
-      "ar": "Verbandsliga Baden"
-     },
-     "icon": "league",
-     "years": [
-      "1988–89"
-     ]
-    },
-    {
-     "name": {
       "en": "Bundesliga",
       "fr": "championnat d'Allemagne de football",
       "ar": "الدوري الألماني"
@@ -18053,24 +17072,6 @@
      "years": [
       "1996"
      ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "worldcup",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "FIFA Confederations Cup",
-      "fr": "Coupe des confédérations",
-      "ar": "كأس القارات"
-     },
-     "icon": "continental",
-     "years": []
     }
    ],
    "awards": [
@@ -18092,7 +17093,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2002"
      ]
@@ -18373,18 +17374,6 @@
    "trophies": [
     {
      "name": {
-      "en": "Dallas Cup",
-      "fr": "Dallas Cup",
-      "ar": "Dallas Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1993",
-      "1994"
-     ]
-    },
-    {
-     "name": {
       "en": "La Liga",
       "fr": "championnat d'Espagne de football",
       "ar": "الدوري الإسباني"
@@ -18527,6 +17516,18 @@
      "years": [
       "1998–99",
       "2000–01"
+     ]
+    },
+    {
+     "name": {
+      "en": "Copa del Rey top goalscorer",
+      "fr": "Coupe d'Espagne de football",
+      "ar": "كأس ملك إسبانيا"
+     },
+     "icon": "boot",
+     "years": [
+      "2001–02",
+      "2003–04"
      ]
     },
     {
@@ -18707,7 +17708,7 @@
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1966"
      ]
@@ -18929,7 +17930,6 @@
    "level": "medium",
    "born": 1966,
    "retired": 2009,
-   "nation": "BRA",
    "positions": [
     "CF"
    ],
@@ -19320,7 +18320,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1994"
      ]
@@ -19453,19 +18453,9 @@
      "years": [
       "2006"
      ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or – Le nouveau palmarès",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1994"
-     ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q38136",
@@ -19477,10 +18467,8 @@
    "level": "medium",
    "born": 1988,
    "retired": 2024,
-   "nation": "BRA",
    "positions": [
-    "LB",
-    "RB"
+    "LB"
    ],
    "clubs": [
     {
@@ -19663,7 +18651,8 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [],
+   "nation": "BRA"
   },
   {
    "id": "Q170328",
@@ -19769,17 +18758,6 @@
    "trophies": [
     {
      "name": {
-      "en": "Cup of the Alps",
-      "fr": "Coupe des Alpes de football",
-      "ar": "كأس جبال الألب"
-     },
-     "icon": "cup",
-     "years": [
-      "1986–87"
-     ]
-    },
-    {
-     "name": {
       "en": "Division 1",
       "fr": "championnat de France de football",
       "ar": "الدوري الفرنسي الدرجة الأولى"
@@ -19850,39 +18828,6 @@
      "years": [
       "1993–94",
       "1995–96"
-     ]
-    },
-    {
-     "name": {
-      "en": "Kirin Cup",
-      "fr": "Coupe Kirin",
-      "ar": "كأس كيرين"
-     },
-     "icon": "cup",
-     "years": [
-      "1994"
-     ]
-    },
-    {
-     "name": {
-      "en": "Euro Beach Soccer League",
-      "fr": "championnat d'Europe de beach soccer",
-      "ar": "دوري كرة القدم الشاطئية الأوروبية"
-     },
-     "icon": "league",
-     "years": [
-      "2004"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Beach Soccer World Cup",
-      "fr": "Coupe du monde de football de plage",
-      "ar": "كأس العالم الشاطئية"
-     },
-     "icon": "cup",
-     "years": [
-      "2005"
      ]
     }
    ],
@@ -20083,7 +19028,7 @@
       "fr": "World Soccer",
       "ar": "مجلة وورد سوكر"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "2001"
      ]
@@ -20098,6 +19043,17 @@
      "years": [
       "1997–98",
       "1998–99"
+     ]
+    },
+    {
+     "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "1997–98"
      ]
     },
     {
@@ -20432,7 +19388,7 @@
       "fr": "Portuguese Golden Ball",
       "ar": "Portuguese Golden Ball"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1994"
      ]
@@ -20522,7 +19478,6 @@
    "level": "medium",
    "born": 1933,
    "retired": 1972,
-   "nation": "BRA",
    "positions": [
     "LWF",
     "RWF",
@@ -20613,140 +19568,6 @@
     },
     {
      "name": {
-      "en": "International Quadrangular Tournament",
-      "fr": "International Quadrangular Tournament",
-      "ar": "International Quadrangular Tournament"
-     },
-     "icon": "cup",
-     "years": [
-      "1954"
-     ]
-    },
-    {
-     "name": {
-      "en": "Interclub Tournament Pentagonal Mexico",
-      "fr": "Interclub Tournament Pentagonal Mexico",
-      "ar": "Interclub Tournament Pentagonal Mexico"
-     },
-     "icon": "cup",
-     "years": [
-      "1958"
-     ]
-    },
-    {
-     "name": {
-      "en": "International Tournament of Colombia",
-      "fr": "International Tournament of Colombia",
-      "ar": "International Tournament of Colombia"
-     },
-     "icon": "cup",
-     "years": [
-      "1960"
-     ]
-    },
-    {
-     "name": {
-      "en": "International Tournament in Costa Rica",
-      "fr": "International Tournament in Costa Rica",
-      "ar": "International Tournament in Costa Rica"
-     },
-     "icon": "cup",
-     "years": [
-      "1961"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio Início do Campeonato Carioca",
-      "fr": "Torneio Início do Campeonato Carioca",
-      "ar": "Torneio Início do Campeonato Carioca"
-     },
-     "icon": "cup",
-     "years": [
-      "1961",
-      "1962",
-      "1963"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio Pentagonal do México",
-      "fr": "Torneio Pentagonal do México",
-      "ar": "Torneio Pentagonal do México"
-     },
-     "icon": "cup",
-     "years": [
-      "1962"
-     ]
-    },
-    {
-     "name": {
-      "en": "Taça dos Campeões Estaduais Rio-São Paulo",
-      "fr": "Coupe des champions des États Rio-São Paulo",
-      "ar": "Taça dos Campeões Estaduais Rio-São Paulo"
-     },
-     "icon": "cup",
-     "years": [
-      "1962"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio de Paris",
-      "fr": "Torneio de Paris",
-      "ar": "Torneio de Paris"
-     },
-     "icon": "cup",
-     "years": [
-      "1963"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio Jubileu de Ouro da Associação",
-      "fr": "Torneio Jubileu de Ouro da Associação",
-      "ar": "Torneio Jubileu de Ouro da Associação"
-     },
-     "icon": "cup",
-     "years": [
-      "1964"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio de Futebol de La Paz",
-      "fr": "Torneio de Futebol de La Paz",
-      "ar": "Torneio de Futebol de La Paz"
-     },
-     "icon": "cup",
-     "years": [
-      "1964"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio Ibero-Americano",
-      "fr": "Torneio Ibero-Americano",
-      "ar": "Torneio Ibero-Americano"
-     },
-     "icon": "cup",
-     "years": [
-      "1964"
-     ]
-    },
-    {
-     "name": {
-      "en": "Torneio Quadrangular do Suriname",
-      "fr": "Torneio Quadrangular do Suriname",
-      "ar": "Torneio Quadrangular do Suriname"
-     },
-     "icon": "cup",
-     "years": [
-      "1964"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA World Cup",
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
@@ -20791,7 +19612,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1962"
      ]
@@ -20820,7 +19641,8 @@
       "1962"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q483577",
@@ -20832,7 +19654,6 @@
    "level": "medium",
    "born": 1972,
    "retired": 2015,
-   "nation": "BRA",
    "positions": [
     "CMF",
     "AMF",
@@ -21151,17 +19972,6 @@
      "years": [
       "1997"
      ]
-    },
-    {
-     "name": {
-      "en": "Umbro Cup",
-      "fr": "Coupe Umbro",
-      "ar": "Umbro Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1995"
-     ]
     }
    ],
    "awards": [
@@ -21211,22 +20021,11 @@
     },
     {
      "name": {
-      "en": "Copa América Golden Boot",
-      "fr": "Copa América Golden Boot",
-      "ar": "سجلات وإحصائيات كوبا أمريكا"
-     },
-     "icon": "boot",
-     "years": [
-      "1999"
-     ]
-    },
-    {
-     "name": {
       "en": "Copa América Golden Ball",
       "fr": "Copa América Golden Ball",
       "ar": "Copa América Golden Ball"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1999"
      ]
@@ -21276,7 +20075,8 @@
       "2009"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q17158",
@@ -21710,7 +20510,7 @@
    },
    "level": "medium",
    "born": 1970,
-   "retired": 2016,
+   "retired": 2011,
    "nation": "NED",
    "positions": [
     "GK"
@@ -21751,15 +20551,6 @@
      },
      "from": 2005,
      "to": 2011
-    },
-    {
-     "name": {
-      "en": "Noordwijk",
-      "fr": "VV Noordwijk",
-      "ar": "VV Noordwijk"
-     },
-     "from": 2016,
-     "to": 2016
     }
    ],
    "trophies": [
@@ -22229,17 +21020,6 @@
    "trophies": [
     {
      "name": {
-      "en": "First League of Serbia and Montenegro",
-      "fr": "championnat de Serbie-et-Monténégro de football",
-      "ar": "دوري صربيا والجبل الأسود الممتاز"
-     },
-     "icon": "league",
-     "years": [
-      "2003–04"
-     ]
-    },
-    {
-     "name": {
       "en": "FR Yugoslavia/Serbia and Montenegro Cup",
       "fr": "Coupe de Serbie-et-Monténégro de football",
       "ar": "كأس صربيا"
@@ -22319,6 +21099,18 @@
    "awards": [
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2008–09",
+      "2010–11"
+     ]
+    },
+    {
+     "name": {
       "en": "Sir Matt Busby Player of the Year",
       "fr": "Sir Matt Busby Player of the Year",
       "ar": "جائزة السير مات بسبي لأفضل لاعب في العام"
@@ -22368,6 +21160,7 @@
    "retired": null,
    "nation": "KOR",
    "positions": [
+    "LWF",
     "CF"
    ],
    "clubs": [
@@ -22493,6 +21286,17 @@
     },
     {
      "name": {
+      "en": "Eurosport Player of the Season",
+      "fr": "Eurosport",
+      "ar": "يوروسبورت"
+     },
+     "icon": "star",
+     "years": [
+      "2021–22"
+     ]
+    },
+    {
+     "name": {
       "en": "Korean FA Player of the Year",
       "fr": "Korean FA Player of the Year",
       "ar": "South Korean Footballer of the Year"
@@ -22522,13 +21326,13 @@
     },
     {
      "name": {
-      "en": "London Football Award for Premier League Player of the Year",
-      "fr": "London Football Award for Premier League Player of the Year",
-      "ar": "London Football Award for Premier League Player of the Year"
+      "en": "FA Cup top goalscorer",
+      "fr": "Coupe d'Angleterre de football",
+      "ar": "كأس الاتحاد الإنجليزي"
      },
-     "icon": "star",
+     "icon": "boot",
      "years": [
-      "2019"
+      "2016–17"
      ]
     }
    ]
@@ -22961,7 +21765,7 @@
    },
    "level": "medium",
    "born": 1964,
-   "retired": 2003,
+   "retired": 1998,
    "nation": "GER",
    "positions": [
     "CF"
@@ -23039,15 +21843,6 @@
      "from": 1997,
      "to": 1998,
      "loan": true
-    },
-    {
-     "name": {
-      "en": "Orange County Blue Star",
-      "fr": "Orange County Blue Star",
-      "ar": "Orange County Blue Star"
-     },
-     "from": 2003,
-     "to": 2003
     }
    ],
    "trophies": [
@@ -23105,17 +21900,6 @@
      "icon": "continental",
      "years": [
       "1996"
-     ]
-    },
-    {
-     "name": {
-      "en": "Summer Olympic Games",
-      "fr": "Jeux olympiques d’été",
-      "ar": "الألعاب الأولمبية الصيفية"
-     },
-     "icon": "olympic",
-     "years": [
-      "1988"
      ]
     }
    ],
@@ -23177,7 +21961,6 @@
    "level": "medium",
    "born": 1953,
    "retired": 1994,
-   "nation": "BRA",
    "positions": [
     "CMF",
     "AMF"
@@ -23233,7 +22016,6 @@
       "1974",
       "1978",
       "1979",
-      "1979",
       "1981",
       "1986"
      ]
@@ -23286,17 +22068,6 @@
     },
     {
      "name": {
-      "en": "J.League Suntory Series",
-      "fr": "J.League",
-      "ar": "رابطة كرة القدم اليابانية للمحترفين"
-     },
-     "icon": "league",
-     "years": [
-      "1993"
-     ]
-    },
-    {
-     "name": {
       "en": "Taça do Atlântico",
       "fr": "Copa del Atlántico",
       "ar": "كأس الأطلسي"
@@ -23322,17 +22093,6 @@
       "en": "Taça Oswaldo Cruz",
       "fr": "Taça Oswaldo Cruz",
       "ar": "كأس أوزوالدو كروز"
-     },
-     "icon": "cup",
-     "years": [
-      "1976"
-     ]
-    },
-    {
-     "name": {
-      "en": "Bicentennial Cup",
-      "fr": "Bicentennial Cup",
-      "ar": "1976 U.S.A. Bicentennial Cup Tournament"
      },
      "icon": "cup",
      "years": [
@@ -23367,17 +22127,6 @@
       "1977",
       "1981",
       "1982"
-     ]
-    },
-    {
-     "name": {
-      "en": "El Grafico 2nd Best South American Player of the Year",
-      "fr": "El Gráfico",
-      "ar": "إل غرافيكو"
-     },
-     "icon": "star",
-     "years": [
-      "1981"
      ]
     },
     {
@@ -23461,30 +22210,9 @@
      "years": [
       "1984"
      ]
-    },
-    {
-     "name": {
-      "en": "Beach Soccer World Championship top scorer",
-      "fr": "Coupe du monde de football de plage",
-      "ar": "كأس العالم الشاطئية"
-     },
-     "icon": "boot",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Beach Soccer World Championship Best Player",
-      "fr": "Coupe du monde de football de plage",
-      "ar": "كأس العالم الشاطئية"
-     },
-     "icon": "star",
-     "years": [
-      "1995"
-     ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q50600",
@@ -24061,6 +22789,18 @@
     },
     {
      "name": {
+      "en": "Eredivisie Top Goalscorer",
+      "fr": "championnat des Pays-Bas de football",
+      "ar": "الدوري الهولندي الممتاز"
+     },
+     "icon": "boot",
+     "years": [
+      "1998–99",
+      "1999–2000"
+     ]
+    },
+    {
+     "name": {
       "en": "Sir Matt Busby Player of the Year",
       "fr": "Sir Matt Busby Player of the Year",
       "ar": "جائزة السير مات بسبي لأفضل لاعب في العام"
@@ -24082,6 +22822,29 @@
       "2001–02",
       "2002–03",
       "2004–05"
+     ]
+    },
+    {
+     "name": {
+      "en": "FA Cup Top Goalscorer",
+      "fr": "FA Cup Top Goalscorer",
+      "ar": "FA Cup Top Goalscorer"
+     },
+     "icon": "boot",
+     "years": [
+      "2002–03",
+      "2003–04"
+     ]
+    },
+    {
+     "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2002–03"
      ]
     },
     {
@@ -24161,39 +22924,6 @@
     }
    ],
    "trophies": [
-    {
-     "name": {
-      "en": "Under 17 Bundesliga",
-      "fr": "Under 17 Bundesliga",
-      "ar": "Under 17 Bundesliga"
-     },
-     "icon": "league",
-     "years": [
-      "2001"
-     ]
-    },
-    {
-     "name": {
-      "en": "Under 19 Bundesliga",
-      "fr": "Under 19 Bundesliga",
-      "ar": "Under 19 Bundesliga"
-     },
-     "icon": "league",
-     "years": [
-      "2002"
-     ]
-    },
-    {
-     "name": {
-      "en": "Regionalliga Süd",
-      "fr": "Regionalliga Sud",
-      "ar": "Regionalliga Süd"
-     },
-     "icon": "league",
-     "years": [
-      "2003–04"
-     ]
-    },
     {
      "name": {
       "en": "Bundesliga",
@@ -24294,15 +23024,6 @@
      "years": [
       "2014"
      ]
-    },
-    {
-     "name": {
-      "en": "UEFA European Championship",
-      "fr": "championnat d'Europe de football",
-      "ar": "بطولة أمم أوروبا"
-     },
-     "icon": "continental",
-     "years": []
     }
    ],
    "awards": [
@@ -24322,17 +23043,6 @@
       "en": "Footballer of the Year in Germany",
       "fr": "footballeur allemand de l'année",
       "ar": "لاعب العام في ألمانيا"
-     },
-     "icon": "star",
-     "years": [
-      "2013"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Best Player in Europe Award",
-      "fr": "Prix UEFA du joueur de l'année",
-      "ar": "جائزة أفضل لاعب في أوروبا"
      },
      "icon": "star",
      "years": [
@@ -24514,19 +23224,7 @@
      ]
     }
    ],
-   "awards": [
-    {
-     "name": {
-      "en": "Premier League Player of the Year by Northwest Football Awards",
-      "fr": "Premier League Player of the Year by Northwest Football Awards",
-      "ar": "Premier League Player of the Year by Northwest Football Awards"
-     },
-     "icon": "star",
-     "years": [
-      "2017"
-     ]
-    }
-   ]
+   "awards": []
   },
   {
    "id": "Q184277",
@@ -24540,7 +23238,7 @@
    "retired": 2019,
    "nation": "CIV",
    "positions": [
-    "CB",
+    "DMF",
     "CMF"
    ],
    "clubs": [
@@ -25006,7 +23704,19 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [
+    {
+     "name": {
+      "en": "Ballon d'Or",
+      "fr": "Ballon d'Or",
+      "ar": "الكرة الذهبية"
+     },
+     "icon": "ballon",
+     "years": [
+      "1987"
+     ]
+    }
+   ]
   },
   {
    "id": "Q483583",
@@ -25061,17 +23771,6 @@
      "icon": "league",
      "years": [
       "1994–95"
-     ]
-    },
-    {
-     "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1991"
      ]
     },
     {
@@ -25297,39 +23996,6 @@
      "years": [
       "2012–13"
      ]
-    },
-    {
-     "name": {
-      "en": "NIHL Division 2 South Regular Season",
-      "fr": "championnat du Royaume-Uni de hockey sur glace D2",
-      "ar": "National Ice Hockey League"
-     },
-     "icon": "league",
-     "years": [
-      "2021–22"
-     ]
-    },
-    {
-     "name": {
-      "en": "NIHL Division 2 South Playoffs",
-      "fr": "NIHL Division 2 South Playoffs",
-      "ar": "NIHL Division 2 South Playoffs"
-     },
-     "icon": "league",
-     "years": [
-      "2021–22"
-     ]
-    },
-    {
-     "name": {
-      "en": "NIHL Division 2 South Cup",
-      "fr": "NIHL Division 2 South Cup",
-      "ar": "NIHL Division 2 South Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "2021–22"
-     ]
     }
    ],
    "awards": [
@@ -25368,11 +24034,11 @@
     },
     {
      "name": {
-      "en": "Golden Ball",
-      "fr": "Golden Ball",
-      "ar": "Golden Ball"
+      "en": "Czech Golden Ball",
+      "fr": "Ballon d'or tchèque",
+      "ar": "الكرة الذهبية التشيكية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2005",
       "2006",
@@ -25586,19 +24252,7 @@
      ]
     }
    ],
-   "awards": [
-    {
-     "name": {
-      "en": "Toulon Tournament Best Player",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "star",
-     "years": [
-      "2003"
-     ]
-    }
-   ]
+   "awards": []
   },
   {
    "id": "Q180326",
@@ -25783,9 +24437,7 @@
    "retired": 2015,
    "nation": "ENG",
    "positions": [
-    "CB",
-    "LB",
-    "RB"
+    "CB"
    ],
    "clubs": [
     {
@@ -25927,8 +24579,7 @@
    "nation": "ITA",
    "positions": [
     "CB",
-    "LB",
-    "RB"
+    "LB"
    ],
    "clubs": [
     {
@@ -26750,6 +25401,17 @@
    "awards": [
     {
      "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "2000–01"
+     ]
+    },
+    {
+     "name": {
       "en": "France Football French Player of the Year",
       "fr": "Joueur français de l'année",
       "ar": "جائزة أفضل لاعب فرنسي"
@@ -27042,17 +25704,6 @@
     },
     {
      "name": {
-      "en": "Kirin Cup",
-      "fr": "Coupe Kirin",
-      "ar": "كأس كيرين"
-     },
-     "icon": "cup",
-     "years": [
-      "1997"
-     ]
-    },
-    {
-     "name": {
       "en": "Dynasty Cup",
       "fr": "Coupe d'Asie de l'Est de football",
       "ar": "كأس شرق آسيا لكرة القدم"
@@ -27290,7 +25941,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1982"
      ]
@@ -27312,7 +25963,7 @@
       "fr": "World Soccer",
       "ar": "مجلة وورد سوكر"
      },
-     "icon": "best",
+     "icon": "star",
      "years": [
       "1982"
      ]
@@ -27351,7 +26002,6 @@
    "level": "medium",
    "born": 1966,
    "retired": 2003,
-   "nation": "BUL",
    "positions": [
     "CF"
    ],
@@ -27449,19 +26099,6 @@
     }
    ],
    "trophies": [
-    {
-     "name": {
-      "en": "A Group",
-      "fr": "championnat de Bulgarie de football",
-      "ar": "الدوري البلغاري الممتاز"
-     },
-     "icon": "league",
-     "years": [
-      "1986–87",
-      "1988–89",
-      "1989–90"
-     ]
-    },
     {
      "name": {
       "en": "Bulgarian Cup",
@@ -27630,38 +26267,6 @@
      "years": [
       "2000"
      ]
-    },
-    {
-     "name": {
-      "en": "Central Division",
-      "fr": "Division Centre de la Major League Soccer",
-      "ar": "Central Division"
-     },
-     "icon": "league",
-     "years": [
-      "2000",
-      "2001"
-     ]
-    },
-    {
-     "name": {
-      "en": "MLS Cup 2000",
-      "fr": "Coupe de la Major League Soccer 2000",
-      "ar": "كأس الدوري الأمريكي 2000"
-     },
-     "icon": "cup",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "worldcup",
-     "years": [
-      "1994"
-     ]
     }
    ],
    "awards": [
@@ -27697,37 +26302,6 @@
      "years": [
       "1989"
      ]
-    },
-    {
-     "name": {
-      "en": "UEFA Men's Player of the Year Award / Onze d'Or",
-      "fr": "Prix UEFA du joueur de l'année",
-      "ar": "جائزة أفضل لاعب في أوروبا"
-     },
-     "icon": "star",
-     "years": [
-      "1992"
-     ]
-    },
-    {
-     "name": {
-      "en": "UEFA Men's Player of the Year Award / Onze d'Argent",
-      "fr": "Prix UEFA du joueur de l'année",
-      "ar": "جائزة أفضل لاعب في أوروبا"
-     },
-     "icon": "star",
-     "years": [
-      "1994"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": []
     },
     {
      "name": {
@@ -27767,7 +26341,8 @@
       "1989–90"
      ]
     }
-   ]
+   ],
+   "nation": "BUL"
   },
   {
    "id": "Q386876",
@@ -28157,18 +26732,7 @@
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
-     "years": [
-      "1978"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1978"
      ]
@@ -28319,6 +26883,8 @@
      },
      "icon": "ucl",
      "years": [
+      "1988–89",
+      "1989–90",
       "1994–95"
      ]
     },
@@ -28354,18 +26920,6 @@
      "icon": "supercup",
      "years": [
       "1988"
-     ]
-    },
-    {
-     "name": {
-      "en": "European Cup/UEFA Champions League",
-      "fr": "Ligue des champions de l'UEFA",
-      "ar": "دوري أبطال أوروبا"
-     },
-     "icon": "ucl",
-     "years": [
-      "1988–89",
-      "1989–90"
      ]
     },
     {
@@ -28415,17 +26969,6 @@
      "years": [
       "1985",
       "1987"
-     ]
-    },
-    {
-     "name": {
-      "en": "Intercontinental Cup Most Valuable Player of the Match Award",
-      "fr": "Intercontinental Cup Most Valuable Player of the Match Award",
-      "ar": "Intercontinental Cup Most Valuable Player of the Match Award"
-     },
-     "icon": "star",
-     "years": [
-      "1990"
      ]
     },
     {
@@ -28680,7 +27223,8 @@
    "retired": 2013,
    "nation": "POR",
    "positions": [
-    "CMF"
+    "CMF",
+    "AMF"
    ],
    "clubs": [
     {
@@ -28928,7 +27472,7 @@
       "fr": "Coupe du monde des clubs de la FIFA",
       "ar": "كأس العالم للأندية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2006"
      ]
@@ -28942,17 +27486,6 @@
      "icon": "star",
      "years": [
       "2003–04"
-     ]
-    },
-    {
-     "name": {
-      "en": "CNID Best Portuguese Athlete Abroad",
-      "fr": "CNID Best Portuguese Athlete Abroad",
-      "ar": "جائزة أفضل لاعب برتغالي"
-     },
-     "icon": "star",
-     "years": [
-      "2006"
      ]
     },
     {
@@ -29236,17 +27769,6 @@
     },
     {
      "name": {
-      "en": "World Military Cup",
-      "fr": "Coupe du monde de football militaire",
-      "ar": "كأس العالم العسكرية لكرة القدم"
-     },
-     "icon": "cup",
-     "years": [
-      "2001"
-     ]
-    },
-    {
-     "name": {
       "en": "All-Africa Games",
       "fr": "Jeux africains",
       "ar": "الألعاب الإفريقية"
@@ -29254,32 +27776,6 @@
      "icon": "olympic",
      "years": [
       "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "CAF Champions League Best Goalkeeper",
-      "fr": "CAF Champions League Best Goalkeeper",
-      "ar": "CAF Champions League Best Goalkeeper"
-     },
-     "icon": "glove",
-     "years": [
-      "2001",
-      "2005",
-      "2006"
-     ]
-    },
-    {
-     "name": {
-      "en": "Africa Cup of Nations Best Goalkeeper",
-      "fr": "Africa Cup of Nations Best Goalkeeper",
-      "ar": "Africa Cup of Nations Best Goalkeeper"
-     },
-     "icon": "glove",
-     "years": [
-      "2006",
-      "2008",
-      "2010"
      ]
     }
    ],
@@ -29696,15 +28192,6 @@
     },
     {
      "name": {
-      "en": "African Cup Winners' Cup",
-      "fr": "Coupe d'Afrique des vainqueurs de coupe de football",
-      "ar": "كأس الكؤوس الإفريقية"
-     },
-     "icon": "europa",
-     "years": []
-    },
-    {
-     "name": {
       "en": "Primeira Liga",
       "fr": "championnat du Portugal de football",
       "ar": "الدوري البرتغالي الممتاز"
@@ -29829,15 +28316,6 @@
      "years": [
       "1990"
      ]
-    },
-    {
-     "name": {
-      "en": "Algerian Footballer of the Year",
-      "fr": "Ballon d'or d'Algérie",
-      "ar": "الكرة الذهبية الجزائرية"
-     },
-     "icon": "star",
-     "years": []
     }
    ]
   },
@@ -30283,17 +28761,6 @@
       "1991",
       "1996"
      ]
-    },
-    {
-     "name": {
-      "en": "IFFHS World's Player of the 20th Century 64th place",
-      "fr": "IFFHS World's Player of the 20th Century 64th place",
-      "ar": "أفضل لاعب في العالم الاتحاد الدولي لتاريخ وإحصاءات كرة القدم"
-     },
-     "icon": "star",
-     "years": [
-      "2000"
-     ]
     }
    ]
   },
@@ -30590,28 +29057,6 @@
      "years": [
       "2007"
      ]
-    },
-    {
-     "name": {
-      "en": "Asian Footballer of the Year nominee",
-      "fr": "footballeur asiatique de l'année",
-      "ar": "جائزة أفضل لاعب في آسيا"
-     },
-     "icon": "star",
-     "years": [
-      "2007"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or nominee",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2007"
-     ]
     }
    ]
   },
@@ -30622,7 +29067,7 @@
     "fr": "Michael Laudrup",
     "ar": "مايكل لاودروب"
    },
-   "level": "hard",
+   "level": "medium",
    "born": 1964,
    "retired": 1998,
    "nation": "DEN",
@@ -30834,39 +29279,6 @@
       "1982",
       "1985"
      ]
-    },
-    {
-     "name": {
-      "en": "Don Balón Award&nbsp;– La Liga Best Foreign Player of the Year",
-      "fr": "prix Don Balón",
-      "ar": "جائزة دون بالون"
-     },
-     "icon": "star",
-     "years": [
-      "1991–92"
-     ]
-    },
-    {
-     "name": {
-      "en": "Denmark's Best Player of All Time",
-      "fr": "équipe du Danemark de football",
-      "ar": "منتخب الدنمارك لكرة القدم"
-     },
-     "icon": "star",
-     "years": [
-      "2006"
-     ]
-    },
-    {
-     "name": {
-      "en": "Scandinavia Best Player Ever",
-      "fr": "Scandinavia Best Player Ever",
-      "ar": "Scandinavia Best Player Ever"
-     },
-     "icon": "star",
-     "years": [
-      "2015"
-     ]
     }
    ]
   },
@@ -30877,7 +29289,7 @@
     "fr": "Gabriel Batistuta",
     "ar": "غابرييل باتيستوتا"
    },
-   "level": "hard",
+   "level": "medium",
    "born": 1969,
    "retired": 2005,
    "nation": "ARG",
@@ -31045,18 +29457,6 @@
    "awards": [
     {
      "name": {
-      "en": "Copa América Golden Boot",
-      "fr": "Copa América Golden Boot",
-      "ar": "سجلات وإحصائيات كوبا أمريكا"
-     },
-     "icon": "boot",
-     "years": [
-      "1991",
-      "1995"
-     ]
-    },
-    {
-     "name": {
       "en": "FIFA Confederations Cup top scorer",
       "fr": "FIFA Confederations Cup top scorer",
       "ar": "FIFA Confederations Cup top scorer"
@@ -31108,19 +29508,6 @@
      "icon": "star",
      "years": [
       "1999"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1998",
-      "1999",
-      "2000"
      ]
     },
     {
@@ -31245,7 +29632,8 @@
      },
      "icon": "ucl",
      "years": [
-      "1987–88"
+      "1987–88",
+      "1991–92"
      ]
     },
     {
@@ -31284,17 +29672,6 @@
       "1991",
       "1992",
       "1994"
-     ]
-    },
-    {
-     "name": {
-      "en": "European Cup/UEFA Champions League",
-      "fr": "Ligue des champions de l'UEFA",
-      "ar": "دوري أبطال أوروبا"
-     },
-     "icon": "ucl",
-     "years": [
-      "1991–92"
      ]
     },
     {
@@ -31440,24 +29817,6 @@
     },
     {
      "name": {
-      "en": "Intercontinental Cup",
-      "fr": "Coupe intercontinentale",
-      "ar": "كأس الإنتركونتيننتال"
-     },
-     "icon": "clubworld",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "European Cup",
-      "fr": "Ligue des champions de l'UEFA",
-      "ar": "دوري أبطال أوروبا"
-     },
-     "icon": "ucl",
-     "years": []
-    },
-    {
-     "name": {
       "en": "FIFA World Cup",
       "fr": "Coupe du monde de football",
       "ar": "كأس العالم"
@@ -31476,28 +29835,6 @@
      "icon": "continental",
      "years": [
       "1968"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1973"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup Best Goalkeeper",
-      "fr": "récompenses de la Coupe du monde de football",
-      "ar": "قائمة جوائز كأس العالم"
-     },
-     "icon": "glove",
-     "years": [
-      "1982"
      ]
     }
    ],
@@ -31687,17 +30024,6 @@
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "AFC Best Player of All Time at the FIFA World Cup",
-      "fr": "AFC Best Player of All Time at the FIFA World Cup",
-      "ar": "الدول الآسيوية في كأس العالم"
-     },
-     "icon": "star",
-     "years": [
-      "2020"
-     ]
-    },
     {
      "name": {
       "en": "Korean FA Player of the Year",
@@ -31920,7 +30246,7 @@
       "fr": "Portuguese Golden Ball",
       "ar": "Portuguese Golden Ball"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2010–11"
      ]
@@ -31939,24 +30265,13 @@
     },
     {
      "name": {
-      "en": "UEFA Best Player in Europe 5th place",
-      "fr": "Prix UEFA du joueur de l'année",
-      "ar": "جائزة أفضل لاعب في أوروبا"
+      "en": "Bleacher Report La Liga Player of the Season",
+      "fr": "Bleacher Report",
+      "ar": "بليتشر ريبورت"
      },
      "icon": "star",
      "years": [
-      "2010–11"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Ballon d'Or 5th place",
-      "fr": "FIFA Ballon d'or",
-      "ar": "كرة الفيفا الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2012"
+      "2011–12"
      ]
     },
     {
@@ -32119,11 +30434,24 @@
     },
     {
      "name": {
+      "en": "Mitropa Cup top goalscorer",
+      "fr": "Coupe Mitropa",
+      "ar": "كأس أوروبا الوسطى"
+     },
+     "icon": "boot",
+     "years": [
+      "1930",
+      "1933",
+      "1936"
+     ]
+    },
+    {
+     "name": {
       "en": "FIFA World Cup Golden Ball",
       "fr": "récompenses de la Coupe du monde de football",
       "ar": "قائمة جوائز كأس العالم"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1934"
      ]
@@ -32585,17 +30913,6 @@
     },
     {
      "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1994"
-     ]
-    },
-    {
-     "name": {
       "en": "Turkish Footballer of the Year",
       "fr": "Turkish Footballer of the Year",
       "ar": "Milliyet Sports Awards"
@@ -32619,7 +30936,6 @@
    "level": "hard",
    "born": 1986,
    "retired": 2020,
-   "nation": "BEL",
    "positions": [
     "CB"
    ],
@@ -32786,16 +31102,17 @@
     },
     {
      "name": {
-      "en": "The Best Golden Shoe Team",
-      "fr": "The Best Golden Shoe Team",
-      "ar": "The Best Golden Shoe Team"
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
      },
-     "icon": "boot",
+     "icon": "star",
      "years": [
-      "2011"
+      "2011–12"
      ]
     }
-   ]
+   ],
+   "nation": "BEL"
   },
   {
    "id": "Q484909",
@@ -33021,7 +31338,7 @@
    "level": "hard",
    "born": 1968,
    "retired": 2003,
-   "nation": "SRB",
+   "nation": "CRO",
    "positions": [
     "CF"
    ],
@@ -33152,6 +31469,17 @@
       "1997",
       "1998"
      ]
+    },
+    {
+     "name": {
+      "en": "FIFA World Cup Golden Boot",
+      "fr": "Soulier d'or de la Coupe du monde",
+      "ar": "الحذاء الذهبي لكأس العالم"
+     },
+     "icon": "boot",
+     "years": [
+      "1998"
+     ]
     }
    ]
   },
@@ -33165,7 +31493,6 @@
    "level": "hard",
    "born": 1964,
    "retired": 2002,
-   "nation": "BRA",
    "positions": [
     "CF"
    ],
@@ -33526,7 +31853,8 @@
       "1999"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q178683",
@@ -33538,9 +31866,7 @@
    "level": "hard",
    "born": 1970,
    "retired": 2008,
-   "nation": "BRA",
    "positions": [
-    "LB",
     "RB"
    ],
    "clubs": [
@@ -33787,7 +32113,8 @@
       "1994"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q152871",
@@ -33942,6 +32269,28 @@
     },
     {
      "name": {
+      "en": "DFB Pokal Top Goalscorer",
+      "fr": "Coupe d'Allemagne de football",
+      "ar": "كأس ألمانيا"
+     },
+     "icon": "boot",
+     "years": [
+      "1981–82"
+     ]
+    },
+    {
+     "name": {
+      "en": "Swiss League Top Goalscorer",
+      "fr": "championnat de Suisse de football",
+      "ar": "دوري السوبر السويسري"
+     },
+     "icon": "boot",
+     "years": [
+      "1988–89"
+     ]
+    },
+    {
+     "name": {
       "en": "Swiss Foreign Footballer of the Year",
       "fr": "Swiss Foreign Footballer of the Year",
       "ar": "Swiss Footballer of the Year"
@@ -33949,17 +32298,6 @@
      "icon": "star",
      "years": [
       "1988–89"
-     ]
-    },
-    {
-     "name": {
-      "en": "'Best European Manager' at the Golden Boy Awards by Tuttosport",
-      "fr": "Tuttosport",
-      "ar": "توتوسبورت"
-     },
-     "icon": "star",
-     "years": [
-      "2020"
      ]
     }
    ]
@@ -33976,6 +32314,7 @@
    "retired": 2013,
    "nation": "ITA",
    "positions": [
+    "DMF",
     "CMF"
    ],
    "clubs": [
@@ -34311,6 +32650,17 @@
      "years": [
       "1992"
      ]
+    },
+    {
+     "name": {
+      "en": "Primeira Liga",
+      "fr": "Championnat du Portugal",
+      "ar": "الدوري البرتغالي"
+     },
+     "icon": "league",
+     "years": [
+      "1999–2000"
+     ]
     }
    ],
    "awards": [
@@ -34325,6 +32675,17 @@
       "1990",
       "1993",
       "1999"
+     ]
+    },
+    {
+     "name": {
+      "en": "Premier League Player of the Season",
+      "fr": "Premier League Player of the Season",
+      "ar": "لاعب الموسم في الدوري الإنجليزي الممتاز"
+     },
+     "icon": "star",
+     "years": [
+      "1995–96"
      ]
     }
    ]
@@ -34511,11 +32872,11 @@
    "awards": [
     {
      "name": {
-      "en": "Golden Ball",
-      "fr": "Golden Ball",
-      "ar": "Golden Ball"
+      "en": "Czech Golden Ball",
+      "fr": "Ballon d'or tchèque",
+      "ar": "الكرة الذهبية التشيكية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1998",
       "2000",
@@ -34947,33 +33308,9 @@
      "years": [
       "2004"
      ]
-    },
-    {
-     "name": {
-      "en": "First Australian to score at three FIFA World Cups",
-      "fr": "équipe d'Australie de football",
-      "ar": "منتخب أستراليا لكرة القدم"
-     },
-     "icon": "cup",
-     "years": [
-      "2006",
-      "2010",
-      "2014"
-     ]
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2006"
-     ]
-    },
     {
      "name": {
       "en": "FIFA Puskás Award",
@@ -35018,8 +33355,7 @@
    },
    "level": "hard",
    "born": 1954,
-   "retired": 2004,
-   "nation": "BRA",
+   "retired": 1989,
    "positions": [
     "CMF",
     "CF"
@@ -35078,29 +33414,9 @@
      },
      "from": 1989,
      "to": 1989
-    },
-    {
-     "name": {
-      "en": "Garforth Town",
-      "fr": "Garforth Town A.F.C.",
-      "ar": "Garforth Town A.F.C."
-     },
-     "from": 2004,
-     "to": 2004
     }
    ],
    "trophies": [
-    {
-     "name": {
-      "en": "Torneio Vicente Feola",
-      "fr": "Torneio Vicente Feola",
-      "ar": "Torneio Vicente Feola"
-     },
-     "icon": "cup",
-     "years": [
-      "1976"
-     ]
-    },
     {
      "name": {
       "en": "Campeonato Paulista",
@@ -35135,17 +33451,6 @@
      "years": [
       "1986"
      ]
-    },
-    {
-     "name": {
-      "en": "Brazil-England Cup",
-      "fr": "Brazil-England Cup",
-      "ar": "Brazil-England Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1981"
-     ]
     }
    ],
    "awards": [
@@ -35171,7 +33476,8 @@
       "1983"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q189984",
@@ -35424,17 +33730,6 @@
     },
     {
      "name": {
-      "en": "European Super Cup",
-      "fr": "Supercoupe de l'UEFA",
-      "ar": "كأس السوبر الأوروبي"
-     },
-     "icon": "supercup",
-     "years": [
-      "1994"
-     ]
-    },
-    {
-     "name": {
       "en": "FA Cup",
       "fr": "Coupe d'Angleterre de football",
       "ar": "كأس الاتحاد الإنجليزي"
@@ -35463,6 +33758,7 @@
      },
      "icon": "supercup",
      "years": [
+      "1994",
       "1998"
      ]
     },
@@ -35712,6 +34008,7 @@
    "retired": 2006,
    "nation": "IRL",
    "positions": [
+    "DMF",
     "CMF"
    ],
    "clubs": [
@@ -36242,7 +34539,6 @@
    "level": "hard",
    "born": 1981,
    "retired": 2018,
-   "nation": "BUL",
    "positions": [
     "CF"
    ],
@@ -36418,7 +34714,8 @@
       "2010–11"
      ]
     }
-   ]
+   ],
+   "nation": "BUL"
   },
   {
    "id": "Q220283",
@@ -36430,7 +34727,6 @@
    "level": "hard",
    "born": 1946,
    "retired": 1981,
-   "nation": "BRA",
    "positions": [
     "CMF",
     "AMF"
@@ -36522,7 +34818,8 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [],
+   "nation": "BRA"
   },
   {
    "id": "Q204089",
@@ -36769,28 +35066,6 @@
       "en": "Scottish League Cup",
       "fr": "Coupe de la Ligue écossaise de football",
       "ar": "كأس الدوري الإسكتلندي"
-     },
-     "icon": "cup",
-     "years": [
-      "1974–75"
-     ]
-    },
-    {
-     "name": {
-      "en": "Drybrough Cup",
-      "fr": "Drybrough Cup",
-      "ar": "Drybrough Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1974–75"
-     ]
-    },
-    {
-     "name": {
-      "en": "Glasgow Cup",
-      "fr": "Glasgow Cup",
-      "ar": "كأس غلاسكو"
      },
      "icon": "cup",
      "years": [
@@ -37074,17 +35349,6 @@
     },
     {
      "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1998"
-     ]
-    },
-    {
-     "name": {
       "en": "Olympic Gold Medal",
       "fr": "football aux Jeux olympiques",
       "ar": "كرة القدم في الألعاب الأولمبية الصيفية"
@@ -37096,17 +35360,6 @@
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Toulon Tournament Best Player",
-      "fr": "Toulon Tournament Best Player",
-      "ar": "Toulon Tournament Best Player"
-     },
-     "icon": "star",
-     "years": [
-      "1998"
-     ]
-    },
     {
      "name": {
       "en": "Argentine Footballer of the Year",
@@ -37142,18 +35395,6 @@
      "icon": "star",
      "years": [
       "2001"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or Nominee",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2005",
-      "2007"
      ]
     }
    ]
@@ -37531,32 +35772,6 @@
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Ballon d'Or Nominated",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1966",
-      "1970",
-      "1972"
-     ]
-    },
-    {
-     "name": {
-      "en": "Rothman's Golden Boot Awards",
-      "fr": "Rothman's Golden Boot Awards",
-      "ar": "Sky Sports Football Yearbook"
-     },
-     "icon": "boot",
-     "years": [
-      "1970",
-      "1971",
-      "1972"
-     ]
-    },
     {
      "name": {
       "en": "FWA Footballer of the Year",
@@ -37955,15 +36170,6 @@
      "years": [
       "2000"
      ]
-    },
-    {
-     "name": {
-      "en": "French Player of the Century",
-      "fr": "Joueur français de l'année",
-      "ar": "جائزة أفضل لاعب فرنسي"
-     },
-     "icon": "star",
-     "years": []
     }
    ]
   },
@@ -37979,8 +36185,7 @@
    "retired": 2006,
    "nation": "FRA",
    "positions": [
-    "LB",
-    "RB"
+    "LB"
    ],
    "clubs": [
     {
@@ -38353,7 +36558,7 @@
       "fr": "Coupe des confédérations",
       "ar": "كأس القارات"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "2001"
      ]
@@ -38729,15 +36934,6 @@
     },
     {
      "name": {
-      "en": "Ballon d'Or 1990",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": []
-    },
-    {
-     "name": {
       "en": "EFL Cup top scorer",
       "fr": "Coupe de la Ligue anglaise de football",
       "ar": "كأس رابطة الأندية الإنجليزية المحترفة"
@@ -38769,7 +36965,7 @@
    },
    "level": "hard",
    "born": 1971,
-   "retired": 2013,
+   "retired": 2009,
    "nation": "SWE",
    "positions": [
     "CF"
@@ -38838,24 +37034,6 @@
      "from": 2007,
      "to": 2007,
      "loan": true
-    },
-    {
-     "name": {
-      "en": "Råå IF",
-      "fr": "Råå IF",
-      "ar": "Råå IF"
-     },
-     "from": 2012,
-     "to": 2012
-    },
-    {
-     "name": {
-      "en": "Högaborgs BK",
-      "fr": "Högaborgs BK",
-      "ar": "Högaborgs BK"
-     },
-     "from": 2013,
-     "to": 2013
     }
    ],
    "trophies": [
@@ -38953,28 +37131,6 @@
      "years": [
       "2006"
      ]
-    },
-    {
-     "name": {
-      "en": "Division 1 Södra promotion",
-      "fr": "championnat de Suède de football de troisième division",
-      "ar": "الدوري السويدي الدرجة الأولى"
-     },
-     "icon": "league",
-     "years": [
-      "1992"
-     ]
-    },
-    {
-     "name": {
-      "en": "Premier League",
-      "fr": "championnat d'Angleterre de football",
-      "ar": "الدوري الإنجليزي الممتاز"
-     },
-     "icon": "league",
-     "years": [
-      "2006–07"
-     ]
     }
    ],
    "awards": [
@@ -39007,17 +37163,6 @@
     },
     {
      "name": {
-      "en": "Joe Robbie Cup Best Player",
-      "fr": "Joe Robbie Cup Best Player",
-      "ar": "Joe Robbie Cup Best Player"
-     },
-     "icon": "star",
-     "years": [
-      "1994"
-     ]
-    },
-    {
-     "name": {
       "en": "European Golden Boot",
       "fr": "Soulier d'or européen",
       "ar": "جائزة الحذاء الذهبي الأوروبي"
@@ -39039,7 +37184,6 @@
    "level": "hard",
    "born": 1982,
    "retired": 2016,
-   "nation": "BRA",
    "positions": [
     "CF"
    ],
@@ -39244,41 +37388,6 @@
    "awards": [
     {
      "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "2004",
-      "2005"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "2004",
-      "2005"
-     ]
-    },
-    {
-     "name": {
-      "en": "Copa América Golden Ball",
-      "fr": "Copa América Golden Ball",
-      "ar": "سجلات وإحصائيات كوبا أمريكا"
-     },
-     "icon": "ballon",
-     "years": [
-      "2004"
-     ]
-    },
-    {
-     "name": {
       "en": "Copa América Golden Shoe",
       "fr": "Copa América Golden Shoe",
       "ar": "Copa América Golden Shoe"
@@ -39290,27 +37399,17 @@
     },
     {
      "name": {
-      "en": "FIFA Confederations Cup Golden Ball",
-      "fr": "FIFA Confederations Cup Golden Ball",
-      "ar": "سجلات كأس القارات"
-     },
-     "icon": "ballon",
-     "years": [
-      "2005"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA Confederations Cup Golden Shoe",
-      "fr": "FIFA Confederations Cup Golden Shoe",
-      "ar": "سجلات كأس القارات"
+      "en": "Campeonato Brasileiro Série A top goalscorer",
+      "fr": "championnat du Brésil de football",
+      "ar": "الدوري البرازيلي الدرجة الأولى"
      },
      "icon": "boot",
      "years": [
-      "2005"
+      "2009"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q185115",
@@ -39695,55 +37794,9 @@
      "years": [
       "2003"
      ]
-    },
-    {
-     "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1992"
-     ]
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Toulon Tournament Best Player",
-      "fr": "Toulon Tournament Best Player",
-      "ar": "Toulon Tournament Best Player"
-     },
-     "icon": "star",
-     "years": [
-      "1992"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "2001"
-     ]
-    },
-    {
-     "name": {
-      "en": "Ballon d'Or",
-      "fr": "Ballon d'or",
-      "ar": "جائزة الكرة الذهبية"
-     },
-     "icon": "ballon",
-     "years": [
-      "1996",
-      "2000",
-      "2001"
-     ]
-    },
     {
      "name": {
       "en": "Cosme Damião Awards – Footballer of the Year",
@@ -39828,23 +37881,10 @@
      "icon": "league",
      "years": [
       "1975",
-      "1975",
       "1977",
-      "1979",
       "1979",
       "1980",
       "1981"
-     ]
-    },
-    {
-     "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1975"
      ]
     },
     {
@@ -39857,17 +37897,6 @@
      "years": [
       "1978",
       "1986"
-     ]
-    },
-    {
-     "name": {
-      "en": "Primera B Nacional",
-      "fr": "championnat d'Argentine de football de deuxième division",
-      "ar": "دوري الدرجة الثانية الأرجنتيني"
-     },
-     "icon": "league",
-     "years": [
-      "2011–12"
      ]
     }
    ],
@@ -40083,28 +38112,6 @@
      "years": [
       "1995–96"
      ]
-    },
-    {
-     "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1985"
-     ]
-    },
-    {
-     "name": {
-      "en": "Kirin Cup",
-      "fr": "Coupe Kirin",
-      "ar": "كأس كيرين"
-     },
-     "icon": "cup",
-     "years": [
-      "1994"
-     ]
     }
    ],
    "awards": [
@@ -40140,28 +38147,6 @@
      "icon": "star",
      "years": [
       "1991"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "1991"
-     ]
-    },
-    {
-     "name": {
-      "en": "8th French Player of the Century",
-      "fr": "Joueur français de l'année",
-      "ar": "جائزة أفضل لاعب فرنسي"
-     },
-     "icon": "star",
-     "years": [
-      "2018"
      ]
     },
     {
@@ -40318,15 +38303,6 @@
      "years": [
       "1966"
      ]
-    },
-    {
-     "name": {
-      "en": "British Home Championship",
-      "fr": "British Home Championship",
-      "ar": "بطولة البيت البريطاني"
-     },
-     "icon": "league",
-     "years": []
     }
    ],
    "awards": [
@@ -40339,34 +38315,6 @@
      "icon": "star",
      "years": [
       "1964"
-     ]
-    },
-    {
-     "name": {
-      "en": "West Ham Player of the Year",
-      "fr": "West Ham United FC",
-      "ar": "وست هام يونايتد"
-     },
-     "icon": "star",
-     "years": [
-      "1961",
-      "1963",
-      "1968",
-      "1970"
-     ]
-    },
-    {
-     "name": {
-      "en": "Rothmans Golden Boots Awards",
-      "fr": "Rothmans Golden Boots Awards",
-      "ar": "Rothmans Golden Boots Awards"
-     },
-     "icon": "boot",
-     "years": [
-      "1970",
-      "1971",
-      "1972",
-      "1973"
      ]
     }
    ]
@@ -41055,7 +39003,6 @@
    "level": "hard",
    "born": 1944,
    "retired": 1982,
-   "nation": "BRA",
    "positions": [
     "CB",
     "RB"
@@ -41172,9 +39119,9 @@
     },
     {
      "name": {
-      "en": "Campeoanato Brasileiro",
-      "fr": "tournoi Roberto-Gomes-Pedrosa",
-      "ar": "Torneio Roberto Gomes Pedrosa"
+      "en": "Campeonato Brasileiro",
+      "fr": "Championnat du Brésil",
+      "ar": "الدوري البرازيلي"
      },
      "icon": "cup",
      "years": [
@@ -41244,7 +39191,8 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [],
+   "nation": "BRA"
   },
   {
    "id": "Q233819",
@@ -42267,30 +40215,6 @@
     },
     {
      "name": {
-      "en": "LG Cup",
-      "fr": "LG Cup",
-      "ar": "كأس إل جي الدولية"
-     },
-     "icon": "cup",
-     "years": [
-      "2001",
-      "2002",
-      "2002"
-     ]
-    },
-    {
-     "name": {
-      "en": "AFC–OFC Challenge Cup",
-      "fr": "Coupe du challenge AFC-OFC",
-      "ar": "كأس التحدي أسيا - أوقيانوسيا"
-     },
-     "icon": "cup",
-     "years": [
-      "2003"
-     ]
-    },
-    {
-     "name": {
       "en": "WAFF Championship",
       "fr": "championnat d'Asie de l'Ouest de football",
       "ar": "بطولة اتحاد غرب آسيا"
@@ -42304,6 +40228,17 @@
    "awards": [
     {
      "name": {
+      "en": "AFC Asian Cup top goalscorer",
+      "fr": "Coupe d'Asie des nations de football",
+      "ar": "كأس آسيا"
+     },
+     "icon": "boot",
+     "years": [
+      "1996"
+     ]
+    },
+    {
+     "name": {
       "en": "AFC Asian Footballer of the Year",
       "fr": "footballeur asiatique de l'année",
       "ar": "جائزة أفضل لاعب في آسيا"
@@ -42311,18 +40246,6 @@
      "icon": "star",
      "years": [
       "1999"
-     ]
-    },
-    {
-     "name": {
-      "en": "Nominated for FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "1997",
-      "2001"
      ]
     }
    ]
@@ -42337,7 +40260,6 @@
    "level": "hard",
    "born": 1944,
    "retired": 1983,
-   "nation": "BRA",
    "positions": [
     "LWF",
     "RWF",
@@ -42563,7 +40485,8 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [],
+   "nation": "BRA"
   },
   {
    "id": "Q237494",
@@ -42733,28 +40656,6 @@
       "1989",
       "1997"
      ]
-    },
-    {
-     "name": {
-      "en": "Saudi Pro League",
-      "fr": "Championnat d'Arabie saoudite de football",
-      "ar": "الدوري السعودي للمحترفين"
-     },
-     "icon": "league",
-     "years": [
-      "2014"
-     ]
-    },
-    {
-     "name": {
-      "en": "Crown Prince's Cup",
-      "fr": "Coupe d'Arabie saoudite de football",
-      "ar": "كأس ولي العهد السعودي"
-     },
-     "icon": "cup",
-     "years": [
-      "2014"
-     ]
     }
    ],
    "awards": [
@@ -42879,17 +40780,6 @@
     },
     {
      "name": {
-      "en": "European Super Cup",
-      "fr": "Supercoupe de l'UEFA",
-      "ar": "كأس السوبر الأوروبي"
-     },
-     "icon": "supercup",
-     "years": [
-      "1993"
-     ]
-    },
-    {
-     "name": {
       "en": "FA Cup",
       "fr": "Coupe d'Angleterre de football",
       "ar": "كأس الاتحاد الإنجليزي"
@@ -42941,6 +40831,7 @@
      },
      "icon": "supercup",
      "years": [
+      "1993",
       "1998"
      ]
     }
@@ -43131,7 +41022,6 @@
    "level": "hard",
    "born": 1975,
    "retired": 2013,
-   "nation": "BRA",
    "positions": [
     "CMF",
     "AMF"
@@ -43365,28 +41255,6 @@
      "years": [
       "2005"
      ]
-    },
-    {
-     "name": {
-      "en": "Toulon Tournament",
-      "fr": "Tournoi Maurice-Revello",
-      "ar": "بطولة تولون"
-     },
-     "icon": "cup",
-     "years": [
-      "1995"
-     ]
-    },
-    {
-     "name": {
-      "en": "Lunar New Year Cup",
-      "fr": "Lunar New Year Cup",
-      "ar": "Lunar New Year Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "2005"
-     ]
     }
    ],
    "awards": [
@@ -43412,7 +41280,8 @@
       "2010"
      ]
     }
-   ]
+   ],
+   "nation": "BRA"
   },
   {
    "id": "Q336916",
@@ -43651,7 +41520,7 @@
       "fr": "Coupe d'Afrique des nations de football",
       "ar": "كأس الأمم الإفريقية"
      },
-     "icon": "ballon",
+     "icon": "star",
      "years": [
       "1992"
      ]
@@ -43665,18 +41534,6 @@
      "icon": "star",
      "years": [
       "1993"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Player of the Year",
-      "fr": "Meilleur footballeur de l'année FIFA",
-      "ar": "جائزة أفضل لاعب كرة قدم في العالم"
-     },
-     "icon": "best",
-     "years": [
-      "1992",
-      "1991"
      ]
     }
    ]
@@ -44781,17 +42638,6 @@
       "2000",
       "2002"
      ]
-    },
-    {
-     "name": {
-      "en": "Hassan II Trophy 3rd place",
-      "fr": "tournoi Hassan II de football",
-      "ar": "Hassan II Trophy"
-     },
-     "icon": "cup",
-     "years": [
-      "1996"
-     ]
     }
    ],
    "awards": []
@@ -44898,26 +42744,6 @@
     },
     {
      "name": {
-      "en": "Federation Cup",
-      "fr": "Coupe de la Fédération d'Arabie saoudite de football",
-      "ar": "كأس الأمير فيصل بن فهد"
-     },
-     "icon": "cup",
-     "years": [
-      "2005–06"
-     ]
-    },
-    {
-     "name": {
-      "en": "AFC Champions League",
-      "fr": "Ligue des champions de l'AFC",
-      "ar": "دوري أبطال آسيا للنخبة"
-     },
-     "icon": "ucl",
-     "years": []
-    },
-    {
-     "name": {
       "en": "UAE Arabian Gulf League",
       "fr": "championnat des Émirats arabes unis de football",
       "ar": "الدوري الإماراتي للمحترفين"
@@ -44926,15 +42752,6 @@
      "years": [
       "2011–12"
      ]
-    },
-    {
-     "name": {
-      "en": "AFC Asian Cup",
-      "fr": "Coupe d'Asie des nations de football",
-      "ar": "كأس آسيا"
-     },
-     "icon": "continental",
-     "years": []
     },
     {
      "name": {
@@ -45315,81 +43132,9 @@
       "1983–84",
       "1987–88"
      ]
-    },
-    {
-     "name": {
-      "en": "African Cup of Champions Clubs",
-      "fr": "Ligue des champions de la CAF",
-      "ar": "دوري أبطال إفريقيا"
-     },
-     "icon": "ucl",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "Arab Club Champions Cup",
-      "fr": "coupe arabe des clubs champions",
-      "ar": "كأس العرب للأندية الأبطال"
-     },
-     "icon": "cup",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "Mediterranean Games",
-      "fr": "football aux Jeux méditerranéens",
-      "ar": "كرة القدم في ألعاب البحر الأبيض المتوسط"
-     },
-     "icon": "olympic",
-     "years": [
-      "1979"
-     ]
-    },
-    {
-     "name": {
-      "en": "Africa Cup of Nations",
-      "fr": "Coupe d'Afrique des nations de football",
-      "ar": "كأس الأمم الإفريقية"
-     },
-     "icon": "continental",
-     "years": []
-    },
-    {
-     "name": {
-      "en": "Summer Olympics",
-      "fr": "football aux Jeux olympiques",
-      "ar": "كرة القدم في الألعاب الأولمبية الصيفية"
-     },
-     "icon": "olympic",
-     "years": [
-      "1980"
-     ]
-    },
-    {
-     "name": {
-      "en": "FIFA World Cup",
-      "fr": "Coupe du monde de football",
-      "ar": "كأس العالم"
-     },
-     "icon": "worldcup",
-     "years": [
-      "1982",
-      "1986"
-     ]
     }
    ],
    "awards": [
-    {
-     "name": {
-      "en": "Mediterranean Games 3rd best player",
-      "fr": "Jeux méditerranéens",
-      "ar": "ألعاب البحر الأبيض المتوسط"
-     },
-     "icon": "star",
-     "years": [
-      "1979"
-     ]
-    },
     {
      "name": {
       "en": "African Footballer of the Year",
@@ -45403,12 +43148,14 @@
     },
     {
      "name": {
-      "en": "Algerian Footballer of the Year",
-      "fr": "Ballon d'or d'Algérie",
-      "ar": "الكرة الذهبية الجزائرية"
+      "en": "Algerian League top scorer",
+      "fr": "Meilleur buteur du championnat d'Algérie",
+      "ar": "هداف الدوري الجزائري"
      },
-     "icon": "star",
-     "years": []
+     "icon": "boot",
+     "years": [
+      "1978–79"
+     ]
     }
    ]
   },
@@ -45476,7 +43223,19 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [
+    {
+     "name": {
+      "en": "AFC Asian Footballer of the Year",
+      "fr": "Joueur asiatique de l'année",
+      "ar": "أفضل لاعب في آسيا"
+     },
+     "icon": "star",
+     "years": [
+      "1994"
+     ]
+    }
+   ]
   },
   {
    "id": "Q401433",
@@ -45613,17 +43372,6 @@
     },
     {
      "name": {
-      "en": "Baghdad Championship",
-      "fr": "Baghdad Championship",
-      "ar": "بطولة أم المعارك"
-     },
-     "icon": "league",
-     "years": [
-      "1991–92"
-     ]
-    },
-    {
-     "name": {
       "en": "Asian Games",
       "fr": "football aux Jeux asiatiques",
       "ar": "كرة القدم في الألعاب الآسيوية"
@@ -45669,6 +43417,17 @@
     }
    ],
    "awards": [
+    {
+     "name": {
+      "en": "Asian Footballer of the Year",
+      "fr": "footballeur asiatique de l'année",
+      "ar": "جائزة أفضل لاعب في آسيا"
+     },
+     "icon": "star",
+     "years": [
+      "1988"
+     ]
+    },
     {
      "name": {
       "en": "Arabian Gulf Cup top scorer",
@@ -45779,9 +43538,9 @@
     },
     {
      "name": {
-      "en": "[[1976 African Cup of Nations|African Cup of Nations",
-      "fr": "[[1976 African Cup of Nations|African Cup of Nations",
-      "ar": "[[1976 African Cup of Nations|African Cup of Nations"
+      "en": "African Cup of Nations",
+      "fr": "Coupe d'Afrique des nations de football",
+      "ar": "كأس الأمم الإفريقية"
      },
      "icon": "continental",
      "years": [
@@ -45790,20 +43549,9 @@
     },
     {
      "name": {
-      "en": "[[1974 Kuneitra Cup|Kuneitra Cup",
-      "fr": "[[1974 Kuneitra Cup|Kuneitra Cup",
-      "ar": "[[1974 Kuneitra Cup|Kuneitra Cup"
-     },
-     "icon": "cup",
-     "years": [
-      "1974"
-     ]
-    },
-    {
-     "name": {
-      "en": "[[Football at the 1976 Pan Arab Games|Pan Arab Games",
-      "fr": "[[Football at the 1976 Pan Arab Games|Pan Arab Games",
-      "ar": "[[Football at the 1976 Pan Arab Games|Pan Arab Games"
+      "en": "Pan Arab Games",
+      "fr": "Jeux panarabes",
+      "ar": "دورة الألعاب العربية"
      },
      "icon": "olympic",
      "years": [
@@ -45821,6 +43569,18 @@
      "icon": "star",
      "years": [
       "1975"
+     ]
+    },
+    {
+     "name": {
+      "en": "Botola Pro Top Goalscorer",
+      "fr": "championnat du Maroc de football",
+      "ar": "البطولة الوطنية المغربية"
+     },
+     "icon": "boot",
+     "years": [
+      "1969",
+      "1973"
      ]
     }
    ]
@@ -45974,15 +43734,6 @@
      "years": [
       "2013"
      ]
-    },
-    {
-     "name": {
-      "en": "AFC Asian Cup",
-      "fr": "Coupe d'Asie des nations de football",
-      "ar": "كأس آسيا"
-     },
-     "icon": "continental",
-     "years": []
     }
    ],
    "awards": [
@@ -46007,28 +43758,6 @@
      "icon": "star",
      "years": [
       "2010"
-     ]
-    },
-    {
-     "name": {
-      "en": "Al Hadath Al Riyadi Young Arab player of the Year",
-      "fr": "Al Hadath Al Riyadi Young Arab player of the Year",
-      "ar": "Al Hadath Al Riyadi Young Arab player of the Year"
-     },
-     "icon": "star",
-     "years": [
-      "2013"
-     ]
-    },
-    {
-     "name": {
-      "en": "AGL Fans’ Player of the Year",
-      "fr": "championnat des Émirats arabes unis de football",
-      "ar": "الدوري الإماراتي للمحترفين"
-     },
-     "icon": "star",
-     "years": [
-      "2012–13"
      ]
     },
     {
@@ -46196,7 +43925,19 @@
      "to": 1989
     }
    ],
-   "trophies": [],
+   "trophies": [
+    {
+     "name": {
+      "en": "Algerian Championship",
+      "fr": "Championnat d'Algérie",
+      "ar": "الدوري الجزائري"
+     },
+     "icon": "league",
+     "years": [
+      "1980–81"
+     ]
+    }
+   ],
    "awards": []
   },
   {
@@ -46286,7 +44027,19 @@
      ]
     }
    ],
-   "awards": []
+   "awards": [
+    {
+     "name": {
+      "en": "African Footballer of the Year",
+      "fr": "Ballon d'or africain",
+      "ar": "أفضل لاعب في أفريقيا"
+     },
+     "icon": "star",
+     "years": [
+      "1977"
+     ]
+    }
+   ]
   },
   {
    "id": "Q981909",
@@ -46387,6 +44140,29 @@
     }
    ],
    "awards": [
+    {
+     "name": {
+      "en": "African Footballer of the Year",
+      "fr": "Joueur africain de l'année",
+      "ar": "جائزة أفضل لاعب أفريقي خلال العام"
+     },
+     "icon": "star",
+     "years": [
+      "1983"
+     ]
+    },
+    {
+     "name": {
+      "en": "Egyptian Premier League top goalscorer",
+      "fr": "championnat d'Égypte de football",
+      "ar": "الدوري المصري الممتاز"
+     },
+     "icon": "boot",
+     "years": [
+      "1977–78",
+      "1980–81"
+     ]
+    },
     {
      "name": {
       "en": "African Cup of Champions Clubs top scorer",
@@ -46542,19 +44318,7 @@
      ]
     }
    ],
-   "awards": [
-    {
-     "name": {
-      "en": "World Military Cup best player",
-      "fr": "World Military Cup best player",
-      "ar": "World Military Cup best player"
-     },
-     "icon": "star",
-     "years": [
-      "2001"
-     ]
-    }
-   ]
+   "awards": []
   },
   {
    "id": "Q253945",
@@ -46626,7 +44390,20 @@
      "to": 2004
     }
    ],
-   "trophies": [],
+   "trophies": [
+    {
+     "name": {
+      "en": "Arabian Gulf Cup",
+      "fr": "Coupe du Golfe",
+      "ar": "كأس الخليج العربي"
+     },
+     "icon": "continental",
+     "years": [
+      "1996",
+      "1998"
+     ]
+    }
+   ],
    "awards": []
   }
  ]
