@@ -3,7 +3,9 @@ import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botPlan, EightBall, freeSpot, rack, Sim, tune, type Ball, type Shot } from "../billiard.js";
+import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
+import { TableTalk } from "./tableTalk.js";
 import { kickRefusal, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
@@ -15,7 +17,8 @@ import { gameStarted } from "../metrics.js";
  * passed on to the others as it moves ("aim").
  *
  * No schema: "billiard" (the table) after every change, "billiard_shot" for each shot, "billiard_aim" for an aim,
- * "billiard_fx" for a shot clock that ran out.
+ * "billiard_fx" for a shot clock that ran out. The table's chat, emojis and voice, as at the other tables. Each player
+ * plays with his own cue ("cue"): the others see it while he aims.
  */
 type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
 type Settings = { roomType?: string; turnSeconds?: number };
@@ -31,6 +34,7 @@ type Seat = {
   vip?: string;
   connected: boolean;
   bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
+  cue: string; // his cue (the app's assets/images/billiard/cues/<cue>.webp)
 };
 type Phase = "lobby" | "playing" | "gameover";
 
@@ -49,6 +53,7 @@ const LATE_MS = 1000; // a shot may arrive this late after the clock ran out (th
 const RECONNECT_SECONDS = 600;
 const CLOSE_AFTER_GAME_MS = 60_000;
 const MAX_SPECTATORS = 20;
+const CUES = ["default", "navy", "gold", "royal"];
 
 const added = (s: Seat) => s.id.startsWith("bot-");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
@@ -68,6 +73,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private banned = new Map<string, string>();
   private spectators = new Map<string, JoinOptions>();
   private admins = new Set<string>();
+  private tableTalk!: TableTalk; // the table's chat and emojis
   private returned = new Map<string, string>();
   private listedStarted = false;
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" };
@@ -105,7 +111,13 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     on<Record<string, unknown>>("shot", (c, m) => this.handleShot(this.idOf(c), m));
     on("play_again", (c) => this.handlePlayAgain(this.idOf(c)));
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
+    on<{ id: string }>("cue", (c, m) => {
+      const seat = this.seat(this.idOf(c));
+      if (seat && CUES.includes(m.id)) seat.cue = m.id;
+    });
     this.onMessage("aim", (client, m: Record<string, unknown>) => this.handleAim(client, m ?? {}));
+    this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
@@ -152,6 +164,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   onJoin(client: Client, options: JoinOptions = {}) {
     if (client.auth?.admin) {
       this.admins.add(client.sessionId);
+      this.tableTalk.history(client);
       return this.sync();
     }
     const account: Account | null = client.auth?.account ?? null;
@@ -165,6 +178,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
+    this.tableTalk.history(client);
     this.updateListing();
     this.sync();
   }
@@ -184,6 +198,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       vip: vipLevel(account),
       connected: true,
       bot: null,
+      cue: "default",
     });
     if (!this.hostId) this.hostId = this.idOf(client);
   }
@@ -194,6 +209,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (this.seats.length >= SEATS) return "full";
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
+    if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
     this.updateListing();
   }
 
@@ -232,16 +248,21 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       return;
     }
     if (seat) seat.connected = true;
+    this.tableTalk.history(client);
     this.sync();
   }
 
   onLeave(client: Client) {
-    if (this.admins.delete(client.sessionId)) return;
+    if (this.admins.delete(client.sessionId)) {
+      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      return;
+    }
     const id = this.idOf(client);
     this.returned.delete(client.sessionId);
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) leaveRoom(uid, this.roomId);
+    if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();
       return this.sync();
@@ -258,6 +279,18 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   onDispose() {
     this.timer?.clear();
     this.botTimer?.clear();
+    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+  }
+
+  private async handleVoiceJoin(client: Client) {
+    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (this.admins.has(client.sessionId)) { // the admin listens, unseen
+      return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
+    }
+    const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
+    // Players talk; of those watching, only VIP Pro.
+    const talk = !!this.seat(this.idOf(client)) || client.auth?.account?.vipPro === true;
+    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk, hear: true })) });
   }
 
   // ---- the waiting room ----
@@ -281,6 +314,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       frame: 0,
       connected: true,
       bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
+      cue: CUES[1 + Math.floor(Math.random() * (CUES.length - 1))], // a bot plays with one of the fine cues
     });
     this.updateListing();
   }
@@ -550,6 +584,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       turnSeconds: this.turnSeconds,
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, bot: s.bot ?? "",
+        cue: s.cue,
       })),
       shots: this.shots,
       balls: this.positions(),
