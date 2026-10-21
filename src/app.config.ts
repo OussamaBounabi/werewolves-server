@@ -15,6 +15,7 @@ import {
 import { WerewolfRoom } from "./rooms/WerewolfRoom.js";
 import { RummyRoom } from "./rooms/RummyRoom.js";
 import { DominoRoom } from "./rooms/DominoRoom.js";
+import { BilliardRoom } from "./rooms/BilliardRoom.js";
 import { LudoRoom } from "./rooms/LudoRoom.js";
 import { GuessRoom, MysteryRoom } from "./rooms/GuessRoom.js";
 import { ITEMS, MYSTERY_CATEGORIES } from "./mysteryItems.js";
@@ -97,6 +98,7 @@ const server = defineServer({
     werewolf: defineRoom(WerewolfRoom),
     rummy: defineRoom(RummyRoom),
     domino: defineRoom(DominoRoom),
+    billiard: defineRoom(BilliardRoom),
     ludo: defineRoom(LudoRoom),
     guess: defineRoom(GuessRoom),
     mystery: defineRoom(MysteryRoom),
@@ -117,6 +119,7 @@ const server = defineServer({
     api_rooms: createEndpoint("/api/rooms", { method: "GET" }, async () => publicRooms("werewolf")),
     api_rummy_rooms: createEndpoint("/api/rummy/rooms", { method: "GET" }, async () => publicRooms("rummy")),
     api_domino_rooms: createEndpoint("/api/domino/rooms", { method: "GET" }, async () => publicRooms("domino")),
+    api_billiard_rooms: createEndpoint("/api/billiard/rooms", { method: "GET" }, async () => publicRooms("billiard")),
     api_ludo_rooms: createEndpoint("/api/ludo/rooms", { method: "GET" }, async () => publicRooms("ludo")),
     api_guess_rooms: createEndpoint("/api/guess/rooms", { method: "GET" }, async () => publicRooms("guess")),
     api_mystery_rooms: createEndpoint("/api/mystery/rooms", { method: "GET" }, async () => publicRooms("mystery")),
@@ -124,7 +127,7 @@ const server = defineServer({
     api_mimic_rooms: createEndpoint("/api/mimic/rooms", { method: "GET" }, async () => publicRooms("mimic")),
     // The home: how many public rooms each game has now, and how many players are online.
     api_room_counts: createEndpoint("/api/room-counts", { method: "GET" }, async () => {
-      const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic", "mystery"];
+      const games = ["werewolf", "rummy", "domino", "ludo", "guess", "imposter", "mimic", "mystery", "billiard"];
       const rooms = Object.fromEntries(await Promise.all(games.map(async (g) => [g, (await publicRooms(g)).length])));
       return { ...rooms, online: onlineCount() }; // (and how many have the app open)
     }),
