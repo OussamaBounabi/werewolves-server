@@ -4,7 +4,7 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import { BilliardRoom } from "../src/rooms/BilliardRoom.js";
-import { botPlan, EightBall, newBall, rack, Sim, type Ball } from "../src/billiard.js";
+import { botPlan, EightBall, newBall, rack, ShotLog, Sim, type Ball } from "../src/billiard.js";
 
 describe("billiard", () => {
   // The app played these shots (its test/billiard_golden_test.dart): every ball must end where it ended there, to the bit.
@@ -20,6 +20,14 @@ describe("billiard", () => {
       assert.deepStrictEqual(sim.log.potted.map((n) => [n, sim.log.holeOf.get(n)]), c.potted, `case ${i}: potted`);
       assert.deepStrictEqual(balls.filter((b) => b.pottedIn === null).map((b) => [b.n, b.x, b.y]), c.end, `case ${i}: where they stopped`);
     }
+  });
+
+  it("my last ball and then the 8 in one shot wins; balls left, it loses", () => {
+    const game = () => Object.assign(new EightBall(), { breakShot: false, ballInHand: false, kitchenOnly: false, groups: ["solids", "stripes"] });
+    const log = (potted: number[]) => Object.assign(new ShotLog(), { firstHit: 7, potted, holeOf: new Map(potted.map((n) => [n, 4])), cushionAfterHit: new Set([7]) });
+    assert.strictEqual(game().play(log([7, 8]), new Set([7, 8, 9]), null).end, "eight");
+    assert.strictEqual(game().play(log([8, 7]), new Set([7, 8, 9]), null).end, "eight_early");
+    assert.strictEqual(game().play(log([7, 8]), new Set([6, 7, 8, 9]), null).end, "eight_early");
   });
 
   it("a bot game ends with a winner", function () {

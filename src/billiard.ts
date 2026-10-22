@@ -304,12 +304,18 @@ export class EightBall {
         this.ballInHand = this.kitchenOnly = true;
         return outcome({ rerack: true, keepsTurn: true });
       }
-      const legal = foul === null && wasOnEight && log.holeOf.get(8) === called;
+      // His last balls went down before the 8, in this same shot: he was on the 8 when it dropped (no call possible).
+      const mine = this.groups[me], eightAt = log.potted.indexOf(8);
+      const cleared = mine !== null && [...before].filter((n) => groupOf(n) === mine).every((n) => {
+        const i = log.potted.indexOf(n);
+        return i >= 0 && i < eightAt;
+      });
+      const legal = foul === null && (wasOnEight ? log.holeOf.get(8) === called : cleared);
       this.winner = legal ? me : other;
       return outcome({
         foul,
         winner: this.winner,
-        end: legal ? "eight" : !wasOnEight ? "eight_early" : foul !== null ? "eight_foul" : "eight_wrong_pocket",
+        end: legal ? "eight" : !wasOnEight && !cleared ? "eight_early" : foul !== null ? "eight_foul" : "eight_wrong_pocket",
       });
     }
 
