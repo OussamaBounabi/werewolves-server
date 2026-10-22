@@ -8,7 +8,7 @@ import { ImposterRoom } from "../src/rooms/ImposterRoom.js";
 describe("imposter words", () => {
   it("has 8 categories of 30+ words, in three languages", () => {
     assert.strictEqual(CATEGORIES.length, 8);
-    for (const cat of CATEGORIES) assert.ok(wordsOf(cat).length >= 30, cat);
+    for (const cat of CATEGORIES) assert.strictEqual(wordsOf(cat).length, 100, cat);
     assert.strictEqual(new Set(WORDS.map((w) => w.id)).size, WORDS.length);
     for (const w of WORDS) assert.ok(w.en && w.fr && w.ar, w.id);
   });
