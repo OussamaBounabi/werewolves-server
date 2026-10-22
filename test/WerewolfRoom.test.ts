@@ -1656,7 +1656,7 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual([r.roles.get(puppet.sessionId), r.teamOf(puppet.sessionId)], ["werewolf", "wolves"]);
     assert.ok(r.privateLogs.get(other.sessionId).some((e: any) => e.type === "puppet_joined"));
 
-    // A village player dies: his role is the servant's to take, never the dead wolf's. Hers from the next night.
+    // A village player dies: his role is the servant's to take, never the dead wolf's. She sees this very night.
     r.kill(seer.sessionId, "vote");
     assert.deepStrictEqual(r.heirlooms(), [seer.sessionId]);
     r.startWitchSeerStep();
@@ -1664,9 +1664,43 @@ describe("WerewolfRoom", () => {
     servant.send("inherit", { targetId: wolf.sessionId }); // refused
     const hers = servant.waitForMessage("inherited");
     servant.send("inherit", { targetId: seer.sessionId });
-    assert.deepStrictEqual(await hers, { targetId: seer.sessionId, role: "seer" });
+    assert.deepStrictEqual(await hers, { targetId: seer.sessionId, role: "seer", now: true });
     assert.deepStrictEqual([r.powerOf(servant.sessionId), r.teamOf(servant.sessionId)], ["seer", "village"]);
     assert.ok(r.holders("seer").includes(servant.sessionId));
+    assert.ok(r.awake.has(servant.sessionId)); // still awake: her new role plays tonight
+  });
+
+  it("no wolf alive (a loner plays on): the pack doesn't wake at night", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, alien: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    r.kill(byRole("werewolf").sessionId, "vote");
+    const steps = () => (r.publicLog as any[]).filter((e) => e.type === "step" && e.role === "werewolf").length;
+    const before = steps();
+    r.startWolvesStep();
+    assert.notStrictEqual(room.state.nightStep, "wolves");
+    assert.strictEqual(steps(), before);
+  });
+
+  it("a servant who takes a triple face over starts it again: a seer that night, a witch the next, then a hunter", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, servant: true, tripleface: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [servant, face] = ["servant", "tripleface"].map(byRole);
+    room.state.dayNumber = 3; // the dead triple face was a hunter by now
+    r.kill(face.sessionId, "vote");
+    r.startWitchSeerStep();
+    const hers = servant.waitForMessage("inherited");
+    servant.send("inherit", { targetId: face.sessionId });
+    assert.strictEqual(((await hers) as any).now, true);
+    assert.ok(r.awake.has(servant.sessionId) && !r.isHunter(servant.sessionId));
+    assert.strictEqual(r.faceNight(servant.sessionId), 1); // a seer tonight
+    room.state.dayNumber = 4;
+    r.startWitchSeerStep();
+    assert.ok(r.witchActors.has(servant.sessionId)); // a witch, both potions
+    assert.deepStrictEqual(r.potions.get(servant.sessionId), { revive: true, poison: true });
+    room.state.dayNumber = 5;
+    assert.ok(r.isHunter(servant.sessionId));
   });
 
   it("the chameleon wolf, voted against while another is put out, takes the role of the first villager who voted him", async () => {

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isTokenExpired, type RecordModel } from "pocketbase";
+import { pushTo } from "./push.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
@@ -671,20 +672,77 @@ export async function useRoleCard(uid: string) {
   await (await db()).collection("users").update(uid, { roleCardDay: dayKey() });
 }
 
-export const PRO_KICKS = 3; // a month
+export const PRO_KICKS = 5; // a month
+export const PRO_STAYS = 5; // a month: times a VIP Pro stays when someone tries to put him out of a room
 
-/** A VIP Pro puts someone out of a room he doesn't host: false if he has no kick left this month (or isn't one). */
-export async function useProKick(uid: string) {
-  if (!pb || !uid) return false;
+/**
+ * What a VIP Pro has left of [kind] this month, kept on his account as proKicks { month, used, stays }: "used", kicks
+ * in rooms he doesn't host; "stays", staying when put out. [spend]: takes one if one is left. 0 for anyone else.
+ */
+async function proAllowance(uid: string, kind: "used" | "stays", limit: number, spend: boolean) {
+  if (!pb || !uid) return 0;
   return forPlayer(uid, async () => {
     const client = await db();
     const u = await client.collection("users").getOne(uid, { fields: "vipPro,proKicks" });
+    if (u.vipPro !== true) return 0;
     const month = dzDay(Date.now()).slice(0, 7);
-    const used = u.proKicks?.month === month ? Number(u.proKicks.used) || 0 : 0;
-    if (u.vipPro !== true || used >= PRO_KICKS) return false;
-    await client.collection("users").update(uid, { proKicks: { month, used: used + 1 } });
-    return true;
+    const counts = u.proKicks?.month === month ? u.proKicks : { month };
+    const done = Number(counts[kind]) || 0;
+    const left = Math.max(0, limit - done);
+    if (spend && left > 0) await client.collection("users").update(uid, { proKicks: { ...counts, [kind]: done + 1 } });
+    return left;
   });
+}
+
+/** A VIP Pro puts someone out of a room he doesn't host: false if he has no kick left this month (or isn't one). */
+export const useProKick = async (uid: string) => (await proAllowance(uid, "used", PRO_KICKS, true)) > 0;
+export const proKicksLeft = (uid: string) => proAllowance(uid, "used", PRO_KICKS, false);
+export const proStaysLeft = (uid: string) => proAllowance(uid, "stays", PRO_STAYS, false);
+/** He chose to stay: false if he had no stay left this month. */
+export const useProStay = async (uid: string) => (await proAllowance(uid, "stays", PRO_STAYS, true)) > 0;
+
+/** His phone, for notifications: its token first in his list (his last 5 phones). */
+export async function savePushToken(idToken: string, token: string) {
+  const { uid } = await signedIn(idToken);
+  await forPlayer(uid, async () => {
+    const users = (await db()).collection("users");
+    const u = await users.getOne(uid, { fields: "pushTokens" });
+    const old: string[] = Array.isArray(u.pushTokens) ? u.pushTokens : [];
+    await users.update(uid, { pushTokens: [token, ...old.filter((t) => t !== token)].slice(0, 5) });
+  });
+}
+
+const pushed = new Set<string>(); // messages already pushed (each once)
+
+/**
+ * A message he has just saved (a line, a voice message, an invitation), to his friend's phones: his name, its text.
+ * Only his own, once, within a minute of it.
+ */
+export async function pushMessage(idToken: string, id: string) {
+  const { uid } = await signedIn(idToken);
+  if (pushed.has(id)) return;
+  const client = await db();
+  const m = await client.collection("messages").getOne(id);
+  if (m.from !== uid || Date.now() - Date.parse(String(m.created).replace(" ", "T")) > 60_000) return;
+  pushed.add(id);
+  if (pushed.size > 10_000) pushed.clear();
+  const users = client.collection("users");
+  const [me, him] = await Promise.all([users.getOne(uid, { fields: "name,username" }), users.getOne(m.to, { fields: "pushTokens" })]);
+  const tokens: string[] = Array.isArray(him.pushTokens) ? him.pushTokens : [];
+  const dead = await pushTo(tokens, {
+    type: String(m.type || "message"),
+    from: uid,
+    title: String(me.name || me.username),
+    body: String(m.text ?? "").slice(0, 300),
+    roomId: String(m.roomId ?? ""),
+  });
+  if (dead.length) {
+    await forPlayer(m.to, async () => {
+      const now = await users.getOne(m.to, { fields: "pushTokens" });
+      const left = (Array.isArray(now.pushTokens) ? now.pushTokens : []).filter((t: string) => !dead.includes(t));
+      await users.update(m.to, { pushTokens: left });
+    });
+  }
 }
 
 /** The account with this e-mail, or this username (admin tools). */

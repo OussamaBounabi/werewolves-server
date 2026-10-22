@@ -6,7 +6,7 @@ import { botMove, HOME, movable, target, throwDie, victims, type Board, type Bot
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { kickRefusal, RoomLooks } from "./perks.js";
+import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -50,7 +50,7 @@ const LANDED_MS = 250; // the die has stopped: its number shows a moment
 const HOP_MS = 160; // a pawn's hop from square to square
 const NO_MOVE_MS = 1_200; // nothing to move: the roll is shown, then the turn moves on
 const START_MS = 1_500;
-const RECONNECT_SECONDS = 600;
+const RECONNECT_SECONDS = 60; // a dropped player gone over a minute is out, as if he had left
 const CLOSE_AFTER_GAME_MS = 60_000;
 
 /** The colors around the board (clockwise from red, top left): 2 players face each other. */
@@ -81,6 +81,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // …and whose face it shows
+  private kicks = new Kicks(this); // who may put whom out of the waiting room (a VIP Pro may choose to stay)
   private looks = new RoomLooks(); // a VIP Pro host's name and style for his room in the lists (kept on his account)
   private get look() {
     return this.looks.of(this.hostId);
@@ -368,12 +369,12 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private async handleKick(client: Client, id: string) {
     const seat = this.seat(id), by = this.seat(this.idOf(client));
     if (this.phase !== "lobby" || !by || !seat || seat === by || !!seat.bot) return;
-    const refused = await kickRefusal(by, by.id === this.hostId, seat);
-    if (refused) return client.send("ludo_error", { code: refused });
+    const how = await this.kicks.decide(by, by.name, by.id === this.hostId, seat, this.connectionOf(id));
+    if (typeof how === "object") return client.send("ludo_error", how);
     if (this.phase !== "lobby" || !this.seat(id)) return; // (the game began, or he left, meanwhile)
-    this.banned.set(seat.playerId, by.playerId);
+    if (how === "kicked") this.banned.set(seat.playerId, by.playerId); // (a VIP Pro who chose to leave may come back)
     const kicked = this.connectionOf(id);
-    kicked?.send("kicked");
+    if (how === "kicked") kicked?.send("kicked");
     this.removeSeat(id);
     this.updateListing();
     kicked?.leave(4000);

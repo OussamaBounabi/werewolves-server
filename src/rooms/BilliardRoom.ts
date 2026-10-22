@@ -6,7 +6,7 @@ import { botPlan, EightBall, freeSpot, rack, Sim, tune, type Ball, type Shot } f
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { kickRefusal, RoomLooks } from "./perks.js";
+import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -50,7 +50,7 @@ const STROKE_MS = 70;
 const BOT_AIM_MS = 2020;
 const SETTLE_MS = 900;
 const LATE_MS = 1000; // a shot may arrive this late after the clock ran out (the network)
-const RECONNECT_SECONDS = 600;
+const RECONNECT_SECONDS = 60; // a dropped player gone over a minute is out, as if he had left
 const CLOSE_AFTER_GAME_MS = 60_000;
 const MAX_SPECTATORS = 20;
 const CUES = ["default", "navy", "gold", "royal"];
@@ -77,6 +77,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private returned = new Map<string, string>();
   private listedStarted = false;
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" };
+  private kicks = new Kicks(this); // who may put whom out of the waiting room (a VIP Pro may choose to stay)
   private looks = new RoomLooks();
   private get look() {
     return this.looks.of(this.hostId);
@@ -334,12 +335,12 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private async handleKick(client: Client, id: string) {
     const seat = this.seat(id), by = this.seat(this.idOf(client));
     if (this.phase !== "lobby" || !by || !seat || seat === by || !!seat.bot) return;
-    const refused = await kickRefusal(by, by.id === this.hostId, seat);
-    if (refused) return client.send("billiard_error", { code: refused });
+    const how = await this.kicks.decide(by, by.name, by.id === this.hostId, seat, this.connectionOf(id));
+    if (typeof how === "object") return client.send("billiard_error", how);
     if (this.phase !== "lobby" || !this.seat(id)) return;
-    this.banned.set(seat.playerId, by.playerId);
+    if (how === "kicked") this.banned.set(seat.playerId, by.playerId); // (a VIP Pro who chose to leave may come back)
     const kicked = this.connectionOf(id);
-    kicked?.send("kicked");
+    if (how === "kicked") kicked?.send("kicked");
     this.removeSeat(id);
     this.updateListing();
     kicked?.leave(4000);

@@ -1,4 +1,5 @@
 import assert from "assert";
+import { Kicks } from "../src/rooms/perks.js";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
@@ -108,15 +109,21 @@ describe("LudoRoom", () => {
     assert.strictEqual(room.seats.length, 2);
   });
 
-  it("VIP Pro: put out only by a VIP Pro; a VIP Pro host names his room and picks its style for the lists", async () => {
+  it("VIP Pro: asked before he's put out, he stays; a VIP Pro host names his room and picks its style for the lists", async () => {
     const room: any = await colyseus.createRoom("ludo", {});
     const host = await colyseus.connectTo(room, { playerId: "host" });
     const pro = await colyseus.connectTo(room, { playerId: "pro" });
     for (const c of [host, pro]) c.onMessage("ludo", () => {});
     room.seats[1].vip = "pro"; // (his account's, read as he joins)
+    room.seats[1].uid = "u-pro";
+    const ok = async () => true;
+    room.kicks = new Kicks(room, { kicksLeft: async () => 5, staysLeft: async () => 5, useKick: ok, useStay: ok });
+    const asked = pro.waitForMessage("kick_asked");
     const refused = host.waitForMessage("ludo_error");
     host.send("kick", { id: pro.sessionId });
-    assert.strictEqual(((await refused) as any).code, "kick_pro");
+    assert.strictEqual(((await asked) as any).stays, 5);
+    pro.send("kick_answer", { stay: true });
+    assert.strictEqual(((await refused) as any).code, "kick_pro_stayed");
     assert.strictEqual(room.seats.length, 2);
     host.send("room_look", { name: "  Les   loups ", style: "gold" }); // the host isn't VIP Pro: nothing
     await new Promise((done) => setTimeout(done, 100));

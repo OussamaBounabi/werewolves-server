@@ -10,7 +10,7 @@ import { planTurn, wantsDiscard, type BotLevel, type BotView } from "../rummyBot
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { kickRefusal, RoomLooks } from "./perks.js";
+import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
@@ -68,7 +68,7 @@ const PICKS_SHOWN_MS = 2_500; // the drawn cards face up, before the seats chang
 const BOT_DRAW_TO_DISCARD_MS = 2_000; // a bot keeps the card it drew at least this long before throwing
 const READY_WAIT_MS = 30_000; // the round's results: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000; // everyone's ready: the next deal comes after this
-const RECONNECT_SECONDS = 600;
+const RECONNECT_SECONDS = 60; // a dropped player gone over a minute is out, as if he had left
 const CLOSE_AFTER_GAME_MS = 60_000;
 
 export const thresholdFor = (players: number) => (players >= 5 ? 71 : players === 4 ? 91 : 101);
@@ -107,6 +107,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private returned = new Map<string, string>(); // a returning player's new connection → the seat he had
   private listedStarted = false; // what the room list was last told
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" }; // …and whose face it shows
+  private kicks = new Kicks(this); // who may put whom out of the waiting room (a VIP Pro may choose to stay)
   private looks = new RoomLooks(); // a VIP Pro host's name and style for his room in the lists (kept on his account)
   private get look() {
     return this.looks.of(this.hostId);
@@ -491,12 +492,12 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private async handleKick(client: Client, id: string) {
     const seat = this.seat(id), by = this.seat(this.idOf(client));
     if (this.phase !== "lobby" || !by || !seat || seat === by || !!seat.bot) return;
-    const refused = await kickRefusal(by, by.id === this.hostId, seat);
-    if (refused) return client.send("rummy_error", { code: refused });
+    const how = await this.kicks.decide(by, by.name, by.id === this.hostId, seat, this.connectionOf(id));
+    if (typeof how === "object") return client.send("rummy_error", how);
     if (this.phase !== "lobby" || !this.seat(id)) return; // (the game began, or he left, meanwhile)
-    this.banned.set(seat.playerId, by.playerId);
+    if (how === "kicked") this.banned.set(seat.playerId, by.playerId); // (a VIP Pro who chose to leave may come back)
     const kicked = this.connectionOf(id);
-    kicked?.send("kicked");
+    if (how === "kicked") kicked?.send("kicked");
     this.removeSeat(id);
     this.updateListing();
     kicked?.leave(4000);

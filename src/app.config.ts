@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import { catalog, legends, playerInfo } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
-  buyAvatar, buyFrame, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError,
+  buyAvatar, buyFrame, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, savePushToken,
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
@@ -177,6 +177,28 @@ const server = defineServer({
       if (!token || !Number.isInteger(id)) throw ctx.error(400, { error: "missing token or id" });
       try {
         return await buyFrame(token, id);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // Notifications: his phone's token (Authorization: Bearer <ID token>, body { token }).
+    api_push_token: createEndpoint("/api/push/token", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx), push = (ctx.body as { token?: unknown } | undefined)?.token;
+      if (!token || typeof push !== "string" || !push || push.length > 400) throw ctx.error(400, { error: "missing token" });
+      try {
+        await savePushToken(token, push);
+        return { ok: true };
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // A message he just saved, pushed to his friend's phones (Authorization: Bearer <ID token>, body { id }).
+    api_push_message: createEndpoint("/api/push/message", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx), id = (ctx.body as { id?: unknown } | undefined)?.id;
+      if (!token || typeof id !== "string" || !id) throw ctx.error(400, { error: "missing token or id" });
+      try {
+        await pushMessage(token, id);
+        return { ok: true };
       } catch (e) {
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
