@@ -13,14 +13,17 @@ const jawCornerBack = 16.7, jawCornerNose = 37.6;
 const jawMiddleBack = 23.5, jawMiddleNose = 30.0;
 
 export const tune = {
-  maxSpeed: 2225,
-  powerCurve: 1.6,
+  maxSpeed: 2845,
   slide: 900,
-  roll: 40,
+  roll: 50,
+  drag: 0.0003, // the cue ball's extra slowing, drag · speed² (8BP)
+  cushionSpinKeep: 0.12, // the side spin left after a cushion (8BP)
   spinDecay: 8,
   ballBounce: 0.95,
-  cushionBounce: 0.66,
-  cushionGrip: 0.45,
+  cushionBounce: 0.5, // + cushionBounceGain · the speed across, at most cushionBounceMax
+  cushionBounceGain: 0.000168,
+  cushionBounceMax: 0.95,
+  cushionGrip: 0.035,
   spinReach: 0.19,
 };
 
@@ -58,7 +61,16 @@ export const copyBall = (b: Ball): Ball => ({ ...b });
 const onTable = (b: Ball) => b.pottedIn === null;
 const moving = (b: Ball) => b.vx !== 0 || b.vy !== 0 || b.wx !== 0 || b.wy !== 0 || b.wz !== 0;
 
-export const launchSpeed = (power: number) => tune.maxSpeed * Math.pow(power, tune.powerCurve);
+/** 8BP's cue: launch speed at points of its power bar (the app's powerTable), a straight line between them. */
+const POWER: [number, number][] = [[0, 0], [0.338, 510], [0.55, 892], [0.756, 1423], [1, 2845]];
+export function launchSpeed(power: number) {
+  const p = Math.min(1, Math.max(0, power));
+  for (let i = 1; i < POWER.length; i++) {
+    const [p0, v0] = POWER[i - 1], [p1, v1] = POWER[i];
+    if (p <= p1) return v0 + (v1 - v0) * (p - p0) / (p1 - p0);
+  }
+  return tune.maxSpeed;
+}
 
 export class ShotLog {
   firstHit: number | null = null;
@@ -136,6 +148,13 @@ export class Sim {
   }
 
   private cloth(b: Ball) {
+    if (tune.drag > 0 && b.n === 0) {
+      const s = Math.sqrt(b.vx * b.vx + b.vy * b.vy), k = 1 - tune.drag * s * DT;
+      b.vx *= k;
+      b.vy *= k;
+      b.wx *= k;
+      b.wy *= k;
+    }
     const ux = b.vx + ballR * b.wy, uy = b.vy - ballR * b.wx;
     const u = Math.sqrt(ux * ux + uy * uy);
     if (u > 1e-6) {
@@ -196,15 +215,18 @@ export class Sim {
       const tx = -ny, ty = nx;
       const vt = b.vx * tx + b.vy * ty;
       const ut = -ballR * b.wz;
-      const p = (1 + tune.cushionBounce) * -vn;
+      const e = Math.min(tune.cushionBounceMax, tune.cushionBounce + tune.cushionBounceGain * -vn);
+      const p = (1 + e) * -vn;
       let f = -ut / 3.5;
       const fmax = tune.cushionGrip * p;
       if (f > fmax) f = fmax;
       if (f < -fmax) f = -fmax;
-      const vn2 = -tune.cushionBounce * vn, vt2 = vt + f;
+      const vn2 = -e * vn, vt2 = vt + f;
       b.vx = vn2 * nx + vt2 * tx;
       b.vy = vn2 * ny + vt2 * ty;
       b.wz -= 2.5 * f / ballR;
+      rolling(b); // it leaves the cushion rolling its new way, most of its side spin spent (8BP)
+      b.wz *= tune.cushionSpinKeep;
       if (this.log.firstHit !== null) this.log.cushionAfterHit.add(b.n);
       this.log.anyCushion = true;
     }
