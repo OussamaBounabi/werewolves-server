@@ -731,7 +731,7 @@ export async function pushMessage(idToken: string, id: string) {
   const tokens: string[] = Array.isArray(him.pushTokens) ? him.pushTokens : [];
   const dead = await pushTo(tokens, {
     type: String(m.type || "message"),
-    from: uid,
+    sender: uid,
     title: String(me.name || me.username),
     body: String(m.text ?? "").slice(0, 300),
     roomId: String(m.roomId ?? ""),

@@ -18,9 +18,12 @@ function fcm() {
   return messaging;
 }
 
-const GONE = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token", "messaging/invalid-argument"];
+const GONE = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token"];
 
-/** Sends [data] to these phones (a data message: the app shows it). Answers the tokens that are dead (app removed…). */
+/**
+ * Sends [data] to these phones (a data message: the app shows it). Answers the tokens that are dead (app removed…).
+ * (FCM refuses some keys in data, "from" among them.)
+ */
 export async function pushTo(tokens: string[], data: Record<string, string>): Promise<string[]> {
   const m = fcm();
   if (!m || tokens.length === 0) return [];
