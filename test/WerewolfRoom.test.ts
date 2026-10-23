@@ -877,16 +877,22 @@ describe("WerewolfRoom", () => {
   it("a dead hunter stands until he has shot", async () => {
     const { room, byRole } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 3, hunter: true }, 5);
     const r = room as any;
-    const [hunter, wolf] = [byRole("hunter"), byRole("werewolf")];
+    const [hunter, villager] = [byRole("hunter"), byRole("villager")];
     const state = () => room.state.players.get(hunter.sessionId)!;
     r.kill(hunter.sessionId, "wolves");
     assert.deepStrictEqual([state().alive, state().aiming], [false, true]);
     r.revealsPending = 0;
     r.afterDeaths(() => {});
     assert.strictEqual(room.state.shooterId, hunter.sessionId);
-    hunter.send("hunter_shoot", { targetId: wolf.sessionId });
-    await waitFor(() => room.state.players.get(wolf.sessionId)?.alive === false);
+    // until he has shot he talks with the living, not among the dead
+    assert.deepStrictEqual(r.voiceRightsOf(hunter.sessionId), { talk: true, hear: true });
+    assert.ok(!r.inGraveyard(hunter.sessionId));
+    // (a villager, so the game goes on: once it's over everyone talks again)
+    hunter.send("hunter_shoot", { targetId: villager.sessionId });
+    await waitFor(() => room.state.players.get(villager.sessionId)?.alive === false);
     assert.strictEqual(state().aiming, false);
+    assert.strictEqual(r.voiceRightsOf(hunter.sessionId).talk, false);
+    assert.ok(r.inGraveyard(hunter.sessionId));
   });
 
   it("barbé unmasks a wolf; the dictator dies with an innocent", async () => {

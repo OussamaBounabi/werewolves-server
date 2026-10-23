@@ -2772,7 +2772,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const id = client.sessionId;
     const player = this.state.players.get(id); // (spectators have no seat to show it over)
     if (!player) return;
-    const graveyard = this.gameRunning() && !player.alive;
+    const graveyard = this.inGraveyard(id);
     if (!graveyard && this.gameRunning() && (this.state.phase === "night" || player.silenced)) return;
     const emoji = msg?.id;
     if (!emojisOpen(this.vips.has(id)) || !emojiAllowed(this.emojiAt, id, emoji)) return;
@@ -2984,7 +2984,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const player = this.state.players.get(id);
     if (!player) return { talk: false, hear: false };
     if (!this.gameRunning()) return { talk: true, hear: true };
-    if (!player.alive) return { talk: false, hear: !night }; // the dead: nothing of the night (the pack's talk)
+    // the dead: nothing of the night (the pack's talk). A dead hunter or mayor still to choose stays with the living
+    // (he talks as they do) until his shot or his successor.
+    if (!player.alive && !player.aiming) return { talk: false, hear: !night };
     if (night) {
       const wolf = this.isPack(id);
       return { talk: wolf, hear: wolf };
@@ -3000,7 +3002,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   /** Out of the game (dead, or watching) while it runs: he gets the graveyard voice room. */
   private inGraveyard(id: string) {
     if (this.admins.has(id)) return this.gameRunning();
-    return this.gameRunning() && (this.spectators.has(id) || this.state.players.get(id)?.alive === false);
+    const player = this.state.players.get(id);
+    // (a dead hunter or mayor still to choose isn't there yet: he stays with the living until it's done)
+    return this.gameRunning() && (this.spectators.has(id) || (player?.alive === false && !player.aiming));
   }
 
   private graveSent = new Set<string>(); // given graveyard access
