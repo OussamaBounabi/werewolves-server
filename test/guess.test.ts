@@ -291,6 +291,16 @@ describe("GuessRoom", () => {
         await r.disconnect();
       }
     }
+    // several picked: each his own of them (or both the same one)
+    for (const same of [true, false]) {
+      const { room: r, a: p } = await mysteryPair({ categories: ["food", "fruits"], same });
+      p.client.send("start_game");
+      await until(() => r.phase === "playing");
+      const cats = r.sides.map((s: any) => item(s.secret)!.cat);
+      assert.ok(cats.every((c: string) => c === "food" || c === "fruits"), `${cats}`);
+      assert.strictEqual(cats[0] === cats[1], same);
+      await r.disconnect();
+    }
   });
 
   it("Mystery Item: picking my own thing, only in my category", async () => {

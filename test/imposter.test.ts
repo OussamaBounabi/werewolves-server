@@ -67,6 +67,16 @@ describe("ImposterRoom", () => {
     room.disconnect();
   });
 
+  it("several categories: the word comes from one of them", async () => {
+    for (let i = 0; i < 3; i++) {
+      const { room, players } = await game(4, { categories: ["food", "animals", "nope"] });
+      assert.deepStrictEqual(players[0].state.categories, ["food", "animals"]);
+      assert.strictEqual(players[0].state.category, "random", "apps before 1.0.22 see any");
+      assert.ok(["food", "animals"].includes(players[0].state.wordCategory));
+      room.disconnect();
+    }
+  });
+
   it("one vote: the imposter caught guesses wrong — the players win", async () => {
     const { room, players } = await game(4, { mode: "single" });
     const [imp] = imposterOf(players);

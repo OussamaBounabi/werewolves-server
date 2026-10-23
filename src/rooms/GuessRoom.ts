@@ -36,7 +36,7 @@ type Meta = {
   players: number; maxPlayers: number; spectators: number; mode: Mode;
 };
 type Settings = {
-  mode?: string; category?: string; same?: boolean; roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
+  mode?: string; category?: string; categories?: string[]; same?: boolean; roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
@@ -80,7 +80,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private level = "easy"; // drawn from the giants' clubs (easy), 20 well-known ones (medium), the rest (hard)
   private trust = false;
   private legends = false; // trust mode only: the legends instead of today's footballers
-  private category = "all"; // Mystery Item: one category, or all of them…
+  private cats: string[] = []; // Mystery Item: the host's picks among MYSTERY_CATEGORIES; none = all of them…
   private same = true; // …the same one for both players each round, or each his own
   private time = 180;
   private cupSize = 8;
@@ -327,7 +327,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     if (ROUNDS.includes(Number(s.rounds))) this.rounds = Number(s.rounds);
     if (typeof s.random === "boolean") this.random = s.random;
     if (typeof s.level === "string" && Object.hasOwn(LEVELS, s.level)) this.level = s.level;
-    if (s.category === "all" || MYSTERY_CATEGORIES.includes(s.category as string)) this.category = s.category as string;
+    if (s.category === "all" || MYSTERY_CATEGORIES.includes(s.category as string)) this.cats = s.category === "all" ? [] : [s.category as string]; // (apps before 1.0.22: one)
+    if (Array.isArray(s.categories)) this.cats = MYSTERY_CATEGORIES.filter((c) => s.categories!.includes(c));
     if (typeof s.same === "boolean") this.same = s.same;
     if (typeof s.trust === "boolean" && this.game === "guess") {
       this.trust = s.trust;
@@ -483,12 +484,12 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     }
   }
 
-  /** Mystery Item: the round's categories, [a's, b's] — the room's one, or any: the same for both or two apart. */
+  /** Mystery Item: the round's categories, [a's, b's] — among the host's picks (or all): the same for both or two apart. */
   private categories(): [string, string] {
     if (this.game !== "mystery") return ["", ""];
-    if (this.category !== "all") return [this.category, this.category];
-    const a = pick(MYSTERY_CATEGORIES);
-    return [a, this.same ? a : pick(MYSTERY_CATEGORIES.filter((c) => c !== a))];
+    const pool = this.cats.length ? this.cats : MYSTERY_CATEGORIES;
+    const a = pick(pool);
+    return [a, this.same || pool.length === 1 ? a : pick(pool.filter((c) => c !== a))];
   }
 
   private play() {
@@ -673,7 +674,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       trust: this.trust,
       legends: this.legends,
       game: this.game,
-      category: this.category,
+      category: this.cats.length === 1 ? this.cats[0] : "all", // (apps before 1.0.22)
+      categories: this.cats,
       same: this.same,
       time: this.time,
       cupSize: this.cupSize,

@@ -23,7 +23,7 @@ type Meta = {
   host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean;
   players: number; maxPlayers: number; spectators: number;
 };
-type Settings = { roomType?: string; imposters?: number; category?: string; talk?: number; mode?: string };
+type Settings = { roomType?: string; imposters?: number; category?: string; categories?: string[]; talk?: number; mode?: string };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
@@ -66,7 +66,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private hostId = "";
   private roomType = "public";
   private imposters = 1;
-  private category = "random"; // or one of CATEGORIES
+  private categories: string[] = []; // the host's picks among CATEGORIES; none = any
   private talkSeconds = 180;
   private mode: "single" | "elimination" = "single";
   private seats: Seat[] = [];
@@ -333,7 +333,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     const n = Number(s.imposters);
     if (Number.isInteger(n) && n >= 1 && n <= 4) this.imposters = n;
-    if (s.category === "random" || CATEGORIES.includes(s.category as string)) this.category = s.category as string;
+    if (s.category === "random" || CATEGORIES.includes(s.category as string)) this.categories = s.category === "random" ? [] : [s.category as string]; // (apps before 1.0.22: one)
+    if (Array.isArray(s.categories)) this.categories = CATEGORIES.filter((c) => s.categories!.includes(c));
     if (TALK_OPTIONS.includes(Number(s.talk))) this.talkSeconds = Number(s.talk);
     if (s.mode === "single" || s.mode === "elimination") this.mode = s.mode;
     this.updateListing();
@@ -345,7 +346,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     // The imposters are always fewer than the others: two need five players, three seven, four nine.
     if (this.seats.length < 2 * this.imposters + 1) return this.imposters === 2 ? "too_few_for_two" : "too_few_imposters";
     for (const id of this.spectators.keys()) this.sendGrave(this.connectionOf(id)); // still watching from the last game
-    const pool = this.category === "random" ? WORDS : wordsOf(this.category);
+    const pool = this.categories.length ? WORDS.filter((w) => this.categories.includes(w.cat)) : WORDS;
     this.word = pool[Math.floor(Math.random() * pool.length)];
     const order = this.seats.map((_, i) => i).sort(() => Math.random() - 0.5);
     this.seats.forEach((s, i) =>
@@ -611,7 +612,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       hostId: this.hostId,
       roomType: this.roomType,
       imposters: this.imposters,
-      category: this.category,
+      category: this.categories.length === 1 ? this.categories[0] : "random", // (apps before 1.0.22)
+      categories: this.categories,
       talk: this.talkSeconds,
       mode: this.mode,
       seats: this.seats.map((s) => ({
