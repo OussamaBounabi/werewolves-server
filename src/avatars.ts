@@ -20,7 +20,7 @@ export const AVATARS: Record<number, Rarity> = {
   ...run(101, 108, "common"),
   ...run(109, 126, "rare"),
   ...run(301, 318, "common"),
-  ...run(401, 418, "rare"),
+  ...run(401, 427, "rare"), // 419–427: the criminals, made with the Criminal Chains frame (VIP Pro's, in the store plan)
   ...run(501, 507, "legendary"),
   ...run(601, 605, "mythic"),
 };
@@ -38,6 +38,7 @@ export const FRAMES: Record<number, { amount: number; currency: "coins" | "diamo
   2: { amount: 150, currency: "diamonds" }, // rainbow
   3: { amount: 200, currency: "diamonds" }, // golden shine
   4: { amount: 250, currency: "diamonds" }, // lightning
+  5: { amount: 300, currency: "diamonds" }, // criminal chains (a moving picture in the apps)
 };
 export const frameIds = Object.keys(FRAMES).map(Number);
 
