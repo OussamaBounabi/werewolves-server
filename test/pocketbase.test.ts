@@ -656,6 +656,21 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${p.id}_${weekKey()}`)).vip, "vip");
     });
 
+    it("deletes chat messages older than the cutoff (voice files too) and keeps the newer ones", async () => {
+      const [a, b] = [await player(), await player()];
+      await befriend(a, b);
+      const audio = new File([new Uint8Array(2000)], "v.m4a", { type: "audio/mp4" });
+      const old = await a.pb.collection("messages").create({ from: a.id, to: b.id, type: "voice", text: "🎤", seconds: 3, voice: audio });
+      await new Promise((r) => setTimeout(r, 20));
+      const cutoff = Date.now();
+      await new Promise((r) => setTimeout(r, 20));
+      const kept = await a.pb.collection("messages").create({ from: a.id, to: b.id, text: "new" });
+      await accounts.deleteMessagesBefore(cutoff);
+      assert.deepStrictEqual((await b.pb.collection("messages").getFullList()).map((m) => m.id), [kept.id]);
+      const file = await fetch(admin.files.getURL(old, old.voice, { token: await admin.files.getToken() }));
+      assert.strictEqual(file.status, 404);
+    });
+
     it("Monday: last week's best win their prizes, each told in a message; the 1st: VIP diamonds; each once", async () => {
       const [a, b, vip] = [await player(), await player(), await player()];
       await accounts.grantVip(vip.id, "vip", 5);

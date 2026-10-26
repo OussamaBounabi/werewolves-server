@@ -529,8 +529,8 @@ export async function savePlan<K extends PlanId>(id: K, data: NonNullable<(typeo
   plans[id] = data;
 }
 
-/** The last week whose ranking was rewarded, and the last month VIPs got their diamonds. */
-type Done = { rewardWeek?: string; gemsMonth?: string };
+/** The last week whose ranking was rewarded, the last month VIPs got their diamonds, the last day old chat was deleted. */
+type Done = { rewardWeek?: string; gemsMonth?: string; chatDay?: string };
 async function saveDone(done: Done) {
   const batch = (await db()).createBatch();
   batch.collection("admin_config").upsert({ id: "done", data: done });
@@ -649,13 +649,36 @@ async function weeklyPrizes(done: Done) {
   }
 }
 
-/** One round of the schedules: the plans read again, VIP time that's up, the monthly diamonds, the weekly prizes. */
+/** Chat messages sent before [cutoff] are deleted, voice files with them (PocketBase removes a record's files). */
+export async function deleteMessagesBefore(cutoff: number) {
+  const client = await db();
+  const filter = client.filter("created < {:cutoff}", { cutoff: pbDate(cutoff) });
+  for (;;) {
+    const { items } = await client.collection("messages").getList(1, 200, { filter, fields: "id", skipTotal: true });
+    if (items.length === 0) return;
+    for (const { id } of items) await client.collection("messages").delete(id);
+  }
+}
+
+export const CHAT_DAYS = 30;
+
+/** Once a day (marked first): the chat keeps its last 30 days. */
+async function oldChat(done: Done) {
+  const day = dzDay(Date.now());
+  if (done.chatDay === day) return;
+  done.chatDay = day;
+  await saveDone(done);
+  await deleteMessagesBefore(Date.now() - CHAT_DAYS * DAY_MS);
+}
+
+/** One round of the schedules: the plans read again, VIP time that's up, the monthly diamonds, the weekly prizes, old chat. */
 export async function runSchedules() {
   await loadPlans();
   await expireVips();
   const done = ((await maybe((await db()).collection("admin_config").getOne("done")))?.data ?? {}) as Done;
   await monthlyDiamonds(done);
   await weeklyPrizes(done);
+  await oldChat(done);
 }
 
 /** The game server calls this once, at start: a round of schedules now, then every minute. */
