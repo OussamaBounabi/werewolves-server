@@ -19,6 +19,7 @@ describe("billiard", () => {
       assert.strictEqual(sim.log.firstHit, c.firstHit, `case ${i}: first hit`);
       assert.deepStrictEqual(sim.log.potted.map((n) => [n, sim.log.holeOf.get(n)]), c.potted, `case ${i}: potted`);
       assert.deepStrictEqual([...sim.log.rails].map(([n, r]) => [n, [...r]]), c.rails, `case ${i}: cushions touched`);
+      assert.deepStrictEqual([...sim.log.kick], c.kick, `case ${i}: the cue ball's cushions before its first hit`);
       assert.deepStrictEqual(balls.filter((b) => b.pottedIn === null).map((b) => [b.n, b.x, b.y]), c.end, `case ${i}: where they stopped`);
     }
   });
@@ -48,6 +49,10 @@ describe("billiard", () => {
     assert.strictEqual(onEight().play(eight([0, 5]), new Set([8, 9]), 4, [5, 0]).end, "eight", "any order");
     assert.strictEqual(onEight().play(eight([0, 3]), new Set([8, 9]), 4, [5, 0]).end, "eight_no_bank");
     assert.strictEqual(onEight().play(eight([0, 5]), new Set([8, 9]), 2, [5, 0]).end, "eight_wrong_pocket");
+    const kicked = (cue: number[], eightRails: number[]) => Object.assign(eight(eightRails), { kick: new Set(cue) });
+    assert.strictEqual(onEight().play(kicked([5, 0], []), new Set([8, 9]), 4, [5, 0]).end, "eight", "the cue ball's cushions");
+    assert.strictEqual(onEight().play(kicked([5], [0]), new Set([8, 9]), 4, [5, 0]).end, "eight", "one each");
+    assert.strictEqual(onEight().play(kicked([5], []), new Set([8, 9]), 4, [5, 0]).end, "eight_no_bank");
     const g = onEight();
     g.play(eight([], false), new Set([8, 9]), 4, [5, 0]); // missed: one cushion less next time
     assert.deepStrictEqual(g.banks, [1, 2]);

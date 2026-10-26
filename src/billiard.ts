@@ -79,6 +79,7 @@ export class ShotLog {
   holeOf = new Map<number, number>();
   anyCushion = false;
   rails = new Map<number, Set<number>>(); // each ball's cushions touched (RAILS' index), in the order first touched
+  kick = new Set<number>(); // the cushions the cue ball touched before it hit a ball
 }
 
 /** The six cushions, in the order of `cushions`: top left, top right, bottom left, bottom right, left, right. */
@@ -236,6 +237,7 @@ export class Sim {
       let rails = this.log.rails.get(b.n);
       if (!rails) this.log.rails.set(b.n, (rails = new Set()));
       rails.add(Math.floor(k / 3)); // (each cushion is three pieces: its cut, its nose, its other cut)
+      if (b.n === 0 && this.log.firstHit === null) this.log.kick.add(Math.floor(k / 3));
     }
     b.x = qx + nx * ballR;
     b.y = qy + ny * ballR;
@@ -285,7 +287,8 @@ export type Outcome = {
 const outcome = (o: Partial<Outcome>): Outcome => ({ foul: null, keepsTurn: false, assigned: null, winner: null, end: null, rerack: false, ...o });
 
 /** A room's rules: call the pocket for every ball (not just the 8); the 8 banked off two cushions, then one, then
- * straight in (each turn on the 8 that ends without winning takes a cushion off). */
+ * straight in (each turn on the 8 that ends without winning takes a cushion off). A named cushion counts touched by
+ * the 8, or by the cue ball on its way to the 8 (before it hits it). */
 export type Rules = { callAll?: boolean; banks?: boolean };
 
 export class EightBall {
@@ -357,7 +360,8 @@ export class EightBall {
         return i >= 0 && i < eightAt;
       });
       const touched = log.rails.get(8) ?? new Set<number>();
-      const banked = rails.length >= this.banks[me] && rails.every((r) => touched.has(r));
+      const kicked = log.firstHit === 8 ? log.kick : new Set<number>();
+      const banked = rails.length >= this.banks[me] && rails.every((r) => touched.has(r) || kicked.has(r));
       const pocket = log.holeOf.get(8) === called;
       const legal = foul === null && (wasOnEight ? pocket && banked : cleared);
       this.winner = legal ? me : other;
