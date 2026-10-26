@@ -28,33 +28,46 @@ type Line = { from: string; name: string; avatar: number; frame: number; vip: st
  * The chat of the card and board games. Everyone in the room writes (spectators too); the apps also pop each line
  * over its writer's avatar. A seated player's "typing" shows dots there while he writes, and his emojis show there.
  * [seatOf]: the seat behind a connection, if it has one; [idOf]: the id the room knows that connection by.
+ * [channelOf]: the table a connection is at, when a room has several (billiard's cup): each its own chat.
  */
 export class TableTalk {
-  private lines: Line[] = [];
+  private channels = new Map<string, Line[]>(); // each table's lines ("" the room's own)
   private emojiAt = new Map<string, number>();
 
   constructor(
     private room: Room,
     private seatOf: (client: Client) => Face | undefined,
     private idOf: (client: Client) => string,
+    private channelOf: (client: Client) => string = () => "",
   ) {
     room.onMessage("chat", (client, msg: { text?: unknown }) => this.chat(client, msg?.text));
     room.onMessage("typing", (client, msg: { on?: unknown }) => {
       const seat = this.seatOf(client);
-      if (seat) room.broadcast("typing", { from: seat.id, on: msg?.on === true }, { except: client });
+      if (seat) this.tell(client, "typing", { from: seat.id, on: msg?.on === true }, true);
     });
     room.onMessage("emoji", (client, msg: { id?: unknown }) => {
       const seat = this.seatOf(client);
       const emoji = msg?.id;
       if (seat && emojisOpen(!!seat.vip) && emojiAllowed(this.emojiAt, seat.id, emoji)) {
-        room.broadcast("emoji", { from: seat.id, id: emoji });
+        this.tell(client, "emoji", { from: seat.id, id: emoji });
       }
     });
   }
 
-  /** The chat so far, for a newcomer (or an app coming back). */
+  /** The room's lines (a room of one table: all of them). */
+  get lines() {
+    return this.channels.get("") ?? [];
+  }
+
+  /** The chat so far, for a newcomer (or an app coming back, or one gone to another table). */
   history(client: Client) {
-    client.send("chat_history", this.lines);
+    client.send("chat_history", this.channels.get(this.channelOf(client)) ?? []);
+  }
+
+  /** To everyone at [from]'s table (but him, [except]). */
+  private tell(from: Client, type: string, msg: unknown, except = false) {
+    const channel = this.channelOf(from);
+    for (const c of this.room.clients) if ((!except || c !== from) && this.channelOf(c) === channel) c.send(type, msg);
   }
 
   private chat(client: Client, text: unknown) {
@@ -68,8 +81,11 @@ export class TableTalk {
     const line: Line = {
       from: face.id, name: face.name, avatar: face.avatar, frame: face.frame, vip: face.vip ?? "", text: clean, at: Date.now(),
     };
-    this.lines.push(line);
-    if (this.lines.length > HISTORY) this.lines.shift();
-    this.room.broadcast("chat", line);
+    const channel = this.channelOf(client);
+    const lines = this.channels.get(channel) ?? [];
+    this.channels.set(channel, lines);
+    lines.push(line);
+    if (lines.length > HISTORY) lines.shift();
+    this.tell(client, "chat", line);
   }
 }

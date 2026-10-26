@@ -2,7 +2,8 @@ import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
-import { botPlan, EightBall, freeSpot, rack, Sim, tune, type Ball, type Shot } from "../billiard.js";
+import { botPlan, EightBall, freeSpot, RAILS, rack, Sim, tune, type Ball, type Shot } from "../billiard.js";
+import { bracket, nextSlot, type Match } from "../guess.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
@@ -10,18 +11,30 @@ import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /**
- * 8-ball, two players (one may be a bot the host seats, easy, normal or hard), as in the app (lib/billiard). The server
- * plays every shot in its own copy of the app's physics (src/billiard.ts: the same to the last bit) and is the
- * table's truth: a player sends his shot, the server plays it, applies the rules and sends everyone the shot with
- * where the balls ended; each app plays it on screen and lands on those same places. While a player aims, his aim is
- * passed on to the others as it moves ("aim").
+ * 8-ball, as in the app (lib/billiard). The server plays every shot in its own copy of the app's physics
+ * (src/billiard.ts: the same to the last bit) and is the table's truth: a player sends his shot, the server plays it,
+ * applies the rules and sends the shot with where the balls ended; each app plays it on screen and lands on those same
+ * places. While a player aims, his aim ("aim") and the pocket and cushions he names ("pick") are passed on as they move.
  *
- * No schema: "billiard" (the table) after every change, "billiard_shot" for each shot, "billiard_aim" for an aim,
- * "billiard_fx" for a shot clock that ran out. The table's chat, emojis and voice, as at the other tables. Each player
- * plays with his own cue ("cue"): the others see it while he aims.
+ * Three ways to play, the host's choice in the waiting room:
+ * - 1 vs 1 (a seat may be a bot the host seats, easy, normal or hard); each player's wins counted over the rematches.
+ * - A cup of 4, 6 (two byes) or 8 (bots fill the seats the host gives them): each round's matches played at the same
+ *   time, each at its own table with its own chat and voice; a match is 1, 3 or 5 games. Who is out watches any match
+ *   he picks and talks with its players; the final, everyone at its table.
+ * - Winner stays, 3 to 8 people (no bots): two drawn at random play, the loser goes to the back of the line, the next
+ *   plays the winner; each win a star. After the host's time (15 to 60 min) the game being played ends it: most stars
+ *   wins. Those waiting watch the table and talk with its players.
+ * Options: the pocket called for every ball, not only the 8; the 8 banked off two cushions, then one, then straight.
+ *
+ * No schema: "billiard" (the room and the table each one is at) after every change; to those at a table,
+ * "billiard_shot" for each shot, "billiard_aim" / "billiard_pick" for an aim, "billiard_fx" for a shot clock that ran
+ * out. The chat, emojis and voice as at the other tables. Each player plays with his own cue ("cue").
  */
 type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type Settings = { roomType?: string; turnSeconds?: number };
+type Mode = "duel" | "cup" | "king";
+type Settings = {
+  roomType?: string; turnSeconds?: number; mode?: string; cupSize?: number; bestOf?: number; minutes?: number; callAll?: boolean; eight?: string;
+};
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type BotLevel = "easy" | "normal" | "hard";
 type Seat = {
@@ -33,14 +46,43 @@ type Seat = {
   frame: number;
   vip?: string;
   connected: boolean;
-  bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
+  bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot (winner stays: he's out)
   cue: string; // his cue (the app's assets/images/billiard/cues/<cue>.webp)
+  wins: number; // games won here (1 vs 1: over the rematches; winner stays: his stars)
+  out: boolean; // a cup: lost his match
+  left?: boolean; // winner stays: gone (his stars still shown)
 };
-type Phase = "lobby" | "playing" | "gameover";
+type Pick = { called: number | null; rails: number[] }; // the pocket and cushions named for the shot being aimed
+type Phase = "lobby" | "bracket" | "playing" | "gameover";
 
-const SEATS = 2;
+/** One table: two players and their game; [match]: the cup's match played at it. */
+class Table {
+  game = new EightBall();
+  balls: Ball[] = rack(); // the cue ball always first
+  shots = 0;
+  games = 0; // games started here
+  score = [0, 0]; // games won in this match (a cup), by side
+  turnStartsAt = 0; // the last shot is over on screen: the player may shoot
+  turnEndsAt = 0;
+  nextAt = 0; // the next game's start, once one ended (a cup's match, winner stays)
+  done = false; // its match is over: it stays to be seen until the next round
+  pick: Pick = { called: null, rails: [] };
+  timer: { clear(): void } | null = null;
+  botTimer: { clear(): void } | null = null;
+  constructor(public id: number, public players: string[], public match: number) {}
+
+  stop() {
+    this.timer?.clear();
+    this.botTimer?.clear();
+  }
+}
+
 const ROOM_TYPES = ["public", "friends", "private"];
 const TURN_OPTIONS = [15, 30, 45, 60];
+const CUP_SIZES = [4, 6, 8];
+const BEST_OF = [1, 3, 5];
+const KING_MINUTES = [15, 30, 45, 60];
+const MAX_SEATS = 8;
 const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
 const BOT_SKILL: Record<BotLevel, number> = { easy: 0.2, normal: 0.5, hard: 0.85 }; // how little its aim wobbles
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
@@ -50,6 +92,8 @@ const STROKE_MS = 70;
 const BOT_AIM_MS = 2020;
 const SETTLE_MS = 900;
 const LATE_MS = 1000; // a shot may arrive this late after the clock ran out (the network)
+const GAME_GAP_MS = 5000; // a cup's match, winner stays: the game's end shown, then the next game
+const BRACKET_MS = 6000; // a cup: the draw, and the bracket between rounds
 const RECONNECT_SECONDS = 60; // a dropped player gone over a minute is out, as if he had left
 const CLOSE_AFTER_GAME_MS = 60_000;
 const MAX_SPECTATORS = 20;
@@ -57,23 +101,37 @@ const CUES = ["default", "navy", "gold", "royal"];
 
 const added = (s: Seat) => s.id.startsWith("bot-");
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
+const pocket = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 5 ? (v as number) : null);
+
+/** Cushions named for the 8: distinct, real ones, [max] at most; null if not. */
+function railsOf(v: unknown, max: number): number[] | null {
+  if (!Array.isArray(v) || v.length > max) return null;
+  const rails = v.filter((r) => Number.isInteger(r) && r >= 0 && r < RAILS);
+  return rails.length === v.length && new Set(rails).size === rails.length ? rails : null;
+}
 
 export class BilliardRoom extends Room<{ metadata: Meta }> {
   private abandon = new Abandon(this);
-  static botSpeed = 1; // tests: bots think faster
-  maxClients = SEATS + MAX_SPECTATORS;
+  static botSpeed = 1; // tests: bots think faster, and the pauses between games are shorter
+  maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth (the mode may change)
 
   private phase: Phase = "lobby";
   private hostId = "";
   private roomType = "public";
   private turnSeconds = 30;
-  private seats: Seat[] = []; // seat index = the player number in the rules (0 or 1)
+  private mode: Mode = "duel";
+  private cupSize = 8;
+  private bestOf = 1;
+  private minutes = 30;
+  private callAll = false;
+  private banks = false;
+  private seats: Seat[] = [];
   private members = new Map<string, string>();
   private invited = new Set<string>();
   private banned = new Map<string, string>();
   private spectators = new Map<string, JoinOptions>();
   private admins = new Set<string>();
-  private tableTalk!: TableTalk; // the table's chat and emojis
+  private tableTalk!: TableTalk; // the chat and emojis (a cup's: each table its own)
   private returned = new Map<string, string>();
   private listedStarted = false;
   private listedHost = { name: "", avatar: 0, frame: 0, vip: "" };
@@ -83,16 +141,20 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     return this.looks.of(this.hostId);
   }
 
-  private game = new EightBall();
-  private balls: Ball[] = rack(); // the cue ball always first
-  private shots = 0;
-  private lastLoser = -1; // he breaks the next game
-  private turnStartsAt = 0; // the last shot is over on screen: the player may shoot
-  private turnEndsAt = 0;
+  private tables = new Map<number, Table>();
+  private tableSeq = 0;
+  private watching = new Map<string, number>(); // who isn't playing → the table he watches
+  private matches: Match[] = []; // a cup's (src/guess.ts' bracket)
+  private queue: string[] = []; // winner stays: who plays next, in turn
+  private endsAt = 0; // winner stays: when the last game starts to be the last
+  private champion = "";
+  private lastLoser = -1; // 1 vs 1: he breaks the next game
   private ready = new Set<string>();
   private botSeq = 0;
-  private timer: { clear(): void } | null = null;
-  private botTimer: { clear(): void } | null = null;
+  private timer: { clear(): void } | null = null; // the room's own (the cup's rounds, the end)
+  private voiceAt = new Map<string, string>(); // each connection's voice room, once it asked for the voice
+  private chatAt = new Map<string, string>(); // each connection's chat, last told
+  private voiceRooms = new Set<string>(); // every voice room this room opened, closed with it
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -116,9 +178,11 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       const seat = this.seat(this.idOf(c));
       if (seat && CUES.includes(m.id)) seat.cue = m.id;
     });
+    on<{ table: number }>("watch", (c, m) => this.handleWatch(c, m.table));
     this.onMessage("aim", (client, m: Record<string, unknown>) => this.handleAim(client, m ?? {}));
+    this.onMessage("pick", (client, m: Record<string, unknown>) => this.handlePick(client, m ?? {}));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
-    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c), (c) => this.chatOf(this.idOf(c)));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
@@ -151,7 +215,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       if (this.spectators.size >= MAX_SPECTATORS) throw new ServerError(4409, "full");
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
-      if (this.seats.length >= SEATS) throw new ServerError(4409, "full");
+      if (this.seats.length >= this.capacity()) throw new ServerError(4409, "full");
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -179,6 +243,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (back) this.retakeSeat(back);
     else if (options.spectator) this.spectators.set(this.idOf(client), options);
     else this.addSeat(client, options);
+    this.chatAt.set(client.sessionId, this.chatOf(this.idOf(client)));
     this.tableTalk.history(client);
     this.updateListing();
     this.sync();
@@ -200,6 +265,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       connected: true,
       bot: null,
       cue: "default",
+      wins: 0,
+      out: false,
     });
     if (!this.hostId) this.hostId = this.idOf(client);
   }
@@ -207,7 +274,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private handleSit(client: Client) {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
-    if (this.seats.length >= SEATS) return "full";
+    if (this.seats.length >= this.capacity()) return "full";
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -231,7 +298,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private retakeSeat(seat: Seat) {
     seat.bot = null;
     seat.connected = true;
-    if (this.turnSeat()?.id === seat.id) this.botTimer?.clear(); // his turn: his to play, in the time left
+    const t = this.tableOf(seat.id);
+    if (t && this.turnSeat(t)?.id === seat.id) t.botTimer?.clear(); // his turn: his to play, in the time left
   }
 
   onDrop(client: Client) {
@@ -254,24 +322,29 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   }
 
   onLeave(client: Client) {
+    const voiceRoom = this.voiceAt.get(client.sessionId) ?? this.roomId;
+    this.voiceAt.delete(client.sessionId);
+    this.chatAt.delete(client.sessionId);
     if (this.admins.delete(client.sessionId)) {
-      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      if (voiceEnabled) dropFromVoice(voiceRoom, client.sessionId).catch(() => {});
       return;
     }
     const id = this.idOf(client);
     this.returned.delete(client.sessionId);
+    this.watching.delete(id);
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) leaveRoom(uid, this.roomId);
-    if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (voiceEnabled) dropFromVoice(voiceRoom, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();
       return this.sync();
     }
     if (this.abandon.closing) return;
     if (this.phase === "lobby") this.removeSeat(id);
+    else if (this.mode === "king") this.kingLeave(id);
     else this.becomeBot(id);
-    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
+    if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && !s.left && this.connectionOf(s.id))?.id ?? "";
     this.afterGame(false);
     this.updateListing();
     this.sync();
@@ -279,31 +352,73 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
 
   onDispose() {
     this.timer?.clear();
-    this.botTimer?.clear();
-    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+    for (const t of this.tables.values()) t.stop();
+    if (voiceEnabled) for (const room of [this.roomId, ...this.voiceRooms]) closeVoice(room).catch(() => {});
+  }
+
+  /** The voice room [id] belongs in: the room's own; in a cup's games, his table's. */
+  private voiceOf(id: string) {
+    const t = this.viewOf(id);
+    if (this.mode !== "cup" || this.phase === "lobby" || !t) return this.roomId;
+    const room = `${this.roomId}-t${t.id}`;
+    this.voiceRooms.add(room);
+    return room;
+  }
+
+  /** The chat [id] writes in and reads: the room's own; in a cup's games, his table's. */
+  private chatOf(id: string) {
+    const t = this.viewOf(id);
+    return this.mode !== "cup" || this.phase === "lobby" || !t ? "" : `t${t.id}`;
   }
 
   private async handleVoiceJoin(client: Client) {
     if (!voiceEnabled) return client.send("voice", { enabled: false });
     if (this.admins.has(client.sessionId)) { // the admin listens, unseen
-      return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
+      const room = this.voiceOf(client.sessionId);
+      this.voiceAt.set(client.sessionId, room);
+      return client.send("voice", { enabled: true, ...(await voiceToken(room, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
     }
-    const name = this.seat(this.idOf(client))?.name ?? client.auth?.account?.name ?? "spectator";
+    const id = this.idOf(client);
+    const room = this.voiceOf(id);
+    this.voiceAt.set(client.sessionId, room);
+    const name = this.seat(id)?.name ?? client.auth?.account?.name ?? "spectator";
     // Players talk; of those watching, only VIP Pro.
-    const talk = !!this.seat(this.idOf(client)) || client.auth?.account?.vipPro === true;
-    client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, this.idOf(client), name, { talk, hear: true })) });
+    const talk = !!this.seat(id) || client.auth?.account?.vipPro === true;
+    client.send("voice", { enabled: true, ...(await voiceToken(room, id, name, { talk, hear: true })) });
   }
 
   // ---- the waiting room ----
 
+  /** The seats the mode has: 1 vs 1 two, a cup its size, winner stays eight. */
+  private capacity() {
+    return this.mode === "duel" ? 2 : this.mode === "cup" ? this.cupSize : MAX_SEATS;
+  }
+
   private applySettings(s: Settings) {
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (TURN_OPTIONS.includes(Number(s.turnSeconds))) this.turnSeconds = Number(s.turnSeconds);
+    // (back to 1 vs 1 only with two seated at most; a cup at least as big as the seats; winner stays without bots)
+    if (s.mode === "duel" && this.seats.length <= 2) this.mode = "duel";
+    if (s.mode === "cup") {
+      this.mode = "cup";
+      if (this.cupSize < this.seats.length) this.cupSize = CUP_SIZES.find((n) => n >= this.seats.length) ?? MAX_SEATS;
+    }
+    if (s.mode === "king") {
+      this.mode = "king";
+      this.seats = this.seats.filter((x) => !x.bot);
+    }
+    const size = Number(s.cupSize);
+    if (CUP_SIZES.includes(size) && size >= this.seats.length) this.cupSize = size;
+    if (BEST_OF.includes(Number(s.bestOf))) this.bestOf = Number(s.bestOf);
+    if (KING_MINUTES.includes(Number(s.minutes))) this.minutes = Number(s.minutes);
+    if (typeof s.callAll === "boolean") this.callAll = s.callAll;
+    if (s.eight === "direct" || s.eight === "banks") this.banks = s.eight === "banks";
     this.updateListing();
   }
 
   private handleAddBot(client: Client, level: string) {
-    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= SEATS) return;
+    if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.mode === "king") return;
+    if (this.seats.length >= this.capacity()) return;
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -316,6 +431,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       connected: true,
       bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
       cue: CUES[1 + Math.floor(Math.random() * (CUES.length - 1))], // a bot plays with one of the fine cues
+      wins: 0,
+      out: false,
     });
     this.updateListing();
   }
@@ -328,8 +445,26 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
 
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
-    if (this.seats.length < SEATS) return "not_enough_players";
-    this.newGame();
+    if (this.mode === "king" ? this.seats.length < 3 : this.seats.length < this.capacity()) return "not_enough_players";
+    for (const s of this.seats) Object.assign(s, { wins: 0, out: false, left: false });
+    this.closeTables();
+    this.champion = "";
+    this.lastLoser = -1;
+    gameStarted(this.roomName);
+    if (this.mode === "duel") {
+      this.phase = "playing";
+      this.startGame(this.openTable(this.seats.map((s) => s.id), -1), Math.random() < 0.5 ? 0 : 1);
+    } else if (this.mode === "cup") {
+      this.matches = bracket(this.seats.map((s) => s.id));
+      this.phase = "bracket";
+      this.later(BRACKET_MS * BilliardRoom.botSpeed, () => this.cupRound());
+    } else {
+      this.queue = this.seats.map((s) => s.id).sort(() => Math.random() - 0.5);
+      this.endsAt = Date.now() + this.minutes * 60_000;
+      this.phase = "playing";
+      this.startGame(this.openTable(this.queue.splice(0, 2), -1), Math.random() < 0.5 ? 0 : 1);
+    }
+    this.updateListing();
   }
 
   private async handleKick(client: Client, id: string) {
@@ -374,132 +509,296 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (!seat || seat.bot) return;
     seat.bot = "normal";
     seat.connected = true;
-    if (this.phase === "playing" && this.turnSeat() === seat) this.botTurn(Math.max(0, this.turnStartsAt - Date.now()));
+    const t = this.tableOf(id);
+    if (t && this.phase === "playing" && this.turnSeat(t) === seat) this.botTurn(t, Math.max(0, t.turnStartsAt - Date.now()));
   }
 
-  // ---- the game ----
-
-  private turnSeat() {
-    return this.phase === "playing" ? this.seats[this.game.turn] : undefined;
+  /** Winner stays: who leaves is out (his stars stay on the list); at the table, his game is lost. */
+  private kingLeave(id: string) {
+    const seat = this.seat(id);
+    if (!seat || seat.left) return;
+    seat.left = true;
+    seat.connected = false;
+    this.queue = this.queue.filter((q) => q !== id);
+    const t = this.tableOf(id);
+    if (t && t.game.winner === null && this.phase === "playing") {
+      const w = 1 - t.players.indexOf(id);
+      t.game.winner = w;
+      t.stop();
+      this.gameOver(t, w, 0);
+    }
   }
 
-  private newGame() {
-    this.phase = "playing";
-    this.game = new EightBall(this.lastLoser >= 0 ? this.lastLoser : Math.random() < 0.5 ? 0 : 1);
-    this.balls = rack();
-    this.shots = 0;
-    this.ready.clear();
-    this.updateListing();
-    this.startTurn(0);
-  }
-
-  private startTurn(delayMs: number) {
-    this.turnStartsAt = Date.now() + delayMs;
-    this.turnEndsAt = this.turnStartsAt + this.turnSeconds * 1000;
+  private later(ms: number, then: () => void) {
     this.timer?.clear();
-    this.botTimer?.clear();
+    this.timer = this.clock.setTimeout(() => (then(), this.sync()), ms);
+  }
+
+  // ---- the tables ----
+
+  private openTable(players: string[], match: number) {
+    const t = new Table(++this.tableSeq, players, match);
+    this.tables.set(t.id, t);
+    return t;
+  }
+
+  private closeTables() {
+    for (const t of this.tables.values()) t.stop();
+    this.tables.clear();
+    this.watching.clear();
+  }
+
+  /** The table where [id] plays a game now (its match not over). */
+  private tableOf(id: string) {
+    for (const t of this.tables.values()) if (!t.done && t.players.includes(id)) return t;
+    return undefined;
+  }
+
+  /** The table [id] sees: his own, the one he picked to watch, his last, or the first. */
+  private viewOf(id: string) {
+    const own = this.tableOf(id);
+    if (own) return own;
+    const watched = this.tables.get(this.watching.get(id) ?? -1);
+    if (watched) return watched;
+    const tables = [...this.tables.values()];
+    return tables.find((t) => t.players.includes(id)) ?? tables.find((t) => !t.done) ?? tables[0];
+  }
+
+  /** Someone not playing now picks a table to watch (a cup: any match being played). */
+  private handleWatch(client: Client, table: number) {
+    const id = this.idOf(client);
+    if (this.tableOf(id) || !this.tables.has(table)) return;
+    this.watching.set(id, table);
+  }
+
+  /** To everyone who sees [t] (but [except]). */
+  private toTable(t: Table, type: string, msg: unknown, except?: Client) {
+    for (const c of this.clients) if (c !== except && this.viewOf(this.idOf(c)) === t) c.send(type, msg);
+  }
+
+  /** A new game at [t], [breaker] (0 or 1: its players' order) breaking. */
+  private startGame(t: Table, breaker: number) {
+    t.game = new EightBall(breaker, { callAll: this.callAll, banks: this.banks });
+    t.balls = rack();
+    t.shots = 0;
+    t.games++;
+    t.nextAt = 0;
+    this.startTurn(t, 0);
+  }
+
+  /** A cup's next round: its matches, each at its own table, all at once. */
+  private cupRound() {
+    for (const [i, t] of this.tables) if (t.done) this.tables.delete(i);
+    this.phase = "playing";
+    for (const [i, m] of this.matches.entries()) {
+      if (m.winner || !m.a || !m.b) continue;
+      this.startGame(this.openTable([m.a, m.b], i), Math.random() < 0.5 ? 0 : 1);
+    }
+    // The final: everyone at its table.
+    const live = [...this.tables.values()];
+    if (live.length === 1) for (const s of this.seats) this.watching.set(s.id, live[0].id);
+  }
+
+  private turnSeat(t: Table) {
+    return this.phase === "playing" && !t.done && t.game.winner === null ? this.seat(t.players[t.game.turn]) : undefined;
+  }
+
+  /** The table where it's [id]'s turn. */
+  private turnTable(id: string) {
+    const t = this.tableOf(id);
+    return t && this.turnSeat(t)?.id === id ? t : undefined;
+  }
+
+  private startTurn(t: Table, delayMs: number) {
+    t.turnStartsAt = Date.now() + delayMs;
+    t.turnEndsAt = t.turnStartsAt + this.turnSeconds * 1000;
+    t.pick = { called: null, rails: [] };
+    t.stop();
     // (a bot shoots long before: this is for a player, or one who takes his seat back mid-turn)
-    this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), delayMs + this.turnSeconds * 1000 + LATE_MS);
-    if (this.turnSeat()?.bot) this.botTurn(delayMs);
+    t.timer = this.clock.setTimeout(() => (this.timeOut(t), this.sync()), delayMs + this.turnSeconds * 1000 + LATE_MS);
+    if (this.turnSeat(t)?.bot) this.botTurn(t, delayMs);
   }
 
   /** The shot clock ran out: a foul, the other player has the cue ball anywhere. */
-  private timeOut() {
-    if (this.phase !== "playing") return;
-    const who = this.game.turn;
-    this.game.outOfTime();
-    this.broadcast("billiard_fx", { type: "time", who });
-    this.startTurn(0);
+  private timeOut(t: Table) {
+    if (!this.turnSeat(t)) return;
+    const who = t.game.turn;
+    t.game.outOfTime(this.onTable(t));
+    this.toTable(t, "billiard_fx", { type: "time", who, table: t.id });
+    this.startTurn(t, 0);
   }
 
-  private botTurn(delayMs: number) {
-    this.botTimer?.clear();
-    this.botTimer = this.clock.setTimeout(() => {
-      const seat = this.turnSeat();
+  private botTurn(t: Table, delayMs: number) {
+    t.botTimer?.clear();
+    t.botTimer = this.clock.setTimeout(() => {
+      const seat = this.turnSeat(t);
       if (!seat?.bot) return;
       // ponytail: the bot's trials (~18 shots in the physics, ~80 ms) block the server's loop; a worker if rooms pile up
-      const plan = botPlan(this.balls, this.game.copy(), BOT_SKILL[seat.bot]);
-      const onEight = this.game.onEight(this.game.turn, this.onTable());
-      this.shoot(plan.shot, this.game.ballInHand ? plan.place : null, onEight ? plan.pocket : null, true);
+      const plan = botPlan(t.balls, t.game.copy(), BOT_SKILL[seat.bot]);
+      const call = t.game.mustCall(t.game.turn, this.onTable(t));
+      const onEight = t.game.onEight(t.game.turn, this.onTable(t));
+      this.shoot(t, plan.shot, t.game.ballInHand ? plan.place : null, call ? plan.pocket ?? 0 : null, onEight ? plan.rails : [], true);
       this.sync();
     }, (delayMs + 700 + Math.random() * 700) * BilliardRoom.botSpeed);
   }
 
-  private onTable() {
-    return new Set(this.balls.filter((b) => b.pottedIn === null && b.n !== 0).map((b) => b.n));
+  private onTable(t: Table) {
+    return new Set(t.balls.filter((b) => b.pottedIn === null && b.n !== 0).map((b) => b.n));
   }
 
-  private positions() {
-    return this.balls.filter((b) => b.pottedIn === null).map((b) => [b.n, b.x, b.y]);
+  private positions(t: Table | undefined) {
+    return (t?.balls ?? rack()).filter((b) => b.pottedIn === null).map((b) => [b.n, b.x, b.y]);
   }
 
   /** A player's shot: his turn, after the last shot is over on screen, before his clock runs out; a sound shot. */
   private handleShot(id: string, m: Record<string, unknown>) {
-    const seat = this.turnSeat();
-    if (!seat || seat.id !== id || seat.bot) return "not_your_turn";
+    const t = this.turnTable(id);
+    if (!t || this.seat(id)?.bot) return "not_your_turn";
     const now = Date.now();
-    if (now < this.turnStartsAt - 500 || now > this.turnEndsAt + LATE_MS) return "too_late";
+    if (now < t.turnStartsAt - 500 || now > t.turnEndsAt + LATE_MS) return "too_late";
     const shot: Shot = { dx: num(m.dx), dy: num(m.dy), speed: num(m.speed), side: num(m.side ?? 0), height: num(m.height ?? 0) };
     if (![shot.dx, shot.dy, shot.speed, shot.side, shot.height].every(Number.isFinite)) return "bad_shot";
     if (Math.abs(shot.dx * shot.dx + shot.dy * shot.dy - 1) > 1e-6 || shot.speed <= 0 || shot.speed > tune.maxSpeed) return "bad_shot";
     if (shot.side * shot.side + shot.height * shot.height > 1.0001) return "bad_shot";
     let place: [number, number] | null = null;
-    if (this.game.ballInHand) {
+    if (t.game.ballInHand) {
       const p = Array.isArray(m.place) ? m.place : [];
       place = [num(p[0]), num(p[1])];
-      if (!freeSpot(this.balls, place[0], place[1], this.game.kitchenOnly)) return "bad_place";
+      if (!freeSpot(t.balls, place[0], place[1], t.game.kitchenOnly)) return "bad_place";
     }
+    const me = t.game.turn, table = this.onTable(t);
     let called: number | null = null;
-    if (this.game.onEight(this.game.turn, this.onTable())) {
-      called = num(m.called);
-      if (!Number.isInteger(called) || called < 0 || called > 5) return "call_pocket";
+    if (t.game.mustCall(me, table)) {
+      called = pocket(m.called);
+      if (called === null) return "call_pocket";
     }
-    this.shoot(shot, place, called, false);
+    let rails: number[] = [];
+    const need = t.game.onEight(me, table) ? t.game.banks[me] : 0;
+    if (need > 0) {
+      const named = railsOf(m.rails, need);
+      if (!named || named.length !== need) return "call_rails";
+      rails = named;
+    }
+    this.shoot(t, shot, place, called, rails, false);
   }
 
-  /** Plays a shot to its end and tells everyone; the next turn once it's over on screen. */
-  private shoot(shot: Shot, place: [number, number] | null, called: number | null, bot: boolean) {
-    const by = this.game.turn;
-    const cue = this.balls[0];
+  /** Plays a shot to its end and tells its table; the next turn once it's over on screen. */
+  private shoot(t: Table, shot: Shot, place: [number, number] | null, called: number | null, rails: number[], bot: boolean) {
+    const by = t.game.turn;
+    const cue = t.balls[0];
     if (place) [cue.x, cue.y, cue.pottedIn] = [place[0], place[1], null];
-    const start = this.positions();
-    const before = this.onTable();
-    const sim = new Sim(this.balls);
+    const start = this.positions(t);
+    const before = this.onTable(t);
+    const sim = new Sim(t.balls);
     sim.shoot(shot);
     const steps = sim.run();
-    const outcome = this.game.play(sim.log, before, called);
-    const end = this.positions();
-    this.shots++;
-    if (outcome.rerack) this.balls = rack();
+    const outcome = t.game.play(sim.log, before, called, rails);
+    const end = this.positions(t);
+    t.shots++;
+    if (outcome.rerack) t.balls = rack();
     const showMs = (bot ? BOT_AIM_MS : STROKE_MS) + steps + SETTLE_MS;
-    if (outcome.winner !== null) {
-      this.lastLoser = 1 - outcome.winner;
-      this.phase = "gameover";
-      this.timer?.clear();
-      this.botTimer?.clear();
-      this.ready = new Set(this.seats.filter(added).map((s) => s.id));
-      this.turnEndsAt = Date.now() + showMs + CLOSE_AFTER_GAME_MS;
-      this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), showMs + CLOSE_AFTER_GAME_MS);
-    } else {
-      this.startTurn(showMs);
-    }
-    this.broadcast("billiard_shot", {
-      seq: this.shots, by, bot, start, steps, outcome, end, place, called,
+    if (outcome.winner !== null) this.gameOver(t, outcome.winner, showMs);
+    else this.startTurn(t, showMs);
+    this.toTable(t, "billiard_shot", {
+      table: t.id, seq: t.shots, by, bot, start, steps, outcome, end, place, called, rails,
       shot: [shot.dx, shot.dy, shot.speed, shot.side, shot.height],
-      game: this.gameState(),
+      game: this.gameState(t),
     });
+  }
+
+  /** A game at [t] is over, [w] (its side) won; [showMs]: its last shot on screen. What comes next is the mode's. */
+  private gameOver(t: Table, w: number, showMs: number) {
+    t.stop();
+    const winner = this.seat(t.players[w]), loser = t.players[1 - w];
+    if (winner) winner.wins++;
+    if (this.mode === "duel") {
+      this.lastLoser = 1 - w;
+      this.phase = "gameover";
+      this.ready = new Set(this.seats.filter(added).map((s) => s.id));
+      t.turnEndsAt = Date.now() + showMs + CLOSE_AFTER_GAME_MS;
+      this.later(showMs + CLOSE_AFTER_GAME_MS, () => this.afterGame(true));
+      return;
+    }
+    t.nextAt = Date.now() + showMs + GAME_GAP_MS;
+    const next = (then: () => void) => {
+      t.timer = this.clock.setTimeout(() => (then(), this.sync()), showMs + GAME_GAP_MS * BilliardRoom.botSpeed);
+    };
+    if (this.mode === "king") {
+      if (!this.seat(loser)?.left) this.queue.push(loser);
+      this.queue = this.queue.filter((q) => !this.seat(q)?.left);
+      if (Date.now() >= this.endsAt || this.queue.length === 0) {
+        t.nextAt = 0;
+        return this.end(showMs);
+      }
+      // the winner stays (gone meanwhile: the next in line takes his place); the next in line breaks
+      return next(() => {
+        this.queue = this.queue.filter((q) => !this.seat(q)?.left);
+        const stays = this.seat(t.players[w])?.left ? this.queue.shift() : t.players[w];
+        const challenger = this.queue.shift();
+        if (!stays || !challenger) return this.end(0);
+        t.players = [stays, challenger];
+        this.startGame(t, 1);
+      });
+    }
+    // A cup: the match goes on (the loser breaks), or its winner goes through.
+    const m = this.matches[t.match];
+    m.rounds.push(w);
+    t.score[w]++;
+    if (t.score[w] < Math.ceil(this.bestOf / 2)) return next(() => this.startGame(t, 1 - w));
+    m.winner = t.players[w];
+    t.done = true;
+    t.nextAt = 0;
+    const lost = this.seat(loser);
+    if (lost) lost.out = true;
+    const slot = nextSlot(this.matches.length + 1, t.match);
+    if (slot) this.matches[slot.match][slot.side] = m.winner;
+    if ([...this.tables.values()].some((x) => !x.done)) return; // the round goes on at the other tables
+    if (!slot) {
+      this.champion = m.winner;
+      return this.end(showMs);
+    }
+    this.timer?.clear();
+    this.timer = this.clock.setTimeout(() => {
+      this.phase = "bracket"; // the bracket a moment, then the next round
+      this.sync();
+      this.later(BRACKET_MS * BilliardRoom.botSpeed, () => this.cupRound());
+    }, showMs + GAME_GAP_MS * BilliardRoom.botSpeed);
+  }
+
+  /** A cup or winner stays is over: the champion (winner stays: most stars) and "play again", for a minute. */
+  private end(showMs: number) {
+    if (this.mode === "king") {
+      const best = Math.max(...this.seats.map((s) => s.wins));
+      this.champion = this.seats.find((s) => s.wins === best)?.id ?? "";
+    }
+    for (const t of this.tables.values()) t.stop();
+    this.queue = [];
+    this.phase = "gameover";
+    this.ready = new Set(this.seats.filter(added).map((s) => s.id));
+    this.later(showMs + CLOSE_AFTER_GAME_MS, () => this.afterGame(true));
   }
 
   /** The aim of the player whose turn it is, passed on as it moves (where he holds the cue ball, and whether his hand is on it). */
   private handleAim(client: Client, m: Record<string, unknown>) {
-    const seat = this.turnSeat();
-    if (!seat || seat.id !== this.idOf(client)) return;
+    const t = this.turnTable(this.idOf(client));
+    if (!t) return;
     const aim = { dx: num(m.dx), dy: num(m.dy), power: num(m.power), x: num(m.x), y: num(m.y), hold: num(m.hold ?? 0) };
     if (!Object.values(aim).every(Number.isFinite)) return;
-    this.broadcast("billiard_aim", aim, { except: client });
+    this.toTable(t, "billiard_aim", { ...aim, table: t.id }, client);
   }
 
-  // ---- after a game (as at the domino table) ----
+  /** The pocket (and on the 8 the cushions) he names, passed on the moment he picks them. */
+  private handlePick(client: Client, m: Record<string, unknown>) {
+    const t = this.turnTable(this.idOf(client));
+    if (!t) return;
+    const called = m.called === null || m.called === undefined ? null : pocket(m.called);
+    const rails = railsOf(m.rails ?? [], RAILS);
+    if ((called === null && m.called !== null && m.called !== undefined) || !rails) return;
+    t.pick = { called, rails };
+    this.toTable(t, "billiard_pick", { table: t.id, ...t.pick }, client);
+  }
+
+  // ---- after a game ----
 
   private handlePlayAgain(id: string) {
     if (this.phase !== "gameover" || !this.seat(id) || this.seat(id)!.bot) return;
@@ -507,9 +806,11 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     this.afterGame(false);
   }
 
+  /** Once everyone chose (or the minute is up): 1 vs 1 plays again if both want it; else the waiting room, with those
+   * who pressed "play again". Nobody: the room closes. */
   private afterGame(timeUp: boolean) {
     if (this.phase !== "gameover") return;
-    const players = this.seats.filter((s) => !added(s));
+    const players = this.seats.filter((s) => !added(s) && !s.left);
     if (!timeUp && players.some((s) => !s.bot && !this.ready.has(s.id))) return;
     this.timer?.clear();
     const again = players.filter((s) => this.pressed(s));
@@ -517,9 +818,12 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       this.abandon.closing = true;
       return void this.disconnect().catch(() => {});
     }
-    if (again.length === players.length) {
+    if (again.length === players.length && this.mode === "duel") {
       gameStarted(this.roomName);
-      return this.newGame();
+      this.phase = "playing";
+      const t = [...this.tables.values()][0];
+      this.ready.clear();
+      return this.startGame(t, this.lastLoser >= 0 ? this.lastLoser : 0);
     }
     for (const s of [...this.seats]) {
       if (added(s) || this.pressed(s)) continue;
@@ -529,6 +833,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     }
     this.ready.clear();
     this.lastLoser = -1;
+    this.closeTables();
+    this.matches = [];
     this.phase = "lobby";
     this.updateListing();
   }
@@ -543,11 +849,12 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     return this.seats.find((s) => s.id === id);
   }
 
-  private gameState() {
-    const g = this.game;
+  private gameState(t: Table | undefined) {
+    const g = t?.game ?? new EightBall(0, { callAll: this.callAll, banks: this.banks });
     return {
       turn: g.turn, groups: g.groups, breakShot: g.breakShot, ballInHand: g.ballInHand, kitchenOnly: g.kitchenOnly, winner: g.winner,
-      turnStartsAt: this.turnStartsAt, turnEndsAt: this.turnEndsAt, serverNow: Date.now(),
+      callAll: g.callAll, banks: g.banks,
+      turnStartsAt: t?.turnStartsAt ?? 0, turnEndsAt: t?.turnEndsAt ?? 0, serverNow: Date.now(),
     };
   }
 
@@ -569,7 +876,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
         roomType: this.roomType,
         started: this.phase !== "lobby",
         players: this.seats.length,
-        maxPlayers: SEATS,
+        maxPlayers: this.capacity(),
         spectators: this.spectators.size,
       },
     });
@@ -578,21 +885,60 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private sync() {
     this.abandon.check(this.seats);
     if ((this.phase !== "lobby") !== this.listedStarted) this.updateListing();
-    const table = {
+    const face = (s: Seat) => ({
+      id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, bot: s.bot ?? "",
+      cue: s.cue, wins: s.wins, out: s.out || !!s.left,
+    });
+    const players = this.seats.map(face);
+    const room = {
       phase: this.phase,
       hostId: this.hostId,
       roomType: this.roomType,
       turnSeconds: this.turnSeconds,
-      seats: this.seats.map((s) => ({
-        id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, bot: s.bot ?? "",
-        cue: s.cue,
-      })),
-      shots: this.shots,
-      balls: this.positions(),
+      mode: this.mode,
+      cupSize: this.cupSize,
+      bestOf: this.bestOf,
+      minutes: this.minutes,
+      callAll: this.callAll,
+      eight: this.banks ? "banks" : "direct",
+      players,
+      tables: [...this.tables.values()].filter((t) => !t.done).map((t) => ({ id: t.id, players: t.players, match: t.match })),
+      matches: this.matches,
+      queue: this.queue,
+      endsAt: this.endsAt,
+      champion: this.champion,
       ready: [...this.ready],
       spectators: this.spectators.size,
-      ...this.gameState(),
     };
-    for (const client of this.clients) client.send("billiard", { ...table, me: this.idOf(client) });
+    for (const client of this.clients) {
+      const id = this.idOf(client);
+      const t = this.phase === "lobby" ? undefined : this.viewOf(id);
+      client.send("billiard", {
+        ...room,
+        me: id,
+        // (the table this one sees: its two players as "seats", in the rules' order; the waiting room: everyone)
+        seats: t ? t.players.map((p) => this.seat(p)).filter((s) => !!s).map(face) : players,
+        table: t?.id ?? -1,
+        match: t?.match ?? -1,
+        games: t?.games ?? 0,
+        score: t?.score ?? [0, 0],
+        nextAt: t?.nextAt ?? 0,
+        done: t?.done ?? false,
+        pick: t?.pick ?? { called: null, rails: [] },
+        shots: t?.shots ?? 0,
+        balls: this.positions(t),
+        ...this.gameState(t),
+      });
+      // gone to another table: its chat, and (once he has the voice) its voice
+      const chat = this.chatOf(id);
+      if (this.chatAt.get(client.sessionId) !== chat) {
+        this.chatAt.set(client.sessionId, chat);
+        this.tableTalk.history(client);
+      }
+      const voice = this.voiceAt.get(client.sessionId);
+      if (voice !== undefined && voice !== this.voiceOf(this.admins.has(client.sessionId) ? client.sessionId : id)) {
+        void this.handleVoiceJoin(client);
+      }
+    }
   }
 }

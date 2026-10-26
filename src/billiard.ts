@@ -78,7 +78,11 @@ export class ShotLog {
   potted: number[] = [];
   holeOf = new Map<number, number>();
   anyCushion = false;
+  rails = new Map<number, Set<number>>(); // each ball's cushions touched (RAILS' index), in the order first touched
 }
+
+/** The six cushions, in the order of `cushions`: top left, top right, bottom left, bottom right, left, right. */
+export const RAILS = 6;
 
 const DT = 1 / 1000;
 const STOP = 0.5;
@@ -125,7 +129,7 @@ export class Sim {
     }
     for (const a of balls) {
       if (!onTable(a)) continue;
-      for (const s of cushions) this.cushion(a, s);
+      for (let k = 0; k < cushions.length; k++) this.cushion(a, cushions[k], k);
       for (let h = 0; h < holes.length; h++) {
         const o = holes[h], dx = a.x - o.x, dy = a.y - o.y;
         if (dx * dx + dy * dy < o.r * o.r) {
@@ -202,7 +206,7 @@ export class Sim {
     separate(a, b);
   }
 
-  private cushion(b: Ball, s: Seg) {
+  private cushion(b: Ball, s: Seg, k: number) {
     const ex = s.bx - s.ax, ey = s.by - s.ay;
     let t = ((b.x - s.ax) * ex + (b.y - s.ay) * ey) / (ex * ex + ey * ey);
     t = t < 0 ? 0 : (t > 1 ? 1 : t);
@@ -229,6 +233,9 @@ export class Sim {
       b.wz *= tune.cushionSpinKeep;
       if (this.log.firstHit !== null) this.log.cushionAfterHit.add(b.n);
       this.log.anyCushion = true;
+      let rails = this.log.rails.get(b.n);
+      if (!rails) this.log.rails.set(b.n, (rails = new Set()));
+      rails.add(Math.floor(k / 3)); // (each cushion is three pieces: its cut, its nose, its other cut)
     }
     b.x = qx + nx * ballR;
     b.y = qy + ny * ballR;
@@ -271,11 +278,15 @@ export type Outcome = {
   keepsTurn: boolean;
   assigned: Group | null;
   winner: number | null;
-  end: string | null; // "eight" | "eight_early" | "eight_wrong_pocket" | "eight_foul"
+  end: string | null; // "eight" | "eight_early" | "eight_wrong_pocket" | "eight_foul" | "eight_no_bank"
   rerack: boolean;
 };
 
 const outcome = (o: Partial<Outcome>): Outcome => ({ foul: null, keepsTurn: false, assigned: null, winner: null, end: null, rerack: false, ...o });
+
+/** A room's rules: call the pocket for every ball (not just the 8); the 8 banked off two cushions, then one, then
+ * straight in (each turn on the 8 that ends without winning takes a cushion off). */
+export type Rules = { callAll?: boolean; banks?: boolean };
 
 export class EightBall {
   groups: (Group | null)[] = [null, null];
@@ -283,10 +294,22 @@ export class EightBall {
   ballInHand = true;
   kitchenOnly = true;
   winner: number | null = null;
-  constructor(public turn = 0) {}
+  callAll: boolean;
+  banks: number[]; // the cushions each player's 8 must touch before its pocket
+  constructor(public turn = 0, rules: Rules = {}) {
+    this.callAll = !!rules.callAll;
+    this.banks = rules.banks ? [2, 2] : [0, 0];
+  }
+
+  /** Whether [player]'s next shot needs a pocket named (and, on the 8 with cushions to touch, those cushions). */
+  mustCall(player: number, table: Iterable<number>) {
+    return !this.breakShot && (this.callAll || this.onEight(player, table));
+  }
 
   copy() {
     const g = new EightBall(this.turn);
+    g.callAll = this.callAll;
+    g.banks = [...this.banks];
     g.groups = [...this.groups];
     g.breakShot = this.breakShot;
     g.ballInHand = this.ballInHand;
@@ -306,7 +329,8 @@ export class EightBall {
     return new Set([...table].filter((n) => n !== 0 && n !== 8 && (g === null || groupOf(n) === g)));
   }
 
-  play(log: ShotLog, before: Set<number>, called: number | null): Outcome {
+  /** [called]: the pocket he named (index in holes); [rails]: on the 8, the cushions he named for it to touch. */
+  play(log: ShotLog, before: Set<number>, called: number | null, rails: number[] = []): Outcome {
     const me = this.turn, other = 1 - this.turn;
     const wasOnEight = this.onEight(me, before);
     const allowed = this.targets(me, before);
@@ -332,12 +356,23 @@ export class EightBall {
         const i = log.potted.indexOf(n);
         return i >= 0 && i < eightAt;
       });
-      const legal = foul === null && (wasOnEight ? log.holeOf.get(8) === called : cleared);
+      const touched = log.rails.get(8) ?? new Set<number>();
+      const banked = rails.length >= this.banks[me] && rails.every((r) => touched.has(r));
+      const pocket = log.holeOf.get(8) === called;
+      const legal = foul === null && (wasOnEight ? pocket && banked : cleared);
       this.winner = legal ? me : other;
       return outcome({
         foul,
         winner: this.winner,
-        end: legal ? "eight" : !wasOnEight && !cleared ? "eight_early" : foul !== null ? "eight_foul" : "eight_wrong_pocket",
+        end: legal
+          ? "eight"
+          : !wasOnEight && !cleared
+            ? "eight_early"
+            : foul !== null
+              ? "eight_foul"
+              : wasOnEight && pocket
+                ? "eight_no_bank"
+                : "eight_wrong_pocket",
       });
     }
 
@@ -348,15 +383,18 @@ export class EightBall {
       this.groups[other] = assigned === "solids" ? "stripes" : "solids";
     }
     const mine = this.groups[me];
-    const scored = potted.some((n) => mine === null || groupOf(n) === mine);
+    // (pockets called: only a ball of his in the pocket he named keeps the table; the others stay down all the same)
+    const scored = potted.some((n) => (mine === null || groupOf(n) === mine) && (!this.callAll || wasBreak || log.holeOf.get(n) === called));
     const keeps = foul === null && scored;
     if (!keeps) this.turn = other;
+    if (wasOnEight) this.banks[me] = Math.max(0, this.banks[me] - 1); // his turn on the 8 is over: one cushion less
     this.ballInHand = foul !== null;
     return outcome({ foul, keepsTurn: keeps, assigned });
   }
 
-  /** The shot clock ran out: a foul, the other player gets the cue ball anywhere. */
-  outOfTime(): Outcome {
+  /** The shot clock ran out: a foul, the other player gets the cue ball anywhere. [table]: the balls on it. */
+  outOfTime(table: Iterable<number> = []): Outcome {
+    if (this.onEight(this.turn, table)) this.banks[this.turn] = Math.max(0, this.banks[this.turn] - 1);
     this.turn = 1 - this.turn;
     this.ballInHand = true;
     this.kitchenOnly = false;
@@ -367,7 +405,7 @@ export class EightBall {
 
 // ---- the bot (billiard_bot.dart) ----
 
-export type BotPlan = { shot: Shot; pocket: number | null; place: [number, number] | null };
+export type BotPlan = { shot: Shot; pocket: number | null; place: [number, number] | null; rails: number[] };
 const D = 2 * ballR;
 
 /** Its shot for this table; [skill] 0..1 is how little its aim and power wobble. */
@@ -381,7 +419,7 @@ export function botPlan(input: Ball[], game: EightBall, skill: number, rnd: () =
   if (game.breakShot) {
     const y = clothH / 2 + (rnd() - 0.5) * 60;
     const dx = 750 - 250, dy = clothH / 2 - y, l = Math.sqrt(dx * dx + dy * dy);
-    return { shot: shot(dx / l, dy / l, launchSpeed(1)), pocket: null, place: [250, y] };
+    return { shot: shot(dx / l, dy / l, launchSpeed(1)), pocket: null, place: [250, y], rails: [] };
   }
 
   const targets = game.targets(me, table);
@@ -392,6 +430,9 @@ export function botPlan(input: Ball[], game: EightBall, skill: number, rnd: () =
     cue.y = place[1];
     cue.pottedIn = null;
   }
+
+  const need = game.onEight(me, table) ? game.banks[me] : 0;
+  if (need > 0) return bankPlan(balls, game, need, place, skill, rnd);
 
   const cands: { n: number; h: number; dx: number; dy: number; value: number }[] = [];
   for (const n of targets) {
@@ -426,7 +467,7 @@ export function botPlan(input: Ball[], game: EightBall, skill: number, rnd: () =
       const v = trial(balls, game, s, c.h);
       if (v > bestValue) {
         bestValue = v;
-        best = { shot: s, pocket: c.h, place };
+        best = { shot: s, pocket: c.h, place, rails: [] };
       }
     }
   }
@@ -445,18 +486,55 @@ export function botPlan(input: Ball[], game: EightBall, skill: number, rnd: () =
         const v = trial(balls, game, s, 0);
         if (v > bestValue) {
           bestValue = v;
-          best = { shot: s, pocket: 0, place };
+          best = { shot: s, pocket: 0, place, rails: [] };
         }
       }
     }
-    best ??= { shot: shot(1, 0, launchSpeed(0.5)), pocket: 0, place };
+    best ??= { shot: shot(1, 0, launchSpeed(0.5)), pocket: 0, place, rails: [] };
   }
+  return wobble(best, skill, rnd);
+}
+
+/** [plan] as the bot's hand plays it: its aim and power a little off, the less the better it is. */
+function wobble(plan: BotPlan, skill: number, rnd: () => number): BotPlan {
   const gauss = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
   const err = (rnd() * 2 - 1) * (1 - skill) * 0.035 + gauss * (1 - skill) * 0.01;
   const c = Math.cos(err), s = Math.sin(err);
-  const sh = best.shot;
+  const sh = plan.shot;
   const speed = sh.speed * (1 + (rnd() - 0.5) * 0.12 * (1 - skill));
-  return { shot: shot(sh.dx * c - sh.dy * s, sh.dx * s + sh.dy * c, speed), pocket: best.pocket, place: best.place };
+  return { ...plan, shot: { ...sh, dx: sh.dx * c - sh.dy * s, dy: sh.dx * s + sh.dy * c, speed } };
+}
+
+/**
+ * The 8 to bank off [need] cushions: shots at it tried in the physics, cut thin to full, soft to hard; one that sends
+ * it off that many cushions into a pocket names those (the first it touched) and that pocket. None: the softest shot
+ * that hits it cleanly without potting it (potted unbanked, it would lose).
+ */
+function bankPlan(balls: Ball[], game: EightBall, need: number, place: [number, number] | null, skill: number, rnd: () => number): BotPlan {
+  const cue = balls.find((b) => b.n === 0)!, eight = balls.find((b) => b.n === 8)!;
+  const ex = eight.x - cue.x, ey = eight.y - cue.y, l = Math.sqrt(ex * ex + ey * ey);
+  let safe: BotPlan | null = null;
+  // ponytail: 33 trials (~150 ms) block the server's loop, like botPlan's; a worker if rooms pile up
+  for (const power of [0.55, 0.75, 0.95]) {
+    for (let k = -5; k <= 5; k++) {
+      const a = Math.atan2(ey, ex) + Math.asin(Math.max(-1, Math.min(1, (k / 5.5) * D / l)));
+      const s: Shot = { dx: Math.cos(a), dy: Math.sin(a), speed: launchSpeed(power), side: 0, height: 0 };
+      const copy = balls.map(copyBall);
+      const sim = new Sim(copy);
+      sim.shoot(s);
+      sim.run(9000);
+      const log = sim.log, rails = [...(log.rails.get(8) ?? [])];
+      const clean = !log.potted.includes(0) && log.firstHit === 8;
+      if (clean && log.potted.includes(8) && rails.length >= need) {
+        return wobble({ shot: s, pocket: log.holeOf.get(8)!, place, rails: rails.slice(0, need) }, skill, rnd);
+      }
+      if (!safe && clean && !log.potted.includes(8) && (log.cushionAfterHit.size > 0 || log.potted.length > 0)) {
+        safe = { shot: s, pocket: 0, place, rails: [0, 1].slice(0, need) };
+      }
+    }
+  }
+  const fx = ex / l, fy = ey / l;
+  return wobble(safe ?? { shot: { dx: fx, dy: fy, speed: launchSpeed(0.4), side: 0, height: 0 }, pocket: 0, place, rails: [0, 1].slice(0, need) }, skill, rnd);
 }
 
 function clear(balls: Ball[], ax: number, ay: number, bx: number, by: number, skip: number[]) {
@@ -470,7 +548,7 @@ function clear(balls: Ball[], ax: number, ay: number, bx: number, by: number, sk
   return true;
 }
 
-function trial(balls: Ball[], game: EightBall, s: Shot, hole: number) {
+function trial(balls: Ball[], game: EightBall, s: Shot, hole: number) { // (on the 8 with cushions to touch: bankPlan)
   const copy = balls.map(copyBall);
   const before = new Set(copy.filter((b) => onTable(b) && b.n !== 0).map((b) => b.n));
   const sim = new Sim(copy);
