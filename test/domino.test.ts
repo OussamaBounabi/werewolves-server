@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { botMove, ends, opener, place, sidesFor, TILES, type Line } from "../src/domino.js";
+import { botMove, ends, misdeal, opener, place, shuffledTiles, sidesFor, TILES, type Line } from "../src/domino.js";
 import { DominoRoom } from "../src/rooms/DominoRoom.js";
 
 const T = (a: number, b: number) => TILES.findIndex(([lo, hi]) => lo === Math.min(a, b) && hi === Math.max(a, b));
@@ -27,6 +27,16 @@ describe("dominoes", () => {
     const move = botMove({ level: "normal", hand: [T(4, 1), T(4, 6), T(2, 2)], line, forced: null, opponentsLack: new Set(), partnerLacks: new Set() });
     assert.strictEqual(move?.tile, T(4, 6));
   });
+
+  it("a hand with six tiles of one number, or five doubles, is dealt again", () => {
+    const sixes = [T(6, 0), T(6, 1), T(6, 2), T(6, 3), T(6, 4), T(6, 5), T(1, 2)];
+    assert.deepStrictEqual(misdeal(new Map([["a", [T(0, 0), T(1, 3), T(2, 4), T(3, 5), T(1, 4), T(2, 5), T(0, 1)]], ["b", sixes]])), {
+      id: "b", reason: "number", number: 6, tiles: sixes,
+    });
+    const doubles = [T(0, 0), T(1, 1), T(2, 2), T(3, 3), T(4, 4), T(0, 1), T(2, 3)];
+    assert.strictEqual(misdeal(new Map([["a", doubles]]))?.reason, "doubles");
+    assert.strictEqual(misdeal(new Map([["a", [T(6, 0), T(6, 1), T(6, 2), T(6, 3), T(6, 4), T(0, 0), T(1, 1)]]])), null, "five of a number, two doubles: kept");
+  });
 });
 
 describe("DominoRoom", () => {
@@ -38,6 +48,38 @@ describe("DominoRoom", () => {
   after(async () => {
     DominoRoom.botSpeed = 1;
     await colyseus.shutdown();
+  });
+
+  it("a hand of six 6s: everyone told why, the same round dealt again, the highest double starts", async function () {
+    this.timeout(30_000);
+    const room: any = await colyseus.createRoom("domino", {});
+    const host = await colyseus.connectTo(room);
+    let seen: any = null;
+    host.onMessage("domino", (m) => (seen = m));
+    host.onMessage("domino_fx", () => {});
+    host.send("add_bot", { level: "normal" });
+    await new Promise((r) => setTimeout(r, 200));
+    // the deal pops from the end, one tile each in turn: the host (first seat) gets 27, 25 … 15
+    const sixes = [T(0, 6), T(1, 6), T(2, 6), T(3, 6), T(4, 6), T(5, 6), T(6, 6)];
+    const rest = TILES.map((_, i) => i).filter((i) => !sixes.includes(i));
+    const deck = Array.from({ length: 28 }, (_, i) => (i >= 15 && (i - 15) % 2 === 0 ? sixes[(i - 15) / 2] : rest.shift()!));
+    DominoRoom.shuffle = () => {
+      DominoRoom.shuffle = shuffledTiles; // (only the first deal)
+      return [...deck];
+    };
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepStrictEqual([seen.redeal?.id, seen.redeal?.reason, seen.redeal?.number, seen.turn], [host.sessionId, "number", 6, ""]);
+    room.becomeBot(host.sessionId); // (his opening tile played for him)
+    while (room.redeal) await new Promise((r) => setTimeout(r, 5));
+    const open = opener(room.hands)!; // (the new hands: the highest double in them, 6-6 if dealt)
+    assert.ok(TILES[open.tile][0] === TILES[open.tile][1]);
+    while (room.line.first === null) await new Promise((r) => setTimeout(r, 5));
+    assert.strictEqual(room.line.first, open.tile, "the highest double starts");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual(seen.redeal, null);
+    assert.strictEqual(seen.round, 1, "the same round");
   });
 
   for (const teams of [false, true]) {

@@ -3,7 +3,7 @@ import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
-  botMove, ends, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line,
+  botMove, ends, misdeal, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line, type Misdeal,
 } from "../domino.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSpectator } from "./abandoned.js";
@@ -59,6 +59,7 @@ const DEAL_MS = 3_000; // the apps' shuffle and deal, before the first turn
 const PASS_MS = 1_200; // nothing fits and the pile is empty: shown, then the turn moves on
 const READY_WAIT_MS = 30_000; // between rounds: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000;
+const REDEAL_MS = 4_500; // a hand dealt again: the reason shown, then the new deal
 const RECONNECT_SECONDS = 60; // a dropped player gone over a minute is out, as if he had left
 const CLOSE_AFTER_GAME_MS = 60_000; // after a match: a minute to press "play again" (nobody did: the room closes)
 
@@ -70,6 +71,7 @@ const added = (s: Seat) => s.id.startsWith("bot-");
 export class DominoRoom extends Room<{ metadata: Meta }> {
   private abandon = new Abandon(this); // nobody left to play: the room closes by itself
   static botSpeed = 1; // tests: bots think faster
+  static shuffle = shuffledTiles; // tests: a deal of their choice
   maxClients = MAX_SEATS + MAX_SPECTATORS; // the seats are counted in onAuth
 
   private phase: Phase = "lobby";
@@ -108,6 +110,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   private history: RoundResult[] = [];
   private ready = new Set<string>();
   private nextRoundAt = 0;
+  private redeal: Misdeal | null = null; // the hand the tiles are being dealt again for (shown to everyone)
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
@@ -434,10 +437,11 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
 
   // ---- the round ----
 
-  private deal() {
-    this.round++;
+  /** [again]: the last deal had a hand with six tiles of one number or five doubles: the same round, dealt again. */
+  private deal(again = false) {
+    if (!again) this.round++;
     this.phase = "playing";
-    const tiles = shuffledTiles();
+    const tiles = DominoRoom.shuffle();
     for (const s of this.seats) this.hands.set(s.id, []);
     for (let i = 0; i < HAND; i++) for (const s of this.seats) this.hands.get(s.id)!.push(tiles.pop()!);
     this.pile = tiles; // 4 players: empty
@@ -446,8 +450,23 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.lacks.clear();
     this.ready.clear();
     this.nextRoundAt = 0;
-    // Round 1 (or after a tie): the highest double starts, with it. Then the last winner, any tile.
-    const winner = this.seat(this.lastWinner);
+    this.redeal = null;
+    this.broadcast("domino_fx", { type: "deal", order: this.seats.map((s) => s.id), pile: this.pile.length });
+    // Such a hand: everyone is told why (his hand shown), then the tiles are shuffled and dealt again.
+    const bad = misdeal(this.hands);
+    if (bad) {
+      this.redeal = bad;
+      this.turn = "";
+      this.forced = null;
+      this.timer?.clear();
+      this.botTimer?.clear();
+      this.nextRoundAt = this.turnEndsAt = Date.now() + DEAL_MS + REDEAL_MS;
+      this.timer = this.clock.setTimeout(() => (this.deal(true), this.sync()), DEAL_MS + REDEAL_MS);
+      return;
+    }
+    // Round 1, after a tie, or dealt again: the highest double starts (6-6 first), with it. Then the last winner,
+    // any tile.
+    const winner = again ? undefined : this.seat(this.lastWinner);
     let first: string;
     if (winner) {
       first = winner.id;
@@ -457,7 +476,6 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       first = open.id;
       this.forced = open.tile;
     }
-    this.broadcast("domino_fx", { type: "deal", order: this.seats.map((s) => s.id), pile: this.pile.length });
     this.startTurn(first, DEAL_MS);
   }
 
@@ -746,6 +764,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       history: this.history,
       ready: [...this.ready],
       nextRoundAt: this.nextRoundAt,
+      redeal: this.redeal,
       spectators: this.spectators.size,
       serverNow: Date.now(),
     };

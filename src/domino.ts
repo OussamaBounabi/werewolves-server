@@ -57,6 +57,19 @@ export function place(line: Line, tile: number, side: "left" | "right"): void {
   line[side].push({ tile, inner: end, outer: otherEnd(tile, end) });
 }
 
+/** A hand the tiles are dealt again for: six tiles with the same number, or five doubles. */
+export type Misdeal = { id: string; reason: "number" | "doubles"; number: number; tiles: number[] };
+
+export function misdeal(hands: Map<string, number[]>): Misdeal | null {
+  for (const [id, hand] of hands) {
+    for (let n = 6; n >= 0; n--) {
+      if (hand.filter((t) => hasNumber(t, n)).length >= 6) return { id, reason: "number", number: n, tiles: [...hand] };
+    }
+    if (hand.filter(isDouble).length >= 5) return { id, reason: "doubles", number: -1, tiles: [...hand] };
+  }
+  return null;
+}
+
 /** The highest double in these hands (6-6 first), else the heaviest tile: who starts round 1, with it. */
 export function opener(hands: Map<string, number[]>): { id: string; tile: number } | null {
   let best: { id: string; tile: number; key: number } | null = null;
