@@ -1,8 +1,11 @@
 /**
- * American checkers (8×8) and its bot, for ChessRoom. Squares as in chess (a1 = 0, h8 = 63); only the dark ones are
- * played (file + rank even, a1 dark). White men "w" start on ranks 1–3 and move up, black men "b" on ranks 6–8 and
- * move down; kings "W" / "B" move one square any diagonal. Black moves first. A man reaching the far rank is crowned
- * and his move ends there. Captures are forced (unless the room turns that off), and a capture goes on while it can.
+ * Checkers (8×8) and its bot, for ChessRoom. Squares as in chess (a1 = 0, h8 = 63); the played ones are those with
+ * file + rank odd (each player's near left corner is a light square, the board turned from chess's). White men "w"
+ * start on ranks 1–3 and move up, black men "b" on ranks 6–8 and move down, one square, capturing forward only.
+ * Kings "W" / "B" fly: any distance on any diagonal, and they capture from afar too (over one piece, landing on any
+ * empty square beyond it). Black moves first. A man reaching the far rank is crowned and his move ends there.
+ * Captures are forced (unless the room turns that off), a capture goes on while it can, and a piece taken stays on
+ * the board until the move ends (it can't be jumped twice).
  */
 export type Color = 0 | 1; // 0 white, 1 black
 export type CheckersPos = { board: string[]; turn: Color; quiet: number };
@@ -19,7 +22,7 @@ export function checkersStart(): CheckersPos {
   const board = Array<string>(64).fill("");
   for (let s = 0; s < 64; s++) {
     const r = s >> 3;
-    if (((s & 7) + r) % 2 !== 0) continue;
+    if (((s & 7) + r) % 2 === 0) continue; // (the light squares: played)
     if (r <= 2) board[s] = "w";
     else if (r >= 5) board[s] = "b";
   }
@@ -31,17 +34,23 @@ const dirsOf = (p: string) => {
   return isKing(p) ? [[1, 1], [-1, 1], [1, -1], [-1, -1]] : [[1, forward], [-1, forward]];
 };
 
-/** Every full capture by the piece on [from] ([path] so far, [taken] so far): a capture goes on while it can. */
+/** Every full capture by the piece on [path]'s first square ([path] and [taken] so far): it goes on while it can. */
 function jumps(board: string[], piece: string, path: number[], taken: number[], out: CheckersMove[]) {
-  const s = path[path.length - 1], f = s & 7, r = s >> 3, c = colorOf(piece) as Color;
+  const s = path[path.length - 1], f = s & 7, r = s >> 3, c = colorOf(piece) as Color, king = isKing(piece);
+  const free = (t: number) => t >= 0 && (board[t] === "" || t === path[0]); // (the square it left is empty now)
   let more = false;
   for (const [df, dr] of dirsOf(piece)) {
-    const mid = sq(f + df, r + dr), land = sq(f + 2 * df, r + 2 * dr);
-    if (land < 0 || colorOf(board[mid]) !== 1 - c || taken.includes(mid)) continue;
-    if (board[land] !== "" && land !== path[0]) continue; // (the square it left is empty now)
-    more = true;
-    if (!isKing(piece) && land >> 3 === lastRank(c)) out.push({ path: [...path, land], captures: [...taken, mid] }); // crowned: it stops
-    else jumps(board, piece, [...path, land], [...taken, mid], out);
+    let i = 1;
+    if (king) while (free(sq(f + df * i, r + dr * i))) i++; // a king looks down the whole diagonal
+    const mid = sq(f + df * i, r + dr * i);
+    if (mid < 0 || colorOf(board[mid]) !== 1 - c || taken.includes(mid)) continue;
+    for (let j = i + 1; free(sq(f + df * j, r + dr * j)); j++) {
+      const land = sq(f + df * j, r + dr * j);
+      more = true;
+      if (!king && land >> 3 === lastRank(c)) out.push({ path: [...path, land], captures: [...taken, mid] }); // crowned: it stops
+      else jumps(board, piece, [...path, land], [...taken, mid], out);
+      if (!king) break; // a man lands just behind
+    }
   }
   if (!more && taken.length > 0) out.push({ path, captures: taken });
 }
@@ -54,8 +63,12 @@ export function checkersMoves(pos: CheckersPos, forced = true): CheckersMove[] {
     if (colorOf(p) !== pos.turn) continue;
     jumps(pos.board, p, [s], [], caps);
     for (const [df, dr] of dirsOf(p)) {
-      const t = sq((s & 7) + df, (s >> 3) + dr);
-      if (t >= 0 && pos.board[t] === "") steps.push({ path: [s, t], captures: [] });
+      for (let i = 1; ; i++) {
+        const t = sq((s & 7) + df * i, (s >> 3) + dr * i);
+        if (t < 0 || pos.board[t] !== "") break;
+        steps.push({ path: [s, t], captures: [] });
+        if (!isKing(p)) break; // a man: one square; a king flies on
+      }
     }
   }
   return forced && caps.length > 0 ? caps : [...caps, ...steps];
@@ -96,7 +109,7 @@ function evaluate(board: string[]): number {
     const p = board[s];
     if (p === "") continue;
     const c = colorOf(p) as Color, f = s & 7, r = c === 0 ? s >> 3 : 7 - (s >> 3);
-    let v = isKing(p) ? 175 : 100 + r * 4 + (r === 0 ? 8 : 0);
+    let v = isKing(p) ? 280 : 100 + r * 4 + (r === 0 ? 8 : 0);
     if (f >= 2 && f <= 5 && (s >> 3) >= 2 && (s >> 3) <= 5) v += 4;
     score += c === 0 ? v : -v;
   }

@@ -120,6 +120,43 @@ describe("checkers rules", () => {
     assert.ok(after.board.includes("W"), "crowned");
   });
 
+  it("starts on the light squares (each player's near left corner light)", () => {
+    const p = checkersStart();
+    assert.strictEqual(p.board[at("a1")], "");
+    assert.strictEqual(p.board[at("b1")], "w");
+    assert.strictEqual(p.board[at("a8")], "b");
+  });
+
+  it("kings fly: they move and capture from any distance, and chain captures", () => {
+    const fly = board([
+      "........",
+      "........",
+      "........",
+      "........",
+      "........",
+      "........",
+      "........",
+      "W.......",
+    ], 0);
+    assert.strictEqual(checkersMoves(fly).length, 7, "a1 to h8, any distance");
+    const far = board([
+      "........",
+      "........",
+      ".....b..",
+      "........",
+      "...b....",
+      "........",
+      "........",
+      "W.......",
+    ], 0);
+    // a1 takes d4 from afar, lands on e5, then takes f6, lands on g7 or h8
+    const caps = checkersMoves(far).map((m) => [m.path, m.captures.length]);
+    assert.deepStrictEqual(caps, [[[at("a1"), at("e5"), at("g7")], 2], [[at("a1"), at("e5"), at("h8")], 2]]);
+    // a taken piece blocks: no jumping it twice, no passing through it
+    const after = checkersPlay(far, checkersMoves(far)[0]);
+    assert.strictEqual(after.board.filter((x) => x === "b").length, 0);
+  });
+
   it("a player with no move loses; two bots finish a game", () => {
     const stuck = board(["........", "........", "........", "........", "........", "........", "........", "...w...."], 1);
     assert.deepStrictEqual(checkersEnd(stuck, []), { end: "no_moves", winner: 0 });
