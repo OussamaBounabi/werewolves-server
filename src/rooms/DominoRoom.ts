@@ -6,7 +6,7 @@ import {
   botMove, ends, misdeal, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line, type Misdeal,
 } from "../domino.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
-import { Abandon, holdSpectator } from "./abandoned.js";
+import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
@@ -265,7 +265,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     if (this.spectators.has(this.idOf(client))) return holdSpectator(this, client);
     const seat = this.seat(this.idOf(client));
     if (seat) seat.connected = false;
-    Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
+    holdSeat(this, client, RECONNECT_SECONDS);
     this.sync();
   }
 

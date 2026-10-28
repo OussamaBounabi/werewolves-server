@@ -10,7 +10,7 @@ import {
 } from "../accounts.js";
 import { dayKey } from "../missions.js";
 import { enterRoom, leaveRoom } from "../presence.js";
-import { Abandon, holdSpectator } from "./abandoned.js";
+import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
 import { emojisOpen, Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
@@ -624,17 +624,14 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return (id && this.state.players.get(id)?.name) || null;
   }
 
-  // Network drop or app closed: hold the seat 10 minutes so the app can come back.
+  // Network drop or app closed: hold the seat 20 minutes so the app can come back.
   onDrop(client: Client) {
     if (this.spectators.has(client.sessionId)) return holdSpectator(this, client);
     const player = this.state.players.get(client.sessionId);
     if (player) player.connected = false;
     this.dropped.add(client.sessionId);
     this.maybeShrinkDay(); // he no longer counts among today's voters
-    const seat = this.allowReconnection(client, RECONNECT_SECONDS);
-    this.heldSeats.set(client.sessionId, seat);
-    // Rejects when the seat expires (onLeave then runs), on a kick, or if the client never finished joining.
-    Promise.resolve(seat).catch(() => {});
+    this.heldSeats.set(client.sessionId, holdSeat(this, client, RECONNECT_SECONDS));
     this.abandon.check(this.state.players.values());
   }
 

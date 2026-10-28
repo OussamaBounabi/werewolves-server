@@ -2,6 +2,7 @@ import { Room, Client, ServerError } from "colyseus";
 import { accountFor, accountsEnabled, BanError } from "../accounts.js";
 import { appClosed, appOpened } from "../presence.js";
 import { seen } from "../metrics.js";
+import { holdSeat } from "./abandoned.js";
 
 const RECONNECT_SECONDS = 30; // a network blip doesn't show him offline
 let presence: PresenceRoom | null = null; // (one room holds every app)
@@ -41,7 +42,7 @@ export class PresenceRoom extends Room {
   }
 
   onDrop(client: Client) {
-    Promise.resolve(this.allowReconnection(client, RECONNECT_SECONDS)).catch(() => {});
+    holdSeat(this, client, RECONNECT_SECONDS);
   }
 
   onLeave(client: Client) {

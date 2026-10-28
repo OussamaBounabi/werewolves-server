@@ -184,6 +184,34 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.players.get(dropper.sessionId)?.alive, true); // seat held for 10 minutes
   });
 
+  it("holds the seat again when a reconnect's connection dies before the app confirms it, with the same token", async () => {
+    const { room, clients } = await startGame();
+    const r = room as any;
+    const c = clients[2], id = c.sessionId, token = c.reconnectionToken;
+    c.reconnection.enabled = false;
+    await c.leave(false);
+    await waitFor(() => room.state.players.get(id)?.connected === false);
+
+    // Back after a while, but the network dies again right as the server answers (before the app's ack).
+    const onReconnect = r.onReconnect;
+    r.onReconnect = function (client: any) {
+      onReconnect.call(this, client);
+      setImmediate(() => client.ref.terminate());
+    };
+    const back = await colyseus.sdk.reconnect(token);
+    back.reconnection.enabled = false;
+    r.onReconnect = onReconnect;
+    await waitFor(() => room.state.players.get(id)?.connected === false);
+    await new Promise((res) => setTimeout(res, 200));
+    assert.strictEqual(room.state.players.get(id)?.alive, true); // not dead "after 20 minutes" on the spot
+
+    // The token the app has (whether or not that answer reached it) still gets it back to its seat.
+    const again = await colyseus.sdk.reconnect(token);
+    assert.strictEqual(again.sessionId, id);
+    await waitFor(() => room.state.players.get(id)?.connected === true);
+    assert.strictEqual(again.reconnectionToken, token);
+  });
+
   it("closes by itself a minute after every player's app is gone, with no winner; not while one is still here", async () => {
     const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
     const clients: any[] = [];

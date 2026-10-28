@@ -8,7 +8,26 @@ const SPECTATOR_SECONDS = 120;
  * a player's seat is, so he comes back to the game he was watching. onLeave runs if he doesn't.
  */
 export function holdSpectator(room: Room, client: Client) {
-  Promise.resolve(room.allowReconnection(client, SPECTATOR_SECONDS)).catch(() => {});
+  holdSeat(room, client, SPECTATOR_SECONDS);
+}
+
+/**
+ * Holds a dropped connection's place [seconds] (rejects when it runs out, on a kick…; onLeave then runs). A connection
+ * that came back and dropped again before its app confirmed it is held too: Colyseus would refuse ("not joined") and
+ * onLeave would run at once — a Werewolf player died "after 20 minutes" a few minutes in. Its token stays the same
+ * across reconnects, so an app that never heard of a new one still gets back.
+ */
+export function holdSeat(room: Room, client: Client, seconds: number) {
+  const c = client as any;
+  if (c.cameBack) delete c._enqueuedMessages; // ponytail: Colyseus internals (0.18), check on an upgrade
+  const token = client.reconnectionToken;
+  const seat = room.allowReconnection(client, seconds);
+  // (Straight on the Deferred: it runs before onReconnect and the JOIN_ROOM frame that carries the token.)
+  seat.then((back: any) => {
+    back.cameBack = true;
+    back.reconnectionToken = token;
+  }, () => {});
+  return seat;
 }
 
 /** A seat as every table keeps it: whose app is here, and who isn't a person any more (a bot, or gone for good). */
