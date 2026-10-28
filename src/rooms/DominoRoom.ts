@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, ends, misdeal, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line, type Misdeal,
@@ -80,6 +80,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   private maxPlayers = 4;
   private turnSeconds = 30;
   private target = 150;
+  private startedAt = 0; // the match's first deal, for its minutes
   private teams = false; // 2 vs 2: seats 0 & 2 against 1 & 3 (partners face to face)
   private teamScores = [0, 0];
   private seats: Seat[] = []; // seat order = turn order
@@ -373,6 +374,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
+    this.startedAt = Date.now();
     this.deal();
   }
 
@@ -587,6 +589,8 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.broadcast("domino_fx", { type: "round_end", hands: Object.fromEntries(this.hands) });
     if (this.seats.some((s) => s.score >= this.target)) {
       this.phase = "gameover";
+      const won = this.seats.filter((s) => this.sameSide(s.id, winner)).map((s) => s.uid); // the round's winner's side took it
+      recordTable("domino", this.seats, won, this.startedAt);
       this.ready = new Set(this.seats.filter(added).map((x) => x.id)); // (the host's bots always play again)
       this.turnEndsAt = Date.now() + CLOSE_AFTER_GAME_MS;
       this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), CLOSE_AFTER_GAME_MS);
@@ -674,6 +678,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   private clearMatch() {
+    this.startedAt = Date.now();
     this.round = 0;
     this.lastWinner = "";
     this.history = [];

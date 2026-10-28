@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -93,6 +93,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private die = { x: 7.5, y: 7.5, value: 6 }; // it stays where it lands; the next throw starts there
   private turnEndsAt = 0;
   private places: string[] = []; // who finished, in order
+  private startedAt = 0; // the game's start, for its minutes
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
@@ -359,6 +360,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       s.pawns = Array(this.pawnCount).fill(-1);
     });
     this.phase = "playing";
+    this.startedAt = Date.now();
     this.startTurn(this.seats[Math.floor(Math.random() * this.seats.length)].id, START_MS); // a random first player
   }
 
@@ -551,6 +553,10 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (!over) return false;
     for (const s of this.seats) if (!this.places.includes(s.id)) this.places.push(s.id);
     this.phase = "gameover";
+    // The first home wins; at 2 vs 2, the pair who all got home.
+    const first = this.seats.findIndex((s) => s.id === this.places[0]);
+    const won = this.seats.filter((s, i) => (this.teams ? i % 2 === first % 2 : i === first)).map((s) => s.uid);
+    recordTable("ludo", this.seats, won, this.startedAt);
     this.turn = "";
     this.turnEndsAt = 0;
     this.timer?.clear();

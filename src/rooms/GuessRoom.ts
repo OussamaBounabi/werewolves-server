@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, bracket, covers, found, legend, LEVELS, nextSlot, player, randomLegend, randomPlayer, validQuestion, valueOf,
@@ -103,6 +103,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private botSeq = 0;
   private matches: Match[] = []; // a cup's, in playing order (1 vs 1: one)
   private current = -1; // the match being played
+  private matchStartedAt = 0; // for its minutes
   private sides: Side[] = [];
   private firstTurn = 0; // who starts the match's first round (they take turns starting)
   private roundNo = 0;
@@ -436,6 +437,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       return this.afterMatch();
     }
     this.sides = [m.a, m.b].map((id): Side => ({ id, secret: "", cat: "", answers: [], wrong: [], clockMs: 0 }));
+    this.matchStartedAt = Date.now();
     this.firstTurn = Math.floor(Math.random() * 2);
     this.roundNo = 0;
     this.startRound();
@@ -562,6 +564,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
 
   private endMatch(winner: number) {
     this.matches[this.current].winner = this.sides[winner].id;
+    // Each match counts as a game for its two players (one given up before it began doesn't).
+    const players = this.sides.map((x) => this.seat(x.id)).filter((x) => x !== undefined);
+    recordTable(this.game, players, [this.seat(this.sides[winner].id)?.uid ?? ""].filter(Boolean), this.matchStartedAt);
     this.turn = "";
     this.afterMatch();
   }

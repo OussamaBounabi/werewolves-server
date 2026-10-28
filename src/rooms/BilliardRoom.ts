@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botPlan, EightBall, freeSpot, RAILS, rack, Sim, tune, type Ball, type Shot } from "../billiard.js";
 import { bracket, nextSlot, type Match } from "../guess.js";
@@ -61,6 +61,7 @@ class Table {
   balls: Ball[] = rack(); // the cue ball always first
   shots = 0;
   games = 0; // games started here
+  startedAt = 0; // this game's break, for its minutes
   score = [0, 0]; // games won in this match (a cup), by side
   turnStartsAt = 0; // the last shot is over on screen: the player may shoot
   turnEndsAt = 0;
@@ -578,6 +579,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
 
   /** A new game at [t], [breaker] (0 or 1: its players' order) breaking. */
   private startGame(t: Table, breaker: number) {
+    t.startedAt = Date.now();
     t.game = new EightBall(breaker, { callAll: this.callAll, banks: this.banks });
     t.balls = rack();
     t.shots = 0;
@@ -711,6 +713,9 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     t.stop();
     const winner = this.seat(t.players[w]), loser = t.players[1 - w];
     if (winner) winner.wins++;
+    // Every game counts for its two players, whatever the mode.
+    const players = t.players.map((id) => this.seat(id)).filter((x) => x !== undefined);
+    recordTable("billiard", players, winner ? [winner.uid] : [], t.startedAt);
     if (this.mode === "duel") {
       this.lastLoser = 1 - w;
       this.phase = "gameover";

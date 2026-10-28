@@ -5,6 +5,7 @@ import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isToke
 import { pushTo } from "./push.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
+import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
 import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
 
 /**
@@ -616,12 +617,28 @@ async function monthlyDiamonds(done: Done) {
  * Monday: last week's ranking wins the admin's prizes (coins, diamonds, VIP days), each winner told his place and
  * prize. Once a week (marked first). The first run only marks it.
  */
+export const BEST_RANKS = 50; // the places a profile remembers ("best rank")
+
+/** Last week's top 50 keep their place on their profile when it's their best (stats.bestRank). */
+async function bestRanks(week: string) {
+  const client = await db();
+  const { items } = await client.collection("leaderboard").getList(1, BEST_RANKS, { filter: client.filter("week = {:week} && xp > 0", { week }), sort: "-xp" });
+  for (const [i, row] of items.entries()) {
+    await forPlayer(row.user, async () => {
+      const { stats } = await client.collection("users").getOne(row.user, { fields: "stats" });
+      if (Number(stats?.bestRank) > 0 && Number(stats.bestRank) <= i + 1) return;
+      await client.collection("users").update(row.user, { stats: { ...(stats ?? {}), bestRank: i + 1 } });
+    });
+  }
+}
+
 async function weeklyPrizes(done: Done) {
   const last = weekKey(Date.now() - 7 * DAY_MS);
   if (done.rewardWeek === last) return;
   const first = !done.rewardWeek;
   done.rewardWeek = last;
   await saveDone(done);
+  await bestRanks(last).catch((e) => console.error("best ranks failed", e));
   const tiers = plans.rewards ?? [];
   if (first || tiers.length === 0) return;
   const client = await db();
@@ -791,15 +808,31 @@ export async function setVip(who: string, level: "vip" | "pro" | "off") {
 
 export type GameResult = {
   uid: string;
-  role: string;
-  side: "wolf" | "village" | "solo"; // the team he ended the game on (infected players are wolves)
+  game?: string; // "werewolf" when not said
+  role?: string; // Werewolf's: his role and the team he ended the game on (infected players are wolves)
+  side?: "wolf" | "village" | "solo";
   won: boolean;
   minutes: number;
-  survived: boolean; // alive at the end
+  survived?: boolean; // Werewolf's: alive at the end
   name: string; // for the leaderboard
   avatar: number;
   frame: number;
 };
+
+type Seated = { uid: string; name: string; avatar: number; frame: number };
+
+/**
+ * A table game's end: each signed-in player at it (not the bots) won if his uid is in [winners], over the whole minutes
+ * since [startedAt] (at least 1). Written to his account like a Werewolf game.
+ */
+export function recordTable(game: string, seats: Seated[], winners: string[], startedAt: number): GameResult[] {
+  const minutes = Math.max(1, Math.floor((Date.now() - startedAt) / 60_000));
+  const results = seats
+    .filter((s) => s.uid)
+    .map((s) => ({ uid: s.uid, game, won: winners.includes(s.uid), minutes, name: s.name, avatar: s.avatar, frame: s.frame }));
+  recordResults(results).catch((e) => console.error(`${game}: recording results failed`, e));
+  return results;
+}
 
 /** Winners: 3 XP + 3 coins per minute. Losers: 1 XP per minute. */
 export function rewardFor(r: GameResult) {
@@ -808,19 +841,36 @@ export function rewardFor(r: GameResult) {
 
 type Stats = Record<string, any>;
 
-/** His stats after one more game: games, wins/losses (overall, per side, per role) and minutes played. */
-export function addResult(stats: Stats | null | undefined, r: GameResult): Stats {
+export const RECENT_GAMES = 10;
+
+/**
+ * His stats after one more game: games, wins/losses and minutes (all games), per game (`byGame`), Werewolf's per side
+ * and per role, his winning streak and best one, and his last games (`recent`, newest first, with the [xp] he got).
+ */
+export function addResult(stats: Stats | null | undefined, r: GameResult, xp = rewardFor(r).xp, now = Date.now()): Stats {
   const s: Stats = { ...(stats ?? {}) };
-  const add = (key: string, n: number) => (s[key] = (Number(s[key]) || 0) + n);
+  const n = (v: unknown) => Number(v) || 0;
+  const add = (key: string, by: number) => (s[key] = n(s[key]) + by);
+  const game = r.game ?? "werewolf";
+  // Until 2026-10 only Werewolf counted: what's there is all Werewolf's.
+  const byGame = { ...(s.byGame ?? { werewolf: { games: n(s.games), wins: n(s.wins), minutes: n(s.minutes) } }) };
   add("games", 1);
   add(r.won ? "wins" : "losses", 1);
-  add(`${r.side}Games`, 1);
-  add(`${r.side}Wins`, r.won ? 1 : 0);
   add("minutes", r.minutes);
-  const roles = { ...(s.roles ?? {}) };
-  const role = roles[r.role] ?? {};
-  roles[r.role] = { games: (Number(role.games) || 0) + 1, wins: (Number(role.wins) || 0) + (r.won ? 1 : 0) };
-  s.roles = roles;
+  if (r.role && r.side) {
+    add(`${r.side}Games`, 1);
+    add(`${r.side}Wins`, r.won ? 1 : 0);
+    const roles = { ...(s.roles ?? {}) };
+    const role = roles[r.role] ?? {};
+    roles[r.role] = { games: n(role.games) + 1, wins: n(role.wins) + (r.won ? 1 : 0) };
+    s.roles = roles;
+  }
+  const g = byGame[game] ?? {};
+  byGame[game] = { games: n(g.games) + 1, wins: n(g.wins) + (r.won ? 1 : 0), minutes: n(g.minutes) + r.minutes };
+  s.byGame = byGame;
+  s.streak = r.won ? n(s.streak) + 1 : 0;
+  s.bestStreak = Math.max(n(s.bestStreak), s.streak);
+  s.recent = [{ game, won: r.won, minutes: r.minutes, xp, at: now }, ...(s.recent ?? [])].slice(0, RECENT_GAMES);
   return s;
 }
 
@@ -849,12 +899,13 @@ async function recordResult(r: GameResult) {
   const [day, week] = [dayKey(), weekKey()];
   await forPlayer(r.uid, async () => {
     const client = await db();
-    const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro" });
+    const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro,boostUntil" });
     const double = user.vip === true ? 2 : 1; // VIP: double coins and XP
-    const { xp, coins } = rewardFor(r);
+    const { coins } = rewardFor(r);
+    const xp = rewardFor(r).xp * (parseDate(user.boostUntil) > Date.now() ? 2 : 1); // the wheel's 2× XP
     const stats = user.stats;
     const batch = client.createBatch(); // all of it or none of it
-    batch.collection("users").update(r.uid, { "xp+": xp * double, "coins+": coins * double, stats: addResult(stats, r) });
+    batch.collection("users").update(r.uid, { "xp+": xp * double, "coins+": coins * double, stats: addResult(stats, r, xp * double) });
     for (const period of [day, week]) {
       batch.collection("missions").upsert({ id: missionsId(r.uid, period), user: r.uid, period, ...inc });
     }
@@ -867,6 +918,51 @@ async function recordResult(r: GameResult) {
 }
 
 export class ClaimError extends Error {}
+
+/** Today's daily reward: the next of the seven days (a missed day: the first again), added to his account. */
+export async function claimDaily(idToken: string) {
+  if (!pb) throw new ClaimError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const { daily } = await client.collection("users").getOne(uid, { fields: "daily" });
+    if (dailyNext(daily) === null) throw new ClaimError("not claimable");
+    const taken = dailyTaken(daily);
+    const gift = DAILY_REWARDS[taken.day - 1];
+    await client.collection("users").update(uid, { daily: taken, "coins+": gift.coins, "diamonds+": gift.diamonds });
+    return { ...taken, ...gift };
+  });
+}
+
+/**
+ * A turn of the lucky wheel: free while he has free spins today, else WHEEL_PRICE diamonds (refused without them).
+ * The prize is his at once: coins, diamonds, an hour of 2× XP (on top of what's left of one), a frame or an avatar.
+ */
+export async function spinWheel(idToken: string) {
+  if (!pb) throw new ClaimError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const user = await client.collection("users").getOne(uid, { fields: "wheel,vip,diamonds,avatars,frames,boostUntil" });
+    const free = freeSpins(user.wheel, user.vip === true) > 0;
+    if (!free && !(Number(user.diamonds) >= WHEEL_PRICE)) throw new ClaimError("not enough diamonds");
+    const today = dayKey();
+    const used = user.wheel?.day === today ? Number(user.wheel.used) || 0 : 0;
+    const index = spin({ avatars: user.avatars ?? [], frames: user.frames ?? [] });
+    const prize = WHEEL[index];
+    const change: Record<string, unknown> = {
+      wheel: { day: today, used: free ? used + 1 : used },
+      ...(free ? {} : { "diamonds-": WHEEL_PRICE }),
+    };
+    if (prize.kind === "coins") change["coins+"] = prize.amount;
+    if (prize.kind === "diamonds") change["diamonds+"] = prize.amount;
+    if (prize.kind === "boost") change.boostUntil = pbDate(Math.max(Date.now(), parseDate(user.boostUntil) || 0) + BOOST_MS);
+    if (prize.kind === "avatar") change.avatars = [...(user.avatars ?? []), prize.id]; // (one he owns never comes up)
+    if (prize.kind === "frame") change.frames = [...(user.frames ?? []), prize.id];
+    await client.collection("users").update(uid, change);
+    return { index, prize, paid: free ? 0 : WHEEL_PRICE };
+  });
+}
 
 export class StoreError extends Error {}
 

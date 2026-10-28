@@ -107,6 +107,10 @@ describe("PocketBase", function () {
   }
 
   const user = (id: string) => admin.collection("users").getOne(id);
+  const waitFor = async (ok: () => Promise<boolean>) => {
+    for (let i = 0; i < 50; i++) if (await ok()) return; else await new Promise((r) => setTimeout(r, 100));
+    throw new Error("timed out");
+  };
   const refused = (p: Promise<unknown>) => assert.rejects(p, (e: any) => e instanceof ClientResponseError && e.status >= 400);
 
   const result = (uid: string, won: boolean, extra: Partial<accounts.GameResult> = {}): accounts.GameResult => ({
@@ -267,7 +271,13 @@ describe("PocketBase", function () {
       ]);
       const w = await user(wolf.id);
       assert.deepStrictEqual([w.xp, w.coins], [30, 30]);
-      assert.deepStrictEqual(w.stats, { games: 1, wins: 1, wolfGames: 1, wolfWins: 1, minutes: 10, roles: { werewolf: { games: 1, wins: 1 } } });
+      assert.ok(w.stats.recent[0].at > 0);
+      delete w.stats.recent[0].at;
+      assert.deepStrictEqual(w.stats, {
+        games: 1, wins: 1, wolfGames: 1, wolfWins: 1, minutes: 10, roles: { werewolf: { games: 1, wins: 1 } },
+        byGame: { werewolf: { games: 1, wins: 1, minutes: 10 } }, streak: 1, bestStreak: 1,
+        recent: [{ game: "werewolf", won: true, minutes: 10, xp: 30 }],
+      });
       const v = await user(villager.id);
       assert.deepStrictEqual([v.xp, v.coins, v.stats.losses, v.stats.villageWins, v.stats.roles.seer], [4, 0, 1, 0, { games: 1, wins: 0 }]);
       const today = await wolf.pb.collection("missions").getOne(`${wolf.id}_${dayKey()}`);
@@ -281,6 +291,38 @@ describe("PocketBase", function () {
       const after = await user(wolf.id);
       assert.deepStrictEqual([after.xp, after.coins, after.stats.games, after.stats.roles.werewolf.wins], [180, 180, 6, 6]);
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${wolf.id}_${weekKey()}`)).xp, 180);
+    });
+
+    it("records a table game: per game, no role; the wheel's 2× XP doubles the XP only", async () => {
+      const p = await player();
+      accounts.recordTable("domino", [{ uid: p.id, name: "D", avatar: 101, frame: 0 }, { uid: "", name: "bot", avatar: 0, frame: 0 }], [p.id], Date.now() - 5 * 60_000);
+      await waitFor(async () => (await user(p.id)).stats?.byGame?.domino?.games === 1);
+      const u = await user(p.id);
+      assert.deepStrictEqual([u.xp, u.coins, u.stats.roles, u.stats.byGame.domino], [15, 15, undefined, { games: 1, wins: 1, minutes: 5 }]);
+      await admin.collection("users").update(p.id, { boostUntil: new Date(Date.now() + 60_000).toISOString().replace("T", " ") });
+      await accounts.recordResults([{ uid: p.id, game: "chess", won: true, minutes: 2, name: "D", avatar: 101, frame: 0 }]);
+      assert.deepStrictEqual([(await user(p.id)).xp, (await user(p.id)).coins], [15 + 12, 15 + 6]);
+    });
+
+    it("gives the daily reward once a day, the next day after; the wheel free once, then for diamonds", async () => {
+      const p = await player();
+      assert.deepStrictEqual(await accounts.claimDaily(p.idToken), { day: 1, at: dayKey(), streak: 1, coins: 200, diamonds: 0 });
+      await assert.rejects(accounts.claimDaily(p.idToken), /not claimable/);
+      // Taken yesterday as day 6: today is day 7, the chest.
+      const yesterday = dayKey(Date.now() - 86_400_000);
+      await admin.collection("users").update(p.id, { daily: { day: 6, at: yesterday, streak: 6 }, coins: 0, diamonds: 0 });
+      const both = await Promise.allSettled([accounts.claimDaily(p.idToken), accounts.claimDaily(p.idToken)]);
+      assert.deepStrictEqual(both.map((b) => b.status).sort(), ["fulfilled", "rejected"]);
+      assert.deepStrictEqual([(await user(p.id)).diamonds, (await user(p.id)).daily.streak], [50, 7]);
+      // The wheel: free, then 10 diamonds; refused without them.
+      assert.strictEqual((await accounts.spinWheel(p.idToken)).paid, 0);
+      await admin.collection("users").update(p.id, { diamonds: 10 });
+      const paid = await accounts.spinWheel(p.idToken);
+      assert.strictEqual(paid.paid, 10);
+      assert.strictEqual((await user(p.id)).diamonds, paid.prize.kind === "diamonds" ? paid.prize.amount : 0);
+      await admin.collection("users").update(p.id, { diamonds: 0 });
+      await assert.rejects(accounts.spinWheel(p.idToken), /not enough diamonds/);
+      assert.deepStrictEqual((await user(p.id)).wheel, { day: dayKey(), used: 1 });
     });
 
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {

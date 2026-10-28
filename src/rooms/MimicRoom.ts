@@ -1,7 +1,7 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomBytes } from "node:crypto";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { MIMIC_SOUNDS } from "../mimicSounds.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -88,6 +88,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     return this.looks.of(this.hostId);
   }
   private round = 0;
+  private startedAt = 0; // the game's start, for its minutes
   private deck: string[] = []; // the sounds still to come
   private sound = "";
   private playAt = 0; // when the sound plays, server time
@@ -324,6 +325,7 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     for (const s of this.seats) s.scores = [];
+    this.startedAt = Date.now();
     this.round = 0;
     this.deck = [];
     this.startRound();
@@ -463,6 +465,10 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
   private finish() {
     this.timer?.clear();
     this.phase = "result";
+    // The best average wins (all who share it); those gone lost.
+    const average = (x: Seat) => (x.left || !x.scores.length ? -1 : x.scores.reduce((a, b) => a + b, 0) / x.scores.length);
+    const best = Math.max(...this.seats.map(average));
+    recordTable("mimic", this.seats, this.seats.filter((x) => best >= 0 && average(x) === best).map((x) => x.uid), this.startedAt);
     this.talk(true);
     this.endsAt = 0;
     this.clips.clear();

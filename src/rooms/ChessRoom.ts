@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { canMate, chessBotMove, chessBotTakesDraw, chessEnd, inCheck, kingOf, legalMoves, makeMove, posKey, startPos, type ChessPos } from "../chess.js";
 import {
@@ -97,6 +97,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   private offer: { type: "draw" | "takeback"; by: string } | null = null;
   private drawAskedAt = new Map<string, number>(); // the ply of each player's last draw offer (one per move)
   private result: { winner: Color | null; reason: string } | null = null;
+  private startedAt = 0; // this game's first move, for its minutes
   private ready = new Set<string>();
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
@@ -399,6 +400,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     else this.whiteSeat = Math.random() < 0.5 ? 0 : 1;
     this.lastWhiteSeat = this.whiteSeat;
     this.phase = "playing";
+    this.startedAt = Date.now();
     this.chess = startPos();
     this.checkers = checkersStart();
     this.keys = [this.key()];
@@ -582,6 +584,8 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     }
     this.result = { winner, reason };
     this.phase = "gameover";
+    const won = this.seats.filter((s) => winner !== null && this.colorOf(s) === winner).map((s) => s.uid); // a draw: nobody
+    recordTable("chess", this.seats, won, this.startedAt);
     this.offer = null;
     this.timer?.clear();
     this.botTimer?.clear();

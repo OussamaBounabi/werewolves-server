@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { CATEGORIES, WORDS, wordsOf, type Word } from "../imposterWords.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -91,6 +91,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private votedOut = ""; // the vote's result ("" nobody)
   private guessed = ""; // the caught imposter's guess (a word id)
   private winner: "" | "players" | "imposters" = "";
+  private startedAt = 0; // the game's start, for its minutes
   private timer: { clear(): void } | null = null;
 
   onCreate(options: JoinOptions = {}) {
@@ -356,6 +357,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     this.votedOut = "";
     this.guessed = "";
     this.winner = "";
+    this.startedAt = Date.now();
     this.phase = "reveal";
     this.endsAt = Date.now() + REVEAL_MS * ImposterRoom.pace;
     this.later(REVEAL_MS, () => this.talk());
@@ -542,6 +544,8 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       this.voice(s, true);
     }
     if (voiceEnabled) closeVoice(this.roomId, { graveOnly: true }).catch(() => {}); // everyone together again
+    const won = this.seats.filter((s) => !s.left && s.imposter === (winner === "imposters")).map((s) => s.uid); // gone: lost
+    recordTable("imposter", this.seats, won, this.startedAt);
   }
 
   /** The host takes everyone back to the waiting room (the scores stay); newcomers can join again. */

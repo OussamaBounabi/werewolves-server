@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   DEFAULT_RULES, isJoker, jokerFits, rankOf, suitOf, layError, meldOf, openingError, openingPoints, shuffled, teamLayError, type MeldKind,
@@ -95,6 +95,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private ready = new Set<string>(); // between rounds: who pressed "ready" (bots always are)
   private nextRoundAt = 0; // everyone's ready: when the next round is dealt
   /** The seat draw: a straight face down in the middle (10 J Q K A at five), each player picks one. */
+  private startedAt = 0; // the game's start, for its minutes
   private seating: { cards: number[]; picks: Map<string, number>; shown: boolean } | null = null;
   private discardDown = false; // the round's last card went face down (a plain rummy)
   private seats: Seat[] = []; // seat order = turn order
@@ -421,6 +422,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
+    this.startedAt = Date.now();
     if (this.teams) this.deal();
     else this.startSeating();
   }
@@ -880,6 +882,9 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     this.timer?.clear();
     this.botTimer?.clear();
     this.phase = "gameover";
+    // Someone passed the losing score: the lowest score wins (a team's, at 2 vs 2; all of those who share it).
+    const best = Math.min(...this.seats.map((s) => s.score));
+    recordTable("rummy", this.seats, this.seats.filter((s) => s.score === best).map((s) => s.uid), this.startedAt);
     this.turn = "";
     this.turnEndsAt = 0;
     this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
