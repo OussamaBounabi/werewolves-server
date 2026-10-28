@@ -966,6 +966,79 @@ export async function spinWheel(idToken: string) {
 
 export class StoreError extends Error {}
 
+/** The store's coin packs: coins for diamonds (a bonus on the bigger ones). */
+export const COIN_PACKS = [
+  { coins: 5000, diamonds: 50 },
+  { coins: 12000, diamonds: 100 },
+  { coins: 30000, diamonds: 220 },
+];
+export const FREE_COINS = 50; // the store's gift, once a day
+
+/** A coin pack ([pack]: its place in COIN_PACKS) for its diamonds. */
+export async function buyCoins(idToken: string, pack: number) {
+  const p = COIN_PACKS[pack];
+  if (!p) throw new StoreError("unknown");
+  if (!pb) throw new StoreError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const { diamonds } = await client.collection("users").getOne(uid, { fields: "diamonds" });
+    if (!(Number(diamonds) >= p.diamonds)) throw new StoreError("funds");
+    await client.collection("users").update(uid, { "diamonds-": p.diamonds, "coins+": p.coins });
+    return p;
+  });
+}
+
+/** The store's free coins, once a day (users.storeGift: the day they were taken). */
+export async function freeCoins(idToken: string) {
+  if (!pb) throw new ClaimError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const { storeGift } = await client.collection("users").getOne(uid, { fields: "storeGift" });
+    if (storeGift === dayKey()) throw new ClaimError("not claimable");
+    await client.collection("users").update(uid, { storeGift: dayKey(), "coins+": FREE_COINS });
+    return { coins: FREE_COINS };
+  });
+}
+
+/**
+ * An avatar or a frame on sale this week, given to a friend who hasn't it: the giver pays its price, the friend gets it
+ * (not worn) and a notice with the giver's few words. VIP Pro's own items aren't on sale, so they can't be given.
+ */
+export async function sendGift(idToken: string, to: string, kind: "avatar" | "frame", id: number, note: string) {
+  if (!pb) throw new StoreError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  const week = storeNow(plans.store);
+  const item = (kind === "avatar" ? week.avatars : week.frames).find((x) => x.id === id);
+  if (!item) throw new StoreError("not on sale");
+  if (to === uid || !(await isFriendOfAny(uid, [to]))) throw new StoreError("not a friend");
+  const owned = kind === "avatar" ? "avatars" : "frames";
+  // Both records, one write at a time for each player; the lower uid locked first, so two friends giving each other
+  // at once never wait on each other.
+  const [first, second] = [uid, to].sort();
+  return forPlayer(first, () =>
+    forPlayer(second, async () => {
+      const client = await db();
+      const giver = await client.collection("users").getOne(uid, { fields: `${item.currency},name,username,avatar` });
+      const friend = await client.collection("users").getOne(to, { fields: owned });
+      const has: number[] = Array.isArray(friend[owned]) ? friend[owned] : [];
+      if (has.includes(id) || (kind === "avatar" && FREE_AVATARS.includes(id))) throw new StoreError("owned");
+      if (!(Number(giver[item.currency]) >= item.amount)) throw new StoreError("funds");
+      const name = giver.name || giver.username || "?";
+      const batch = client.createBatch();
+      batch.collection("users").update(uid, { [`${item.currency}-`]: item.amount });
+      batch.collection("users").update(to, { [owned]: [...has, id] });
+      batch.collection("notices").create({
+        user: to, kind: "gift", text: `A gift from ${name}`,
+        data: { from: uid, name, avatar: giver.avatar ?? 0, kind, id, note: note.slice(0, 60) },
+      });
+      await batch.send();
+      return { [item.currency]: Number(giver[item.currency]) - item.amount };
+    }),
+  );
+}
+
 /** Buys an avatar on sale this week: its price in coins or diamonds is taken if the player has it; then it's worn. */
 export async function buyAvatar(idToken: string, id: number) {
   if (!AVATARS[id]) throw new StoreError("unknown");

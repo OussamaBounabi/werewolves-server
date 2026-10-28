@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { catalog, legends, playerInfo } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
-  buyAvatar, buyFrame, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, savePushToken, spinWheel,
+  buyAvatar, buyCoins, buyFrame, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
@@ -178,6 +178,39 @@ const server = defineServer({
       if (!token) throw ctx.error(400, { error: "missing token" });
       try {
         return await spinWheel(token);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // A coin pack for diamonds (Authorization: Bearer <ID token>, body { pack }: its place in the list).
+    api_coins_buy: createEndpoint("/api/coins/buy", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx), pack = Number((ctx.body as { pack?: unknown } | undefined)?.pack);
+      if (!token || !Number.isInteger(pack)) throw ctx.error(400, { error: "missing token or pack" });
+      try {
+        return await buyCoins(token, pack);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // The store's free coins of the day (Authorization: Bearer <ID token>).
+    api_coins_free: createEndpoint("/api/coins/free", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx);
+      if (!token) throw ctx.error(400, { error: "missing token" });
+      try {
+        return await freeCoins(token);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // A gift to a friend (Authorization: Bearer <ID token>, body { to, kind: "avatar" | "frame", id, note }).
+    api_gift: createEndpoint("/api/gift", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx);
+      const { to, kind, id, note } = (ctx.body ?? {}) as { to?: unknown; kind?: unknown; id?: unknown; note?: unknown };
+      if (!token || typeof to !== "string" || (kind !== "avatar" && kind !== "frame") || !Number.isInteger(id)) {
+        throw ctx.error(400, { error: "missing token, friend or item" });
+      }
+      try {
+        return await sendGift(token, to, kind, id as number, typeof note === "string" ? note : "");
       } catch (e) {
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }

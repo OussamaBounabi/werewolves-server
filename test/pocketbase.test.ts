@@ -325,6 +325,37 @@ describe("PocketBase", function () {
       assert.deepStrictEqual((await user(p.id)).wheel, { day: dayKey(), used: 1 });
     });
 
+    it("sells coin packs for diamonds, gives the store's free coins once a day, gifts to friends only", async () => {
+      const p = await player(), friend = await player(), stranger = await player();
+      await befriend(p, friend);
+      await admin.collection("users").update(p.id, { coins: 0, diamonds: 60 });
+      assert.deepStrictEqual(await accounts.buyCoins(p.idToken, 0), accounts.COIN_PACKS[0]);
+      await assert.rejects(accounts.buyCoins(p.idToken, 0), /funds/);
+      await assert.rejects(accounts.buyCoins(p.idToken, 9), /unknown/);
+      assert.deepStrictEqual([(await user(p.id)).coins, (await user(p.id)).diamonds], [5000, 10]);
+      await accounts.freeCoins(p.idToken);
+      await assert.rejects(accounts.freeCoins(p.idToken), /not claimable/);
+      assert.strictEqual((await user(p.id)).coins, 5000 + accounts.FREE_COINS);
+      // A gift: the giver pays, the friend has it and is told; once only, to friends only.
+      await admin.collection("users").update(p.id, { coins: 10_000, diamonds: 1000 });
+      await assert.rejects(accounts.sendGift(p.idToken, stranger.id, "avatar", 101, ""), /not a friend/);
+      await accounts.sendGift(p.idToken, friend.id, "avatar", 101, "for you");
+      await assert.rejects(accounts.sendGift(p.idToken, friend.id, "avatar", 101, ""), /owned/);
+      await assert.rejects(accounts.sendGift(p.idToken, friend.id, "avatar", 9999, ""), /not on sale/);
+      const f = await user(friend.id);
+      assert.ok(f.avatars.includes(101));
+      assert.ok((await user(p.id)).coins < 10_000);
+      const [notice] = await friend.pb.collection("notices").getFullList({ filter: 'kind = "gift"' });
+      assert.deepStrictEqual([notice.data.from, notice.data.kind, notice.data.id, notice.data.note], [p.id, "avatar", 101, "for you"]);
+      // Two friends giving each other at once: both go through.
+      await admin.collection("users").update(friend.id, { coins: 10_000, diamonds: 1000 });
+      await Promise.all([
+        accounts.sendGift(p.idToken, friend.id, "frame", 2, ""),
+        accounts.sendGift(friend.idToken, p.id, "frame", 2, ""),
+      ]);
+      assert.deepStrictEqual([(await user(p.id)).frames, (await user(friend.id)).frames], [[2], [2]]);
+    });
+
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {
       const p = await player();
       await assert.rejects(accounts.buyAvatar(p.idToken, 101), /funds/);
