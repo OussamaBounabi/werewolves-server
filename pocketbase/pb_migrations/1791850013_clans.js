@@ -6,8 +6,8 @@
  * - clan_members: who is in which clan, with his role (leader, co-leader, elder, member); one clan each.
  * - clan_requests: players asking to join a clan that asks for requests; the player and the clan's members see them.
  * - clan_invites: a member's invitation to a friend; it lets him in past "request" (not past full or the level).
- * - clan_messages: the clan's chat: members' lines (they write their own: "text", or "room" for a room they opened,
- *   with { roomId, game }), and the server's (someone joined, left, a new leader).
+ * - clan_messages: the clan's chat: members' lines (they write their own "text"), and the server's (a room a member
+ *   opened, with { roomId, game }; someone joined, left, a new leader).
  * - users.clan: his clan; users.clanLeftAt: when he last left one (24 hours before he may join another).
  */
 migrate((app) => {
@@ -96,8 +96,8 @@ migrate((app) => {
       '@request.auth.clan != ""',
       "@request.body.clan = @request.auth.clan",
       "@request.body.user = @request.auth.id",
-      '(@request.body.kind = "text" || @request.body.kind = "room")',
-      '(@request.body.kind = "room" || @request.body.data:isset = false)',
+      '@request.body.kind = "text"',
+      "@request.body.data:isset = false",
     ].join(" && "),
   }));
 

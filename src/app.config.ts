@@ -35,7 +35,8 @@ import {
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
-  answerRequest, changeMember, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
+  answerRequest, changeMember, CHESTS, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
+  shareRoom,
 } from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import {
@@ -155,6 +156,11 @@ const server = defineServer({
     })),
     // What each place of the weekly ranking wins (the ranking shows it): [{ from, to, coins, diamonds, vipDays }].
     api_rewards: createEndpoint("/api/rewards", { method: "GET" }, async () => ({ tiers: currentPlans().rewards ?? [] })),
+    // The clan ranking's prizes (each member who played) and the weekly chest's: { tiers, chests }.
+    api_clan_rewards: createEndpoint("/api/clan-rewards", { method: "GET" }, async () => ({
+      tiers: currentPlans().clanrewards ?? [],
+      chests: CHESTS,
+    })),
     // Claim a mission's reward: Authorization: Bearer <Firebase ID token>, body { id }.
     api_claim: createEndpoint("/api/missions/claim", { method: "POST" }, async (ctx) => {
       const token = bearer(ctx);
@@ -179,6 +185,7 @@ const server = defineServer({
           ["inactive", (t) => removeInactive(t)],
           ["invite", (t, b) => inviteToClan(t, String(b.user ?? ""))],
           ["pin", (t, b) => pinClan(t, b.text)],
+          ["room", (t, b) => shareRoom(t, b.roomId, b.game)],
         ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]
       ).map(([name, run]) => [
         `api_clan_${name}`,
@@ -439,6 +446,12 @@ const server = defineServer({
       return { plan, dayIndex: now.dayIndex, weekIndex: now.weekIndex };
     }),
     api_admin_rewards: adminEndpoint("/api/admin/rewards", "GET", async () => ({ tiers: currentPlans().rewards ?? [] })),
+    api_admin_clan_rewards: adminEndpoint("/api/admin/clan-rewards", "GET", async () => ({ tiers: currentPlans().clanrewards ?? [] })),
+    api_admin_clan_rewards_save: adminEndpoint("/api/admin/clan-rewards/save", "POST", async (ctx) => {
+      const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
+      await savePlan("clanrewards", tiers);
+      return { tiers };
+    }),
     api_admin_rewards_save: adminEndpoint("/api/admin/rewards/save", "POST", async (ctx) => {
       const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
       await savePlan("rewards", tiers);

@@ -400,6 +400,20 @@ describe("PocketBase", function () {
       // Members' games: the clan's XP.
       await accounts.recordResults([{ uid: b.id, game: "chess", won: true, minutes: 10, name: "B", avatar: 0, frame: 0 }]);
       assert.strictEqual((await admin.collection("clans").getOne(id)).xp, 30);
+      const thisWeek = await admin.collection("clan_weeks").getOne(`${id}_${weekKey()}`);
+      assert.strictEqual(thisWeek.points, 30);
+      assert.strictEqual((await admin.collection("clan_scores").getOne(`${id}_${b.id}_${weekKey()}`)).points, 30);
+      // Last week's chest: 3 members, 800 points (silver at 750): b played, a didn't.
+      const last = weekKey(Date.now() - 7 * 86_400_000);
+      await admin.collection("clan_weeks").create({ id: `${id}_${last}`, clan: id, week: last, points: 800 });
+      await admin.collection("clan_scores").create({ id: `${id}_${b.id}_${last}`, clan: id, user: b.id, week: last, points: 800 });
+      const [bCoins, aCoins] = [(await user(b.id)).coins, (await user(a.id)).coins];
+      await clans.clanWeek({});
+      assert.deepStrictEqual([(await user(b.id)).coins - bCoins, (await user(a.id)).coins - aCoins], [800, 0]);
+      const [chest] = await b.pb.collection("notices").getFullList({ filter: 'kind = "clanChest"' });
+      assert.deepStrictEqual([chest.data.chest, chest.data.rank], [1, 1]);
+      await clans.clanWeek({ clanWeek: last }); // once only
+      assert.strictEqual((await user(b.id)).coins - bCoins, 800);
       // The leader leaves: the co-leader leads; he waits 24 hours to join again.
       await clans.leaveClan(lead.idToken);
       assert.strictEqual((await admin.collection("clan_members").getFirstListItem(`user = "${a.id}"`)).role, "leader");

@@ -6,6 +6,7 @@ import { pushTo } from "./push.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { atNight, reached } from "./achievements.js";
+import { clanWeek } from "./clans.js";
 import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
 import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
 
@@ -506,10 +507,16 @@ export async function supportReply(uid: string, text: unknown) {
 // ---- the admin's plans (plans.ts), VIP, and the ranking's prizes ----
 
 const DAY_MS = 86_400_000;
-const plans: { store: StorePlan | null; missions: MissionPlan | null; rewards: RewardTier[] | null } = {
+const plans: {
+  store: StorePlan | null;
+  missions: MissionPlan | null;
+  rewards: RewardTier[] | null;
+  clanrewards: RewardTier[] | null; // the clan ranking's, for each member who played
+} = {
   store: null,
   missions: null,
   rewards: null,
+  clanrewards: null,
 };
 type PlanId = keyof typeof plans;
 
@@ -532,8 +539,8 @@ export async function savePlan<K extends PlanId>(id: K, data: NonNullable<(typeo
 }
 
 /** The last week whose ranking was rewarded, the last month VIPs got their diamonds, the last day old chat was deleted. */
-type Done = { rewardWeek?: string; gemsMonth?: string; chatDay?: string };
-async function saveDone(done: Done) {
+export type Done = { rewardWeek?: string; gemsMonth?: string; chatDay?: string; clanWeek?: string };
+export async function saveDone(done: Done) {
   const batch = (await db()).createBatch();
   batch.collection("admin_config").upsert({ id: "done", data: done });
   await batch.send();
@@ -696,6 +703,7 @@ export async function runSchedules() {
   const done = ((await maybe((await db()).collection("admin_config").getOne("done")))?.data ?? {}) as Done;
   await monthlyDiamonds(done);
   await weeklyPrizes(done);
+  await clanWeek(done).catch((e) => console.error("clan week failed", e));
   await oldChat(done);
 }
 
@@ -759,6 +767,26 @@ const pushed = new Set<string>(); // messages already pushed (each once)
  * A message he has just saved (a line, a voice message, an invitation), to his friend's phones: his name, its text.
  * Only his own, once, within a minute of it.
  */
+/** [data] pushed to these players' phones (the app shows its title and body; a tap opens what its sender says). */
+export async function pushToUsers(uids: string[], data: Record<string, string>) {
+  if (!pb || uids.length === 0) return;
+  const client = await db();
+  const rows = await client.collection("users").getFullList({
+    filter: uids.map((_, i) => `id = {:u${i}}`).map((f, i) => client.filter(f, { [`u${i}`]: uids[i] })).join(" || "),
+    fields: "id,pushTokens",
+  });
+  for (const u of rows) {
+    const tokens: string[] = Array.isArray(u.pushTokens) ? u.pushTokens : [];
+    const dead = await pushTo(tokens, data).catch(() => [] as string[]);
+    if (dead.length === 0) continue;
+    await forPlayer(u.id, async () => {
+      const now = await client.collection("users").getOne(u.id, { fields: "pushTokens" });
+      const left = (Array.isArray(now.pushTokens) ? now.pushTokens : []).filter((t: string) => !dead.includes(t));
+      await client.collection("users").update(u.id, { pushTokens: left });
+    });
+  }
+}
+
 export async function pushMessage(idToken: string, id: string) {
   const { uid } = await signedIn(idToken);
   if (pushed.has(id)) return;
@@ -915,7 +943,14 @@ async function recordResult(r: GameResult) {
       id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp * double, name: r.name, avatar: r.avatar, frame: r.frame,
       vip: vipLevel(user),
     });
-    if (user.clan) batch.collection("clans").update(user.clan, { "xp+": xp * double }); // his clan's XP
+    if (user.clan) {
+      // His clan's XP, its points this week and his share of them.
+      batch.collection("clans").update(user.clan, { "xp+": xp * double });
+      batch.collection("clan_weeks").upsert({ id: `${user.clan}_${week}`, clan: user.clan, week, "points+": xp * double });
+      batch.collection("clan_scores").upsert({
+        id: `${user.clan}_${r.uid}_${week}`, clan: user.clan, user: r.uid, week, "points+": xp * double,
+      });
+    }
     await batch.send();
   });
 }

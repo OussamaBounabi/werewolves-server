@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import type PocketBase from "pocketbase";
-import { db, forPlayer, isFriendOfAny, maybe, parseDate, pbDate, signedIn } from "./accounts.js";
+import {
+  currentPlans, db, type Done, forPlayer, grantVip, isFriendOfAny, maybe, parseDate, pbDate, pushToUsers, saveDone, signedIn,
+} from "./accounts.js";
+import { weekKey } from "./missions.js";
+import { prizeFor } from "./plans.js";
 
 /**
  * Clans: making one (💎100, from level 5), its look and who may join (open, on request, closed; from a level), joining
@@ -169,7 +173,17 @@ export async function joinClan(idToken: string, clanId: string) {
         free(user);
         if (playerLevel(Number(user.xp) || 0) < (Number(clan.minLevel) || 1)) throw new ClanError("level");
         const asked = await client.collection("clan_requests").getList(1, 1, { filter: pair, fields: "id" });
-        if (asked.items.length === 0) await client.collection("clan_requests").create({ clan: clanId, user: uid });
+        if (asked.items.length === 0) {
+          await client.collection("clan_requests").create({ clan: clanId, user: uid });
+          const deciders = await client.collection("clan_members").getFullList({
+            filter: client.filter('clan = {:clan} && (role = "leader" || role = "coLeader" || role = "elder")', { clan: clanId }),
+            fields: "user",
+          });
+          const who = await client.collection("users").getOne(uid, { fields: "name,username" });
+          void pushToUsers(deciders.map((d) => d.user), {
+            sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`, body: `➕ ${who.name || who.username}`,
+          }).catch(() => {});
+        }
         return { joined: false, requested: true };
       }
       await addMember(client, clanId, uid);
@@ -328,4 +342,91 @@ export async function pinClan(idToken: string, text: unknown) {
   if (!may(me.role, "pin")) throw new ClanError("not allowed");
   await client.collection("clans").update(me.clan, { pinned: line });
   return { ok: true };
+}
+
+/** A clan push's sender: a tap opens the clan (the app's Push). */
+export const CLAN_SENDER = "clan";
+
+/** A member opened a room: a card with Join in the clan's chat, and the others' phones told. */
+export async function shareRoom(idToken: string, roomId: unknown, game: unknown) {
+  const room = String(roomId ?? ""), g = String(game ?? "");
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(room) || !/^[a-z]{1,20}$/.test(g)) throw new ClanError("invalid");
+  const { uid } = await signedIn(idToken);
+  const client = await db();
+  const me = await myMembership(client, uid);
+  const [clan, who, others] = await Promise.all([
+    client.collection("clans").getOne(me.clan, { fields: "name,tag" }),
+    client.collection("users").getOne(uid, { fields: "name,username" }),
+    client.collection("clan_members").getFullList({ filter: client.filter("clan = {:clan} && user != {:uid}", { clan: me.clan, uid }), fields: "user" }),
+  ]);
+  await client.collection("clan_messages").create({ clan: me.clan, user: uid, kind: "room", data: { roomId: room, game: g } });
+  void pushToUsers(others.map((o) => o.user), {
+    sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`, body: `🎮 ${who.name || who.username} · ${g}`, roomId: room,
+  }).catch(() => {});
+  return { ok: true };
+}
+
+/** The weekly chest: points each member brings, for bronze, silver, gold; what every member who played wins. */
+export const CHESTS = [
+  { perMember: 100, coins: 300, diamonds: 0 },
+  { perMember: 250, coins: 800, diamonds: 5 },
+  { perMember: 500, coins: 1500, diamonds: 15 },
+];
+
+/** The highest chest a clan of [members] opened with [points] (-1: none). */
+export function chestFor(points: number, members: number) {
+  return CHESTS.findLastIndex((c) => points >= c.perMember * Math.max(1, members));
+}
+
+/**
+ * Last week's chests and clan ranking prizes, once (done.clanWeek): every member who played for his clan that week
+ * (points in clan_scores) and is still in it gets its highest chest's prize and its place's (the admin's plan), told by
+ * a notice and on his phone.
+ */
+export async function clanWeek(done: Done) {
+  const last = weekKey(Date.now() - 7 * 86_400_000);
+  if (done.clanWeek === last) return;
+  done.clanWeek = last;
+  await saveDone(done);
+  const client = await db();
+  const tiers = currentPlans().clanrewards ?? [];
+  const weeks = await client.collection("clan_weeks").getFullList({ filter: client.filter("week = {:last}", { last }), sort: "-points" });
+  for (const [i, row] of weeks.entries()) {
+    try {
+      const clan = await maybe(client.collection("clans").getOne(row.clan));
+      if (!clan) continue;
+      const [members, scores] = await Promise.all([
+        client.collection("clan_members").getFullList({ filter: client.filter("clan = {:clan}", { clan: row.clan }), fields: "user" }),
+        client.collection("clan_scores").getFullList({
+          filter: client.filter("clan = {:clan} && week = {:last} && points > 0", { clan: row.clan, last }), fields: "user",
+        }),
+      ]);
+      const playedThere = new Set(scores.map((s) => s.user));
+      const played = members.map((m) => m.user).filter((u) => playedThere.has(u));
+      const chest = chestFor(Number(row.points) || 0, Number(clan.members) || 1);
+      const prize = prizeFor(tiers, i + 1);
+      const coins = (chest >= 0 ? CHESTS[chest].coins : 0) + (prize?.coins ?? 0);
+      const diamonds = (chest >= 0 ? CHESTS[chest].diamonds : 0) + (prize?.diamonds ?? 0);
+      const vipDays = prize?.vipDays ?? 0;
+      if (played.length === 0 || (coins === 0 && diamonds === 0 && vipDays === 0)) continue;
+      for (const uid of played) {
+        await forPlayer(uid, async () => {
+          const batch = client.createBatch();
+          if (coins || diamonds) batch.collection("users").update(uid, { "coins+": coins, "diamonds+": diamonds });
+          batch.collection("notices").create({
+            user: uid, kind: "clanChest", text: `${clan.name}: #${i + 1} last week`,
+            data: { clan: clan.name, tag: clan.tag, rank: i + 1, chest, coins, diamonds, vipDays, week: last },
+          });
+          await batch.send();
+        });
+        if (vipDays) await grantVip(uid, "vip", vipDays);
+      }
+      void pushToUsers(played, {
+        sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`,
+        body: `🎁 #${i + 1} · ${[coins && `+${coins} 🪙`, diamonds && `+${diamonds} 💎`, vipDays && `+${vipDays} VIP`].filter(Boolean).join(" ")}`,
+      }).catch(() => {});
+    } catch (e) {
+      console.error("clan week prizes failed for", row.clan, e);
+    }
+  }
 }
