@@ -430,3 +430,16 @@ export async function clanWeek(done: Done) {
     }
   }
 }
+
+/** [uid]'s clan ("" none). */
+export async function clanOf(uid: string) {
+  const m = await memberOf(await db(), uid);
+  return m?.clan ?? "";
+}
+
+/** Who's in a clan's lounge now (the clan page's door): those talking, and how many listen. */
+export async function loungeOf(clan: string) {
+  const { matchMaker } = await import("colyseus");
+  const room = (await matchMaker.query({ name: "clan_lounge" })).find((r) => r.metadata?.clan === clan);
+  return { talking: room?.metadata?.talking ?? [], listeners: room?.metadata?.listeners ?? 0 };
+}

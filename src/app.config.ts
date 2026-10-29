@@ -22,6 +22,7 @@ import { GuessRoom, MysteryRoom } from "./rooms/GuessRoom.js";
 import { ITEMS, MYSTERY_CATEGORIES } from "./mysteryItems.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
+import { ClanLoungeRoom } from "./rooms/ClanLoungeRoom.js";
 import { kickFromApp, PresenceRoom } from "./rooms/PresenceRoom.js";
 import { onlineCount, roomsOf, whereIs } from "./presence.js";
 import { todayNow } from "./metrics.js";
@@ -36,7 +37,7 @@ import {
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
   answerRequest, changeMember, CHESTS, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
-  shareRoom,
+  loungeOf, shareRoom,
 } from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import {
@@ -112,6 +113,7 @@ const server = defineServer({
     imposter: defineRoom(ImposterRoom),
     mimic: defineRoom(MimicRoom),
     presence: defineRoom(PresenceRoom), // every app, while open: who's online
+    clan_lounge: defineRoom(ClanLoungeRoom).filterBy(["clan"]), // a clan's voice lounge, one per clan
   },
 
   /**
@@ -156,6 +158,9 @@ const server = defineServer({
     })),
     // What each place of the weekly ranking wins (the ranking shows it): [{ from, to, coins, diamonds, vipDays }].
     api_rewards: createEndpoint("/api/rewards", { method: "GET" }, async () => ({ tiers: currentPlans().rewards ?? [] })),
+    // Who's in a clan's voice lounge now: { talking: [{ name, avatar }], listeners }.
+    api_clan_lounge: createEndpoint("/api/clans/lounge/:clan", { method: "GET" }, async (ctx) =>
+      loungeOf(String((ctx.params as { clan?: string }).clan ?? ""))),
     // The clan ranking's prizes (each member who played) and the weekly chest's: { tiers, chests }.
     api_clan_rewards: createEndpoint("/api/clan-rewards", { method: "GET" }, async () => ({
       tiers: currentPlans().clanrewards ?? [],
