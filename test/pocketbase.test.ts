@@ -822,6 +822,7 @@ describe("PocketBase", function () {
         await admin.collection("leaderboard").create({ id: `${p.id}_${last}`, week: last, user: p.id, xp, name: "x", avatar: 103 });
       }
       await accounts.savePlan("rewards", cleanTiers([{ from: 1, to: 1, coins: 500, vipDays: 3 }, { from: 2, to: 2, diamonds: 50 }]));
+      await admin.collection("admin_config").delete("done").catch(() => {}); // (the clans' week wrote one already)
       await admin.collection("admin_config").create({ id: "done", data: { rewardWeek: weekKey(Date.now() - 14 * DAY), gemsMonth: "2000-01" } });
       const before = await Promise.all([a, b, vip].map((p) => user(p.id)));
       await accounts.runSchedules();
