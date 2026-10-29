@@ -273,6 +273,7 @@ describe("PocketBase", function () {
       assert.deepStrictEqual([w.xp, w.coins], [30, 30]);
       assert.ok(w.stats.recent[0].at > 0);
       delete w.stats.recent[0].at;
+      delete w.stats.nightGames; // (run between midnight and 5 in Algiers)
       assert.deepStrictEqual(w.stats, {
         games: 1, wins: 1, wolfGames: 1, wolfWins: 1, minutes: 10, roles: { werewolf: { games: 1, wins: 1 } },
         byGame: { werewolf: { games: 1, wins: 1, minutes: 10 } }, streak: 1, bestStreak: 1,
@@ -354,6 +355,17 @@ describe("PocketBase", function () {
         accounts.sendGift(friend.idToken, p.id, "frame", 2, ""),
       ]);
       assert.deepStrictEqual([(await user(p.id)).frames, (await user(friend.id)).frames], [[2], [2]]);
+    });
+
+    it("pays an achievement once its goal is reached, once only", async () => {
+      const p = await player();
+      await assert.rejects(accounts.claimAchievement(p.idToken, "firstWin"), /not claimable/);
+      await admin.collection("users").update(p.id, { coins: 0, stats: { wins: 1, games: 1 } });
+      assert.deepStrictEqual(await accounts.claimAchievement(p.idToken, "firstWin"), { coins: 200, diamonds: 0 });
+      await assert.rejects(accounts.claimAchievement(p.idToken, "firstWin"), /not claimable/);
+      await assert.rejects(accounts.claimAchievement(p.idToken, "clan"), /not claimable/); // no clans yet
+      const me = await user(p.id);
+      assert.deepStrictEqual([me.coins, me.achievements], [200, ["firstWin"]]);
     });
 
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {

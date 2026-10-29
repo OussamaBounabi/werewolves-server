@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { catalog, legends, playerInfo } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
-  buyAvatar, buyCoins, buyFrame, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
+  buyAvatar, buyCoins, buyFrame, claimAchievement, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
@@ -158,6 +158,16 @@ const server = defineServer({
       if (!token || !id) throw ctx.error(400, { error: "missing token or id" });
       try {
         return { ok: true, reward: await claimMission(token, id) };
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // An achievement's prize (Authorization: Bearer <ID token>, body { id }): { coins, diamonds }.
+    api_achievement_claim: createEndpoint("/api/achievements/claim", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx), id = (ctx.body as { id?: unknown } | undefined)?.id;
+      if (!token || typeof id !== "string") throw ctx.error(400, { error: "missing token or id" });
+      try {
+        return await claimAchievement(token, id);
       } catch (e) {
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }

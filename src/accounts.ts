@@ -5,6 +5,7 @@ import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isToke
 import { pushTo } from "./push.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
+import { atNight, reached } from "./achievements.js";
 import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
 import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
 
@@ -845,7 +846,7 @@ export const RECENT_GAMES = 10;
 
 /**
  * His stats after one more game: games, wins/losses and minutes (all games), per game (`byGame`), Werewolf's per side
- * and per role, his winning streak and best one, and his last games (`recent`, newest first, with the [xp] he got).
+ * and per role, games finished at night (`nightGames`), his winning streak and best one, and his last games (`recent`, newest first, with the [xp] he got).
  */
 export function addResult(stats: Stats | null | undefined, r: GameResult, xp = rewardFor(r).xp, now = Date.now()): Stats {
   const s: Stats = { ...(stats ?? {}) };
@@ -868,6 +869,7 @@ export function addResult(stats: Stats | null | undefined, r: GameResult, xp = r
   const g = byGame[game] ?? {};
   byGame[game] = { games: n(g.games) + 1, wins: n(g.wins) + (r.won ? 1 : 0), minutes: n(g.minutes) + r.minutes };
   s.byGame = byGame;
+  if (atNight(now)) add("nightGames", 1); // the Night owl achievement's
   s.streak = r.won ? n(s.streak) + 1 : 0;
   s.bestStreak = Math.max(n(s.bestStreak), s.streak);
   s.recent = [{ game, won: r.won, minutes: r.minutes, xp, at: now }, ...(s.recent ?? [])].slice(0, RECENT_GAMES);
@@ -918,6 +920,24 @@ async function recordResult(r: GameResult) {
 }
 
 export class ClaimError extends Error {}
+
+/** An achievement's prize, once: its goal reached (stats, VIP, friends, clan) and not claimed before. */
+export async function claimAchievement(idToken: string, id: string) {
+  if (!pb) throw new ClaimError("accounts disabled");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const user = await client.collection("users").getOne(uid, { fields: "stats,vip,vipPro,achievements" });
+    const claimed: string[] = Array.isArray(user.achievements) ? user.achievements : [];
+    if (claimed.includes(id)) throw new ClaimError("not claimable");
+    const friends = await client.collection("friends").getList(1, 1, { filter: client.filter("user = {:uid}", { uid }), fields: "id" });
+    // ponytail: no clans on the server yet: the Clan member achievement can't be reached until they come.
+    const a = reached(id, { stats: user.stats, vip: user.vip === true || user.vipPro === true, friends: friends.totalItems, clan: false });
+    if (!a) throw new ClaimError("not claimable");
+    await client.collection("users").update(uid, { achievements: [...claimed, id], "coins+": a.coins, "diamonds+": a.diamonds });
+    return { coins: a.coins, diamonds: a.diamonds };
+  });
+}
 
 /** Today's daily reward: the next of the seven days (a missed day: the first again), added to his account. */
 export async function claimDaily(idToken: string) {
