@@ -74,7 +74,7 @@ if (POCKETBASE_URL && POCKETBASE_SUPERUSER_EMAIL && POCKETBASE_SUPERUSER_PASSWOR
 }
 
 /** The client, signed in as the superuser (again, when its token is about to expire). */
-async function db(): Promise<PocketBase> {
+export async function db(): Promise<PocketBase> {
   if (!pb) {
     throw new Error("no PocketBase: set POCKETBASE_URL, POCKETBASE_SUPERUSER_EMAIL and POCKETBASE_SUPERUSER_PASSWORD in .env");
   }
@@ -92,7 +92,7 @@ async function db(): Promise<PocketBase> {
 const notFound = (e: unknown) => e instanceof ClientResponseError && e.status === 404;
 
 /** [record], or null if there's none. */
-async function maybe(record: Promise<RecordModel>): Promise<RecordModel | null> {
+export async function maybe(record: Promise<RecordModel>): Promise<RecordModel | null> {
   try {
     return await record;
   } catch (e) {
@@ -106,7 +106,7 @@ async function maybe(record: Promise<RecordModel>): Promise<RecordModel | null> 
  * write it back; the server is one process, so this keeps two of them from crossing.
  */
 const queues = new Map<string, Promise<unknown>>();
-function forPlayer<T>(uid: string, fn: () => Promise<T>): Promise<T> {
+export function forPlayer<T>(uid: string, fn: () => Promise<T>): Promise<T> {
   const run = (queues.get(uid) ?? Promise.resolve()).then(fn, fn);
   const done = run.catch(() => {});
   queues.set(uid, done);
@@ -118,7 +118,7 @@ function forPlayer<T>(uid: string, fn: () => Promise<T>): Promise<T> {
 export class AuthError extends Error {}
 
 /** Who an app's Firebase ID token belongs to. */
-async function signedIn(idToken: string): Promise<FirebaseUser> {
+export async function signedIn(idToken: string): Promise<FirebaseUser> {
   if (!pb) throw new AuthError("accounts disabled");
   if (!idToken) throw new AuthError("no token");
   try {
@@ -250,7 +250,7 @@ export async function exchangeToken(idToken: string, appVersion?: unknown, devic
 
 const DZ_MS = 60 * 60_000; // Algeria time (UTC+1 all year)
 const dzDay = (ms: number) => new Date(ms + DZ_MS).toISOString().slice(0, 10);
-const pbDate = (ms: number) => new Date(ms).toISOString().replace("T", " ");
+export const pbDate = (ms: number) => new Date(ms).toISOString().replace("T", " ");
 const dayId = (day: string) => `d${day.replaceAll("-", "")}`;
 
 /** One day's numbers (metrics.ts keeps them): games started per game, who opened the app, online every 10 minutes. */
@@ -901,7 +901,7 @@ async function recordResult(r: GameResult) {
   const [day, week] = [dayKey(), weekKey()];
   await forPlayer(r.uid, async () => {
     const client = await db();
-    const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro,boostUntil" });
+    const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro,boostUntil,clan" });
     const double = user.vip === true ? 2 : 1; // VIP: double coins and XP
     const { coins } = rewardFor(r);
     const xp = rewardFor(r).xp * (parseDate(user.boostUntil) > Date.now() ? 2 : 1); // the wheel's 2× XP
@@ -915,6 +915,7 @@ async function recordResult(r: GameResult) {
       id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp * double, name: r.name, avatar: r.avatar, frame: r.frame,
       vip: vipLevel(user),
     });
+    if (user.clan) batch.collection("clans").update(user.clan, { "xp+": xp * double }); // his clan's XP
     await batch.send();
   });
 }
@@ -927,12 +928,11 @@ export async function claimAchievement(idToken: string, id: string) {
   const { uid } = await signedIn(idToken);
   return forPlayer(uid, async () => {
     const client = await db();
-    const user = await client.collection("users").getOne(uid, { fields: "stats,vip,vipPro,achievements" });
+    const user = await client.collection("users").getOne(uid, { fields: "stats,vip,vipPro,achievements,clan" });
     const claimed: string[] = Array.isArray(user.achievements) ? user.achievements : [];
     if (claimed.includes(id)) throw new ClaimError("not claimable");
     const friends = await client.collection("friends").getList(1, 1, { filter: client.filter("user = {:uid}", { uid }), fields: "id" });
-    // ponytail: no clans on the server yet: the Clan member achievement can't be reached until they come.
-    const a = reached(id, { stats: user.stats, vip: user.vip === true || user.vipPro === true, friends: friends.totalItems, clan: false });
+    const a = reached(id, { stats: user.stats, vip: user.vip === true || user.vipPro === true, friends: friends.totalItems, clan: !!user.clan });
     if (!a) throw new ClaimError("not claimable");
     await client.collection("users").update(uid, { achievements: [...claimed, id], "coins+": a.coins, "diamonds+": a.diamonds });
     return { coins: a.coins, diamonds: a.diamonds };
@@ -1022,8 +1022,15 @@ export async function freeCoins(idToken: string) {
   });
 }
 
+/** Two players of the same clan. */
+async function sameClan(a: string, b: string) {
+  const client = await db();
+  const [x, y] = await Promise.all([a, b].map((id) => client.collection("users").getOne(id, { fields: "clan" })));
+  return !!x.clan && x.clan === y.clan;
+}
+
 /**
- * An avatar or a frame on sale this week, given to a friend who hasn't it: the giver pays its price, the friend gets it
+ * An avatar or a frame on sale this week, given to a friend (or someone of my clan) who hasn't it: the giver pays its price, the friend gets it
  * (not worn) and a notice with the giver's few words. VIP Pro's own items aren't on sale, so they can't be given.
  */
 export async function sendGift(idToken: string, to: string, kind: "avatar" | "frame", id: number, note: string) {
@@ -1032,7 +1039,7 @@ export async function sendGift(idToken: string, to: string, kind: "avatar" | "fr
   const week = storeNow(plans.store);
   const item = (kind === "avatar" ? week.avatars : week.frames).find((x) => x.id === id);
   if (!item) throw new StoreError("not on sale");
-  if (to === uid || !(await isFriendOfAny(uid, [to]))) throw new StoreError("not a friend");
+  if (to === uid || !((await isFriendOfAny(uid, [to])) || (await sameClan(uid, to)))) throw new StoreError("not a friend");
   const owned = kind === "avatar" ? "avatars" : "frames";
   // Both records, one write at a time for each player; the lower uid locked first, so two friends giving each other
   // at once never wait on each other.
@@ -1225,7 +1232,7 @@ export type ProfileChanges = { username?: unknown; name?: unknown; avatar?: unkn
 const USERNAME = /^[a-z0-9_]{3,16}$/;
 const NAME = /^[A-Za-z0-9_]{3,16}$/; // a display name: the username's characters, in any case
 const NAME_EVERY_MS = 24 * 60 * 60_000;
-const parseDate = (d: unknown) => (d ? Date.parse(String(d).replace(" ", "T")) : NaN);
+export const parseDate = (d: unknown) => (d ? Date.parse(String(d).replace(" ", "T")) : NaN);
 
 /**
  * What a player changes on his own profile (POST /api/profile): his name (3 to 16 letters, digits or _,

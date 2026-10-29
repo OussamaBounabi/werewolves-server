@@ -9,6 +9,7 @@ import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import * as accounts from "../src/accounts.js";
+import * as clans from "../src/clans.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
 import { cleanMissionPlan, cleanStorePlan, cleanTiers } from "../src/plans.js";
@@ -366,6 +367,49 @@ describe("PocketBase", function () {
       await assert.rejects(accounts.claimAchievement(p.idToken, "clan"), /not claimable/); // no clans yet
       const me = await user(p.id);
       assert.deepStrictEqual([me.coins, me.achievements], [200, ["firstWin"]]);
+    });
+
+    it("clans: made for diamonds from level 5, joined by their rule, run by roles, left, ended", async () => {
+      const look = { name: `Wolves ${++seq}`, tag: `W${seq % 100}`, motto: "", shape: "shield", color: 0, join: "request", minLevel: 1 };
+      const [lead, a, b, c] = [await player(), await player(), await player(), await player()];
+      await assert.rejects(clans.createClan(lead.idToken, look), /level/);
+      await admin.collection("users").update(lead.id, { xp: 1600, diamonds: 150 });
+      const { id } = await clans.createClan(lead.idToken, look);
+      assert.deepStrictEqual([(await user(lead.id)).diamonds, (await user(lead.id)).clan], [50, id]);
+      await assert.rejects(clans.createClan(lead.idToken, look), /in a clan/);
+      // On request: a's request, taken by the leader; b is invited past it (a friend of a's).
+      assert.deepStrictEqual(await clans.joinClan(a.idToken, id), { joined: false, requested: true });
+      assert.strictEqual((await lead.pb.collection("clan_requests").getFullList()).length, 1); // his clan's requests
+      await clans.answerRequest(lead.idToken, a.id, true);
+      await befriend(a, b);
+      await clans.inviteToClan(a.idToken, b.id);
+      assert.deepStrictEqual(await clans.joinClan(b.idToken, id), { joined: true, requested: false });
+      assert.strictEqual((await admin.collection("clans").getOne(id)).members, 3);
+      // Roles: only below oneself.
+      await assert.rejects(clans.changeMember(a.idToken, b.id, "kick"), /not allowed/); // a is a member
+      assert.deepStrictEqual(await clans.changeMember(lead.idToken, a.id, "promote"), { role: "elder" });
+      assert.deepStrictEqual(await clans.changeMember(lead.idToken, a.id, "promote"), { role: "coLeader" });
+      await assert.rejects(clans.changeMember(a.idToken, a.id, "promote"), /not allowed/);
+      await assert.rejects(clans.changeMember(a.idToken, b.id, "promote").then(() => clans.changeMember(a.idToken, b.id, "promote")), /not allowed/); // not to his own rank
+      // The chat: members write their own lines; others can't read them.
+      await a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "text", text: "hi" });
+      await refused(a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "joined" }));
+      await refused(c.pb.collection("clan_messages").create({ clan: id, user: c.id, kind: "text", text: "x" }));
+      assert.strictEqual((await c.pb.collection("clan_messages").getFullList()).length, 0);
+      assert.ok((await b.pb.collection("clan_messages").getFullList()).some((m) => m.text === "hi"));
+      // Members' games: the clan's XP.
+      await accounts.recordResults([{ uid: b.id, game: "chess", won: true, minutes: 10, name: "B", avatar: 0, frame: 0 }]);
+      assert.strictEqual((await admin.collection("clans").getOne(id)).xp, 30);
+      // The leader leaves: the co-leader leads; he waits 24 hours to join again.
+      await clans.leaveClan(lead.idToken);
+      assert.strictEqual((await admin.collection("clan_members").getFirstListItem(`user = "${a.id}"`)).role, "leader");
+      await admin.collection("clans").update(id, { join: "open" });
+      await assert.rejects(clans.joinClan(lead.idToken, id), /wait/);
+      // A kick, then the last one out ends the clan.
+      await clans.changeMember(a.idToken, b.id, "kick");
+      assert.strictEqual((await user(b.id)).clan, "");
+      await clans.leaveClan(a.idToken);
+      await assert.rejects(admin.collection("clans").getOne(id));
     });
 
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {

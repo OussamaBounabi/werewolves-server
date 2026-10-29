@@ -34,6 +34,9 @@ import {
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
+import {
+  answerRequest, changeMember, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
+} from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import {
   avatarPrice, cardPrice, cleanMissionPlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
@@ -78,6 +81,7 @@ const bearer = (ctx: { request?: Request }) => ctx.request?.headers.get("authori
 /** The HTTP status for what went wrong with an account request: a bad token, a refusal, or our fault. */
 function statusFor(e: unknown) {
   if (e instanceof AuthError) return 401;
+  if (e instanceof ClanError) return 409;
   if (e instanceof ProfileError) return e.status;
   if (e instanceof StoreError || e instanceof ClaimError) return 409;
   console.error("account request failed", e);
@@ -162,6 +166,33 @@ const server = defineServer({
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
+    // Clans (Authorization: Bearer <ID token>; src/clans.ts says what each one does and refuses).
+    ...Object.fromEntries(
+      (
+        [
+          ["create", (t, b) => createClan(t, b.look)],
+          ["edit", (t, b) => editClan(t, b.look)],
+          ["join", (t, b) => joinClan(t, String(b.clan ?? ""))],
+          ["leave", (t) => leaveClan(t)],
+          ["answer", (t, b) => answerRequest(t, String(b.user ?? ""), b.accept === true)],
+          ["member", (t, b) => changeMember(t, String(b.user ?? ""), String(b.action ?? ""))],
+          ["inactive", (t) => removeInactive(t)],
+          ["invite", (t, b) => inviteToClan(t, String(b.user ?? ""))],
+          ["pin", (t, b) => pinClan(t, b.text)],
+        ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]
+      ).map(([name, run]) => [
+        `api_clan_${name}`,
+        createEndpoint(`/api/clans/${name}`, { method: "POST" }, async (ctx) => {
+          const token = bearer(ctx);
+          if (!token) throw ctx.error(400, { error: "missing token" });
+          try {
+            return (await run(token, (ctx.body ?? {}) as Record<string, unknown>)) as Record<string, unknown>;
+          } catch (e) {
+            throw ctx.error(statusFor(e), { error: (e as Error).message });
+          }
+        }),
+      ]),
+    ),
     // An achievement's prize (Authorization: Bearer <ID token>, body { id }): { coins, diamonds }.
     api_achievement_claim: createEndpoint("/api/achievements/claim", { method: "POST" }, async (ctx) => {
       const token = bearer(ctx), id = (ctx.body as { id?: unknown } | undefined)?.id;
