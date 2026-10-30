@@ -7,6 +7,7 @@ import {
   createEndpoint,
   createMiddleware,
   matchMaker,
+  WebSocketTransport,
 } from "colyseus";
 
 /**
@@ -101,6 +102,8 @@ async function publicRooms(name: string) {
 }
 
 const server = defineServer({
+  // A message up to 160 KB (Colyseus's default is 4 KB): Mystery Item's own pictures (100 KB, base64'd) come in one.
+  transport: new WebSocketTransport({ maxPayload: 160 * 1024 }),
 
   /**
    * Define your room handlers:

@@ -316,8 +316,11 @@ describe("GuessRoom", () => {
   });
 
   it("Mystery Item, own images: each names and sends his picture, seen by him only until the round ends", async () => {
-    // A 1×1 PNG, and a "picture" that isn't one.
-    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    // A PNG as big as the apps send (90 KB: past the WebSocket's 4 KB default), and a "picture" that isn't one.
+    const png = Buffer.concat([
+      Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"),
+      Buffer.alloc(90_000),
+    ]).toString("base64");
     const { room, a, b } = await mysteryPair({ custom: true });
     a.client.send("start_game");
     await until(() => room.phase === "pick" && a.seen.state.custom === true);
