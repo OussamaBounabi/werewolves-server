@@ -195,7 +195,7 @@ describe("PocketBase", function () {
     it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roomLook: null });
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roomLook: null, coins: 0, xp: 0 });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
       // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
       const fresh = await newcomer();
@@ -403,9 +403,9 @@ describe("PocketBase", function () {
       const thisWeek = await admin.collection("clan_weeks").getOne(`${id}_${weekKey()}`);
       assert.strictEqual(thisWeek.points, 30);
       assert.strictEqual((await admin.collection("clan_scores").getOne(`${id}_${b.id}_${weekKey()}`)).points, 30);
-      // Last week's chest: 3 members, 800 points (silver at 750): b played, a didn't.
+      // Last week's chest: a clan of 20 seats, 20,500 points (silver at 20,000): b played, a didn't.
       const last = weekKey(Date.now() - 7 * 86_400_000);
-      await admin.collection("clan_weeks").create({ id: `${id}_${last}`, clan: id, week: last, points: 800 });
+      await admin.collection("clan_weeks").create({ id: `${id}_${last}`, clan: id, week: last, points: 20_500 });
       await admin.collection("clan_scores").create({ id: `${id}_${b.id}_${last}`, clan: id, user: b.id, week: last, points: 800 });
       const [bCoins, aCoins] = [(await user(b.id)).coins, (await user(a.id)).coins];
       await clans.clanWeek({});
