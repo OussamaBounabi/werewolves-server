@@ -22,6 +22,7 @@ import { GuessRoom, MysteryRoom } from "./rooms/GuessRoom.js";
 import { ITEMS, MYSTERY_CATEGORIES } from "./mysteryItems.js";
 import { ImposterRoom } from "./rooms/ImposterRoom.js";
 import { MimicRoom } from "./rooms/MimicRoom.js";
+import { ChessAnalysisRoom } from "./rooms/ChessAnalysisRoom.js";
 import { ClanLoungeRoom } from "./rooms/ClanLoungeRoom.js";
 import { kickFromApp, PresenceRoom } from "./rooms/PresenceRoom.js";
 import { onlineCount, roomsOf, whereIs } from "./presence.js";
@@ -116,6 +117,7 @@ const server = defineServer({
     mimic: defineRoom(MimicRoom),
     presence: defineRoom(PresenceRoom), // every app, while open: who's online
     clan_lounge: defineRoom(ClanLoungeRoom).filterBy(["clan"]), // a clan's voice lounge, one per clan
+    chess_analysis: defineRoom(ChessAnalysisRoom), // the analysis board after a chess game (private: joined by its id)
   },
 
   /**

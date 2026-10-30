@@ -4,7 +4,9 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import { ChessRoom } from "../src/rooms/ChessRoom.js";
 import { StakeTable } from "../src/rooms/stake.js";
-import { chessBotMove, chessEnd, legalMoves, makeMove, posKey, startPos, type ChessPos } from "../src/chess.js";
+import { setEngineCommand } from "../src/engine.js";
+import { ChessAnalysisRoom } from "../src/rooms/ChessAnalysisRoom.js";
+import { chessBotMove, chessEnd, fen as toFen, fromUci, legalMoves, makeMove, posKey, san, startPos, type ChessPos } from "../src/chess.js";
 import { checkersBotMove, checkersEnd, checkersKey, checkersMoves, checkersPlay, checkersStart, type CheckersPos } from "../src/checkers.js";
 
 /** A position from FEN (tests only). */
@@ -50,6 +52,23 @@ describe("chess rules", () => {
     const p = startPos();
     assert.deepStrictEqual(chessEnd(p, [posKey(p), posKey(p), posKey(p)]), { end: "repetition", winner: null });
     assert.strictEqual(chessEnd(p, [posKey(p)]), null);
+  });
+
+  it("writes moves as players and engines read them (SAN, UCI) and positions as FEN", () => {
+    const sans: string[] = [];
+    let pos = startPos();
+    for (const text of ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "f3g5", "d7d5", "e4d5", "f6d5", "g5f7", "e8f7", "d1f3"]) {
+      const m = fromUci(pos, text)!;
+      sans.push(san(pos, m));
+      pos = makeMove(pos, m);
+    }
+    assert.deepStrictEqual(sans, ["e4", "e5", "Nf3", "Nc6", "Bc4", "Nf6", "Ng5", "d5", "exd5", "Nxd5", "Nxf7", "Kxf7", "Qf3+"]);
+    assert.strictEqual(toFen(startPos()), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    // Castling, promotion with mate, two knights on one square: only as much of the origin as it takes.
+    assert.strictEqual(san(fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0"), { from: 4, to: 6 }), "O-O");
+    assert.strictEqual(san(fen("7k/4P3/6K1/8/8/8/8/8 w - - 0"), { from: 52, to: 60, promo: "q" }), "e8=Q#");
+    assert.strictEqual(san(fen("7k/8/8/8/8/2N3N1/8/K7 w - - 0"), { from: 22, to: 28 }), "Nge4");
+    assert.strictEqual(fromUci(startPos(), "e2e5"), undefined);
   });
 
   it("the bot takes a free queen and mates in one", () => {
@@ -222,6 +241,50 @@ describe("ChessRoom", () => {
     assert.ok(t.result.reason, "ended with a reason");
   });
 
+  it("rated bots: 1500 plays Stockfish's moves, 1800 only for a VIP Pro host, 600 our own bot", async function () {
+    this.timeout(30_000);
+    setEngineCommand(["node", "--import", "tsx", "test/fake-stockfish.ts"]); // (the first legal move, always)
+    try {
+      const room: any = await colyseus.createRoom("chess", {});
+      const host = await colyseus.connectTo(room);
+      let t: any = null;
+      const errors: any[] = [];
+      host.onMessage("chess", (m) => (t = m));
+      host.onMessage("chess_fx", () => {});
+      host.onMessage("chess_error", (e) => errors.push(e.code));
+      host.send("settings", { color: "white", minutes: 5 });
+      host.send("add_bot", { level: "normal", rating: 1800 });
+      await until(() => errors.includes("vip_pro_rating"));
+      host.send("add_bot", { level: "normal", rating: 1500 });
+      await until(() => t?.seats.length === 2);
+      assert.strictEqual(t.seats.find((s: any) => s.bot).rating, 1500);
+      host.send("start_game");
+      await until(() => t?.phase === "playing");
+      host.send("move", { from: 12, to: 28 }); // e4
+      await until(() => t.plies === 2);
+      // The fake engine's move: black's first legal one (by our list's order), not our bot's.
+      assert.deepStrictEqual([t.last.from, t.last.to], [48, 40], "a7–a6, the engine's");
+      host.send("resign");
+      await until(() => t.phase === "gameover");
+      // 600: our own (weakened) bot, with no engine needed.
+      const r2: any = await colyseus.createRoom("chess", {});
+      const h2 = await colyseus.connectTo(r2);
+      let t2: any = null;
+      h2.onMessage("chess", (m) => (t2 = m));
+      h2.onMessage("chess_fx", () => {});
+      h2.onMessage("chess_error", () => {});
+      h2.send("settings", { color: "white" });
+      h2.send("add_bot", { level: "normal", rating: 600 });
+      await until(() => t2?.seats.length === 2);
+      h2.send("start_game");
+      await until(() => t2?.phase === "playing");
+      h2.send("move", { from: 12, to: 28 });
+      await until(() => t2.plies === 2);
+    } finally {
+      setEngineCommand(null);
+    }
+  });
+
   it("for coins: no bots, each stake taken at the start, the winner paid 90% of the pot; a new stake each game", async function () {
     this.timeout(30_000);
     const coins: Record<string, number> = { pa: 1000, pb: 150 };
@@ -260,6 +323,82 @@ describe("ChessRoom", () => {
       assert.deepStrictEqual([coins.pa, coins.pb], [1080, 50]);
     } finally {
       StakeTable.wallet = wallet;
+    }
+  });
+
+  it("the analysis board: the game's moves as its line, variations the owner tries, watchers who only look", async function () {
+    this.timeout(20_000);
+    const room: any = await colyseus.createRoom("chess_analysis", { moves: ["e2e4", "e7e5", "g1f3", "xx", "b8c6"], white: "A", black: "B", result: "1-0" });
+    const owner = await colyseus.connectTo(room, { name: "Owner" });
+    let a: any = null, w: any = null;
+    owner.onMessage("analysis", (m) => (a = m));
+    owner.onMessage("analysis_error", () => {});
+    await until(() => a !== null);
+    assert.deepStrictEqual(a.nodes.map((n: any) => n.san), ["", "e4", "e5", "Nf3"], "the line stops at the first illegal move");
+    assert.strictEqual(a.current, 3, "it opens where the game ended");
+    owner.send("go", { node: 1 }); // after 1. e4
+    await until(() => a.current === 1);
+    assert.strictEqual(a.turn, 1);
+    owner.send("move", { from: 50, to: 34 }); // 1... c5: a variation beside e5
+    await until(() => a.nodes.length === 5);
+    assert.deepStrictEqual([a.nodes[4].san, a.nodes[1].children], ["c5", [2, 4]]);
+    const watcher = await colyseus.connectTo(room, { name: "Friend" });
+    watcher.onMessage("analysis", (m) => (w = m));
+    watcher.onMessage("analysis_error", () => {});
+    await until(() => w !== null && a.watchers.length === 1);
+    assert.deepStrictEqual([w.moves.length, a.moves.length > 0, w.current], [0, true, 4], "only the owner moves; the watcher sees where he is");
+    watcher.send("go", { node: 0 });
+    await wait(80);
+    assert.strictEqual(a.current, 4, "a watcher can't move the board");
+    // He asks to move it: the owner says no, then yes.
+    const asked: any[] = [], answers: any[] = [];
+    owner.onMessage("lead_asked", (m) => asked.push(m));
+    watcher.onMessage("lead_answer", (m) => answers.push(m));
+    watcher.send("ask_lead");
+    await until(() => asked.length === 1 && a.asking.length === 1);
+    owner.send("give_lead", { id: asked[0].id, yes: false });
+    await until(() => answers.length === 1);
+    assert.deepStrictEqual([answers[0].yes, a.owner === a.me], [false, true]);
+    watcher.send("ask_lead");
+    await until(() => asked.length === 2);
+    owner.send("give_lead", { id: asked[1].id, yes: true });
+    await until(() => answers.length === 2 && w.owner === w.me);
+    assert.ok(w.moves.length > 0, "he moves the board now");
+    w = null;
+    await watcher.leave(); // (the owner, now: the board goes back to the first one)
+    await until(() => a.owner === a.me, 5000); // back to him
+  });
+
+  it("the analysis board's engine (VIP Pro): the score and best line as he walks, then the game's review", async function () {
+    this.timeout(30_000);
+    setEngineCommand(["node", "--import", "tsx", "test/fake-stockfish.ts"]); // (always +25 for the side to move)
+    try {
+      // Not a VIP Pro: no engine.
+      const plain: any = await colyseus.createRoom("chess_analysis", { moves: ["e2e4"] });
+      const p = await colyseus.connectTo(plain, { name: "Plain" });
+      let pa: any = null;
+      p.onMessage("analysis", (m) => (pa = m));
+      p.send("review");
+      await until(() => pa !== null);
+      await wait(300);
+      assert.deepStrictEqual([pa.pro, pa.eval, pa.review, pa.reviewing], [false, null, null, null]);
+      await p.leave();
+      ChessAnalysisRoom.proForAll = true;
+      const room: any = await colyseus.createRoom("chess_analysis", { moves: ["e2e4", "e7e5", "g1f3"] });
+      const owner = await colyseus.connectTo(room, { name: "Pro" });
+      let a: any = null;
+      owner.onMessage("analysis", (m) => (a = m));
+      owner.onMessage("analysis_error", () => {});
+      await until(() => a?.eval != null);
+      // After 3. Nf3 black moves: +25 for him is −25 for white; the line in moves as players read them.
+      assert.deepStrictEqual([a.pro, a.eval.cp, a.eval.line.length], [true, -25, 1]);
+      owner.send("review");
+      await until(() => a.review != null, 20_000);
+      assert.deepStrictEqual(a.review.marks.map((m: any) => m.node), [1, 2, 3], "a mark for each move of the line");
+      assert.ok(a.review.white.accuracy > 0 && a.review.white.rating > 0);
+    } finally {
+      ChessAnalysisRoom.proForAll = false;
+      setEngineCommand(null);
     }
   });
 

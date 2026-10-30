@@ -2,7 +2,12 @@ import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
-import { canMate, chessBotMove, chessBotTakesDraw, chessEnd, inCheck, kingOf, legalMoves, makeMove, posKey, startPos, type ChessPos } from "../chess.js";
+import {
+  canMate, CHESS_RATINGS, chessBotMove, chessBotTakesDraw, chessEnd, fen, FREE_RATING, fromUci, inCheck, kingOf, legalMoves, makeMove,
+  posKey, ratedBot, startPos, uci, type ChessPos,
+} from "../chess.js";
+import { engineAvailable, engineMove } from "../engine.js";
+import { saveChessGame } from "../chessGames.js";
 import {
   checkersBotMove, checkersBotTakesDraw, checkersEnd, checkersKey, checkersMoves, checkersPlay, checkersStart, sameMove, type CheckersPos,
 } from "../checkers.js";
@@ -34,6 +39,7 @@ type Color = 0 | 1;
 type Seat = {
   id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string;
   connected: boolean; bot: BotLevel | null; left: boolean;
+  rating?: number; // a chess bot's rating (CHESS_RATINGS): Stockfish from 1320, our own bot below
 };
 type Phase = "lobby" | "playing" | "gameover";
 type Last = { from: number; to: number; path?: number[]; captures?: number[]; capture: boolean; castle: boolean; promo?: string; crowned: boolean; check: boolean };
@@ -92,6 +98,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   private checkers: CheckersPos = checkersStart();
   private keys: string[] = []; // every position so far (repetitions)
   private history: Snapshot[] = []; // before each move (takebacks)
+  private played: string[] = []; // chess: this game's moves ("e2e4"), for the analysis board and the saved game
   private last: Last | null = null;
   private clocks: [number, number] = [0, 0]; // ms left, white's and black's, at the start of this turn
   private turnStartedAt = 0;
@@ -116,7 +123,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     on<Settings>("settings", (c, m) => {
       if (this.phase === "lobby" && this.idOf(c) === this.hostId) this.applySettings(m);
     });
-    on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
+    on<{ level: string; rating?: number }>("add_bot", (c, m) => this.handleAddBot(c, m.level, m.rating));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
     on("start_game", (c) => this.handleStart(c));
     on("sit", (c) => this.handleSit(c));
@@ -130,6 +137,12 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
+    // A player opened the analysis board after the game: the table may join it.
+    this.onMessage("analysis_open", (client, msg: { roomId?: string }) => {
+      const seat = this.seat(this.idOf(client));
+      if (this.phase !== "gameover" || !seat || typeof msg?.roomId !== "string") return;
+      this.broadcast("analysis_open", { by: seat.name, id: seat.id, roomId: msg.roomId }, { except: client });
+    });
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
       this.invited.add(msg.uid);
@@ -315,9 +328,12 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.updateListing();
   }
 
-  private handleAddBot(client: Client, level: string) {
+  /** A bot at the table: checkers by its level; chess by a rating (above FREE_RATING, a VIP Pro host's only). */
+  private handleAddBot(client: Client, level: string, rating?: number) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= SEATS) return;
     if (this.stake.amount) return "stake_bots";
+    const rated = CHESS_RATINGS.includes(Number(rating)) ? Number(rating) : undefined;
+    if (rated && rated > FREE_RATING && this.seat(this.hostId)?.vip !== "pro") return "vip_pro_rating";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -330,6 +346,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       connected: true,
       bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
       left: false,
+      ...(rated ? { rating: rated } : {}),
     });
     this.updateListing();
   }
@@ -424,6 +441,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.checkers = checkersStart();
     this.keys = [this.key()];
     this.history = [];
+    this.played = [];
     this.last = null;
     this.offer = null;
     this.drawAskedAt.clear();
@@ -444,7 +462,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.botTimer?.clear();
     this.timer = this.clock.setTimeout(() => (this.flag(), this.sync()), this.clocks[this.turn] + LATE_MS);
     const seat = this.seatOf(this.turn);
-    if (seat?.bot) this.botTurn(seat.bot);
+    if (seat?.bot) this.botTurn(seat.bot, seat.rating);
   }
 
   /** The clock of the side to move ran out. */
@@ -456,16 +474,33 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.finish(draw ? null : winner, draw ? "time_material" : "time");
   }
 
-  private botTurn(level: BotLevel) {
+  private botTurn(level: BotLevel, rating?: number) {
     // It thinks like a person, a little longer when it has the time (never more than a twentieth of what it has left).
     const think = Math.min(400 + Math.random() * 1200, this.clocks[this.turn] / 20) * ChessRoom.botSpeed;
+    const ply = this.played.length;
     this.botTimer = this.clock.setTimeout(() => {
       const seat = this.seatOf(this.turn);
       if (this.phase !== "playing" || !seat?.bot) return;
-      // ponytail: the bot's search (up to 1.5 s at hard) blocks the server's loop; a worker if rooms pile up
-      if (this.variant === "chess") this.playChess(chessBotMove(this.chess, level));
-      else this.playCheckers(checkersBotMove(this.checkers, level, this.forced));
-      this.sync();
+      if (this.variant !== "chess") {
+        this.playCheckers(checkersBotMove(this.checkers, level, this.forced));
+        return this.sync();
+      }
+      // A rated bot: our own below 1320 (or with no engine on this server), Stockfish at its rating above.
+      const own = rating ? ratedBot(rating) : null;
+      if (!rating || own || !engineAvailable()) {
+        // ponytail: the bot's search (up to 1.5 s at hard) blocks the server's loop; a worker if rooms pile up
+        this.playChess(chessBotMove(this.chess, own ?? (rating ? "hard" : level)));
+        return this.sync();
+      }
+      const ms = Math.min(1500, Math.max(150, this.clocks[this.turn] / 40));
+      engineMove(fen(this.chess, ply), rating, ms)
+        .catch((): null => null)
+        .then((text) => {
+          // (the game may have moved on meanwhile: a takeback, the end, a resignation)
+          if (this.phase !== "playing" || this.played.length !== ply || !this.seatOf(this.turn)?.bot) return;
+          this.playChess((text && fromUci(this.chess, text)) || chessBotMove(this.chess, "hard"));
+          this.sync();
+        });
     }, think);
   }
 
@@ -501,6 +536,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     const before = this.chess;
     const piece = before.board[m.from].toLowerCase();
     this.chess = makeMove(before, m);
+    this.played.push(uci(m));
     this.last = {
       from: m.from, to: m.to, ...(m.promo ? { promo: m.promo } : {}), crowned: false, // (no undefined: the apps' msgpack refuses it)
       capture: before.board[m.to] !== "" || (piece === "p" && m.to === before.ep),
@@ -579,6 +615,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       this.last = snap.last;
       this.keys.length = snap.keys;
     } while (this.history.length > 0 && this.turn !== color);
+    this.played.length = this.history.length; // (chess: one move a snapshot)
     this.offer = null;
     this.startTurn();
   }
@@ -605,6 +642,14 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.phase = "gameover";
     const won = this.seats.filter((s) => winner !== null && this.colorOf(s) === winner).map((s) => s.uid); // a draw: nobody
     recordTable("chess", this.seats, won, this.startedAt);
+    if (this.variant === "chess") {
+      const white = this.seats.find((s) => this.colorOf(s) === 0), black = this.seats.find((s) => this.colorOf(s) === 1);
+      saveChessGame({
+        white: white?.uid ?? "", black: black?.uid ?? "", whiteName: white?.name ?? "", blackName: black?.name ?? "",
+        moves: this.played, result: winner === null ? "1/2-1/2" : winner === 0 ? "1-0" : "0-1", reason,
+        minutes: this.minutes, increment: this.increment,
+      }).catch((e) => console.error("chess: saving the game failed", e));
+    }
     this.stake.settle(this.seats.filter((s) => winner !== null && this.colorOf(s) === winner).map((s) => s.playerId));
     this.offer = null;
     this.timer?.clear();
@@ -722,7 +767,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       swap: this.swap,
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected && !s.left,
-        bot: s.bot ?? "", color: this.phase === "lobby" ? -1 : this.colorOf(s),
+        bot: s.bot ?? "", rating: s.rating ?? 0, color: this.phase === "lobby" ? -1 : this.colorOf(s),
       })),
       board: chess ? this.chess.board : this.checkers.board,
       turn: this.turn,
@@ -739,6 +784,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       spectators: this.spectators.size,
       stake: this.stake.amount,
       stakeLast: this.stake.last, // the last game's payouts
+      uci: this.variant === "chess" ? this.played : [], // the game's moves, for the analysis board
     };
     for (const client of this.clients) client.send("chess", { ...table, me: this.idOf(client) });
   }

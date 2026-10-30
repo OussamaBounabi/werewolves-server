@@ -247,16 +247,35 @@ class Search {
 }
 
 export type BotLevel = "easy" | "normal" | "hard";
-const LEVEL: Record<BotLevel, { depth: number; noise: number; random: number; quiescence: boolean; ms: number }> = {
+/** How a bot plays: how deep it looks, how much it misjudges (centipawns), how often it plays at random, how long. */
+type BotParams = { depth: number; noise: number; random: number; quiescence: boolean; ms: number };
+const LEVEL: Record<BotLevel, BotParams> = {
   easy: { depth: 1, noise: 90, random: 0.25, quiescence: false, ms: 300 },
   normal: { depth: 2, noise: 25, random: 0, quiescence: true, ms: 700 },
   hard: { depth: 4, noise: 0, random: 0, quiescence: true, ms: 1500 },
 };
 
+/**
+ * The ratings a chess bot may play at (the host picks one); above FREE_RATING only for a VIP Pro host. Stockfish plays
+ * from ENGINE_ELO.min (1320) up; below it, our own bot, made weaker step by step.
+ */
+export const CHESS_RATINGS = [400, 600, 800, 1000, 1200, 1500, 1800, 2100, 2400, 2800];
+export const FREE_RATING = 1500;
+const RATED: Record<number, BotParams> = {
+  400: { depth: 1, noise: 220, random: 0.45, quiescence: false, ms: 300 },
+  600: { depth: 1, noise: 120, random: 0.3, quiescence: false, ms: 300 },
+  800: { depth: 1, noise: 70, random: 0.15, quiescence: false, ms: 400 },
+  1000: { depth: 2, noise: 40, random: 0.05, quiescence: true, ms: 600 },
+  1200: { depth: 3, noise: 15, random: 0, quiescence: true, ms: 1000 },
+};
+
+/** Our own bot's play for a rating it can manage (null: Stockfish's, above 1200). */
+export const ratedBot = (rating: number): BotParams | null => RATED[rating] ?? null;
+
 /** The bot's move at [level]: easy blunders now and then, hard looks four moves deep (deepening while time allows). */
-export function chessBotMove(pos: ChessPos, level: BotLevel, rnd: () => number = Math.random): ChessMove {
+export function chessBotMove(pos: ChessPos, level: BotLevel | BotParams, rnd: () => number = Math.random): ChessMove {
   const moves = legalMoves(pos);
-  const L = LEVEL[level];
+  const L = typeof level === "string" ? LEVEL[level] : level;
   if (moves.length === 1 || rnd() < L.random) return moves[Math.floor(rnd() * moves.length)];
   const search = new Search(Date.now() + L.ms);
   let best = moves[0], scored: [number, ChessMove][] = [];
@@ -277,3 +296,60 @@ export function chessBotMove(pos: ChessPos, level: BotLevel, rnd: () => number =
 
 /** The bot, offered a draw: it takes it when it's behind (by its own reckoning, a pawn and a half). */
 export const chessBotTakesDraw = (pos: ChessPos, bot: Color) => (bot === 0 ? 1 : -1) * evaluate(pos.board) < -150;
+
+// ---- notation (the analysis board, the engine, saved games) ----
+
+const FILES = "abcdefgh";
+
+/** "e4" for a square (0 = a1, 63 = h8). */
+export const square = (s: number) => `${FILES[s & 7]}${(s >> 3) + 1}`;
+
+/** A move as the engines write it: "e2e4", "e7e8q". */
+export const uci = (m: ChessMove) => `${square(m.from)}${square(m.to)}${m.promo ?? ""}`;
+
+/** The legal move [text] stands for in [pos] ("e2e4"), or undefined. */
+export const fromUci = (pos: ChessPos, text: string) => legalMoves(pos).find((m) => uci(m) === text);
+
+/** A move as players read it: "Nf3", "exd5", "O-O", "e8=Q+", "Qh5#" (only as much of the origin as it takes). */
+export function san(pos: ChessPos, m: ChessMove): string {
+  const p = pos.board[m.from], kind = p.toLowerCase();
+  let text: string;
+  if (kind === "k" && Math.abs(m.to - m.from) === 2) text = m.to > m.from ? "O-O" : "O-O-O";
+  else {
+    const capture = pos.board[m.to] !== "" || (kind === "p" && m.to === pos.ep);
+    if (kind === "p") {
+      text = `${capture ? `${FILES[m.from & 7]}x` : ""}${square(m.to)}${m.promo ? `=${m.promo.toUpperCase()}` : ""}`;
+    } else {
+      const rivals = legalMoves(pos).filter((x) => x.to === m.to && x.from !== m.from && pos.board[x.from] === p);
+      let from = "";
+      if (rivals.length) {
+        if (!rivals.some((x) => (x.from & 7) === (m.from & 7))) from = FILES[m.from & 7];
+        else if (!rivals.some((x) => x.from >> 3 === m.from >> 3)) from = `${(m.from >> 3) + 1}`;
+        else from = square(m.from);
+      }
+      text = `${kind.toUpperCase()}${from}${capture ? "x" : ""}${square(m.to)}`;
+    }
+  }
+  const next = makeMove(pos, m);
+  return inCheck(next) ? `${text}${legalMoves(next).length === 0 ? "#" : "+"}` : text;
+}
+
+/** The position as FEN (what an engine reads); [ply]: moves played from the start (the move number). */
+export function fen(pos: ChessPos, ply = 0): string {
+  const rows: string[] = [];
+  for (let r = 7; r >= 0; r--) {
+    let row = "", empty = 0;
+    for (let f = 0; f < 8; f++) {
+      const p = pos.board[r * 8 + f];
+      if (p === "") empty++;
+      else {
+        if (empty) row += empty;
+        row += p;
+        empty = 0;
+      }
+    }
+    rows.push(empty ? row + empty : row);
+  }
+  const ep = pos.ep >= 0 ? square(pos.ep) : "-";
+  return `${rows.join("/")} ${pos.turn === 0 ? "w" : "b"} ${pos.castle || "-"} ${ep} ${pos.half} ${Math.floor(ply / 2) + 1}`;
+}
