@@ -4,7 +4,7 @@ import {
   currentPlans, db, type Done, forPlayer, grantVip, isFriendOfAny, maybe, parseDate, pbDate, pushToUsers, saveDone, signedIn,
 } from "./accounts.js";
 import { weekKey } from "./missions.js";
-import { prizeFor } from "./plans.js";
+import { prizeFor, type ChestPlan } from "./plans.js";
 
 /**
  * Clans: making one (💎100, from level 5), its look and who may join (open, on request, closed; from a level), joining
@@ -366,16 +366,23 @@ export async function shareRoom(idToken: string, roomId: unknown, game: unknown)
   return { ok: true };
 }
 
-/** The weekly chest: points each member brings, for bronze, silver, gold; what every member who played wins. */
-export const CHESTS = [
-  { perMember: 100, coins: 300, diamonds: 0 },
-  { perMember: 250, coins: 800, diamonds: 5 },
-  { perMember: 500, coins: 1500, diamonds: 15 },
+/**
+ * The weekly chest: bronze, silver, gold, each its points for a clan of 20 seats (a bigger clan's goals grow with its
+ * seats: 50 seats, 2.5 times) and what every member who played wins. The admin may change them (plan "chests").
+ */
+export const DEFAULT_CHESTS: ChestPlan = [
+  { goal: 10_000, coins: 300, diamonds: 0 },
+  { goal: 20_000, coins: 800, diamonds: 5 },
+  { goal: 40_000, coins: 1500, diamonds: 15 },
 ];
+export const chests = () => currentPlans().chests ?? DEFAULT_CHESTS;
 
-/** The highest chest a clan of [members] opened with [points] (-1: none). */
-export function chestFor(points: number, members: number) {
-  return CHESTS.findLastIndex((c) => points >= c.perMember * Math.max(1, members));
+/** A chest's points for a clan of [seats]. */
+export const chestGoal = (goal: number, seats: number) => Math.round((goal * seats) / 20);
+
+/** The highest chest a clan of [seats] opened with [points] (-1: none). */
+export function chestFor(points: number, seats: number, list = chests()) {
+  return list.findLastIndex((c) => points >= chestGoal(c.goal, seats));
 }
 
 /**
@@ -403,10 +410,11 @@ export async function clanWeek(done: Done) {
       ]);
       const playedThere = new Set(scores.map((s) => s.user));
       const played = members.map((m) => m.user).filter((u) => playedThere.has(u));
-      const chest = chestFor(Number(row.points) || 0, Number(clan.members) || 1);
+      const list = chests();
+      const chest = chestFor(Number(row.points) || 0, clanSeats(Number(clan.xp) || 0), list);
       const prize = prizeFor(tiers, i + 1);
-      const coins = (chest >= 0 ? CHESTS[chest].coins : 0) + (prize?.coins ?? 0);
-      const diamonds = (chest >= 0 ? CHESTS[chest].diamonds : 0) + (prize?.diamonds ?? 0);
+      const coins = (chest >= 0 ? list[chest].coins : 0) + (prize?.coins ?? 0);
+      const diamonds = (chest >= 0 ? list[chest].diamonds : 0) + (prize?.diamonds ?? 0);
       const vipDays = prize?.vipDays ?? 0;
       if (played.length === 0 || (coins === 0 && diamonds === 0 && vipDays === 0)) continue;
       for (const uid of played) {

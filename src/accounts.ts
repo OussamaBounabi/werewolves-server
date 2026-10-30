@@ -8,7 +8,7 @@ import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missio
 import { atNight, reached } from "./achievements.js";
 import { clanWeek } from "./clans.js";
 import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
-import { missionsNow, prizeFor, storeNow, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
+import { missionsNow, prizeFor, storeNow, type ChestPlan, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
 
 /**
  * Player accounts. Players log in with Firebase Auth, as before: the server checks their Firebase ID
@@ -512,11 +512,13 @@ const plans: {
   missions: MissionPlan | null;
   rewards: RewardTier[] | null;
   clanrewards: RewardTier[] | null; // the clan ranking's, for each member who played
+  chests: ChestPlan | null; // the weekly clan chest's goals and prizes
 } = {
   store: null,
   missions: null,
   rewards: null,
   clanrewards: null,
+  chests: null,
 };
 type PlanId = keyof typeof plans;
 

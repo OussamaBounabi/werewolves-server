@@ -49,6 +49,9 @@ export type MissionPlan = {
 /** The weekly ranking's prizes: places [from]–[to] each win this. */
 export type RewardTier = { from: number; to: number; coins: number; diamonds: number; vipDays: number };
 
+/** The weekly clan chest: bronze, silver, gold, each its points for a 20-seat clan and what each member who played wins. */
+export type ChestPlan = { goal: number; coins: number; diamonds: number }[];
+
 const DAY_MS = 86_400_000;
 const keyTime = (key: string) => Date.parse(`${key.slice(2)}T00:00:00Z`); // "d-2026-10-16" / "w-2026-10-12"
 
@@ -194,6 +197,18 @@ export function cleanMissionPlan(v: unknown): MissionPlan {
 export const prizeFor = (tiers: RewardTier[], rank: number) => tiers.find((t) => t.from <= rank && rank <= t.to) ?? null;
 
 /** The prizes, checked: places 1–100, in order, none counted twice. */
+/** The admin's chests: three, their goals rising (a goal not above the last is raised past it). */
+export function cleanChests(v: unknown): ChestPlan {
+  const list = Array.isArray(v) ? v : [];
+  const chests: ChestPlan = [];
+  for (let i = 0; i < 3; i++) {
+    const c = list[i] as any;
+    const goal = Math.max(int(c?.goal, 100, 10_000_000), (chests[i - 1]?.goal ?? 0) + 1);
+    chests.push({ goal, coins: int(c?.coins, 0, 1_000_000), diamonds: int(c?.diamonds, 0, 100_000) });
+  }
+  return chests;
+}
+
 export function cleanTiers(v: unknown): RewardTier[] {
   const tiers = (Array.isArray(v) ? v : [])
     .map((t: any) => {

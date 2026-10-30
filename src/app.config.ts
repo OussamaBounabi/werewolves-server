@@ -36,12 +36,12 @@ import {
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
-  answerRequest, changeMember, CHESTS, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
+  answerRequest, changeMember, chests, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
   loungeOf, shareRoom,
 } from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import {
-  avatarPrice, cardPrice, cleanMissionPlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
+  avatarPrice, cardPrice, cleanChests, cleanMissionPlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
 } from "./plans.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -164,7 +164,7 @@ const server = defineServer({
     // The clan ranking's prizes (each member who played) and the weekly chest's: { tiers, chests }.
     api_clan_rewards: createEndpoint("/api/clan-rewards", { method: "GET" }, async () => ({
       tiers: currentPlans().clanrewards ?? [],
-      chests: CHESTS,
+      chests: chests(),
     })),
     // Claim a mission's reward: Authorization: Bearer <Firebase ID token>, body { id }.
     api_claim: createEndpoint("/api/missions/claim", { method: "POST" }, async (ctx) => {
@@ -451,7 +451,16 @@ const server = defineServer({
       return { plan, dayIndex: now.dayIndex, weekIndex: now.weekIndex };
     }),
     api_admin_rewards: adminEndpoint("/api/admin/rewards", "GET", async () => ({ tiers: currentPlans().rewards ?? [] })),
-    api_admin_clan_rewards: adminEndpoint("/api/admin/clan-rewards", "GET", async () => ({ tiers: currentPlans().clanrewards ?? [] })),
+    api_admin_clan_rewards: adminEndpoint("/api/admin/clan-rewards", "GET", async () => ({
+      tiers: currentPlans().clanrewards ?? [],
+      chests: chests(),
+    })),
+    // The weekly clan chest's goals (a 20-seat clan's) and prizes: { chests: [{ goal, coins, diamonds }] × 3 }.
+    api_admin_clan_chests_save: adminEndpoint("/api/admin/clan-chests/save", "POST", async (ctx) => {
+      const list = cleanChests((ctx.body as { chests?: unknown } | undefined)?.chests);
+      await savePlan("chests", list);
+      return { chests: list };
+    }),
     api_admin_clan_rewards_save: adminEndpoint("/api/admin/clan-rewards/save", "POST", async (ctx) => {
       const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
       await savePlan("clanrewards", tiers);

@@ -1,5 +1,6 @@
 import assert from "assert";
 import { chestFor, clanLevel, clanSeats, cleanLook, playerLevel } from "../src/clans.js";
+import { cleanChests } from "../src/plans.js";
 
 const look = { name: "Night Wolves", tag: "nw", motto: "We play every night", shape: "shield", color: 0, join: "request", minLevel: 5 };
 
@@ -10,10 +11,15 @@ describe("clans", () => {
     assert.deepStrictEqual([0, 99, 100, 1600, 1700].map(playerLevel), [1, 1, 2, 5, 5]);
   });
 
-  it("the weekly chest by points per member: bronze 100, silver 250, gold 500; the highest only", () => {
-    assert.deepStrictEqual([0, 1999, 2000, 4999, 5000, 9999, 10_000, 1e6].map((p) => chestFor(p, 20)), [-1, -1, 0, 0, 1, 1, 2, 2]);
-    assert.strictEqual(chestFor(100, 1), 0);
-    assert.strictEqual(chestFor(100, 0), 0); // (a clan counts at least one)
+  it("the weekly chest: 10k, 20k, 40k points for 20 seats, scaled to the seats; the highest only; the admin's own", () => {
+    // 20 seats: 10k, 20k, 40k; 50 seats: 2.5 times as much.
+    assert.deepStrictEqual([0, 9999, 10_000, 19_999, 20_000, 39_999, 40_000, 1e6].map((p) => chestFor(p, 20)), [-1, -1, 0, 0, 1, 1, 2, 2]);
+    assert.deepStrictEqual([24_999, 25_000, 50_000, 99_999, 100_000].map((p) => chestFor(p, 50)), [-1, 0, 1, 1, 2]);
+    // The admin's: three, goals rising.
+    const mine = cleanChests([{ goal: 500, coins: 10 }, { goal: 300, diamonds: 2 }, { goal: 2000, coins: -5 }]);
+    assert.deepStrictEqual(mine.map((c) => c.goal), [500, 501, 2000]);
+    assert.deepStrictEqual([mine[0].coins, mine[1].diamonds, mine[2].coins], [10, 2, 0]);
+    assert.strictEqual(chestFor(1250, 50, mine), 0);
   });
 
   it("a clan's look: the tag in capitals, everything checked", () => {
