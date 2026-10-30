@@ -7,6 +7,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
  * starts a new one.
  */
 // (STOCKFISH_BIN may carry arguments, split on spaces: a local test engine "node --import tsx test/fake-stockfish.ts".)
+try {
+  process.loadEnvFile(); // .env next to package.json (git-ignored), whichever module is read first
+} catch {}
 let command: string[] | null = process.env.STOCKFISH_BIN ? process.env.STOCKFISH_BIN.trim().split(/\s+/) : null;
 let proc: ChildProcessWithoutNullStreams | null = null;
 let started: Promise<void> | null = null;
