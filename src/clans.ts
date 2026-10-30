@@ -362,7 +362,7 @@ export async function shareRoom(idToken: string, roomId: unknown, game: unknown)
   await client.collection("clan_messages").create({ clan: me.clan, user: uid, kind: "room", data: { roomId: room, game: g } });
   void pushToUsers(others.map((o) => o.user), {
     sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`, body: `🎮 ${who.name || who.username} · ${g}`, roomId: room,
-  }).catch(() => {});
+  }, "clanRooms").catch(() => {});
   return { ok: true };
 }
 

@@ -771,19 +771,62 @@ export async function savePushToken(idToken: string, token: string) {
 
 const pushed = new Set<string>(); // messages already pushed (each once)
 
+/** The notifications a player may turn off: a clanmate opened a room, a line in the clan's chat. */
+export const NOTIFY_KINDS = ["clanRooms", "clanChat"] as const;
+export type NotifyKind = (typeof NOTIFY_KINDS)[number];
+
+/** Turns his notifications on or off ({ clanRooms?: boolean, clanChat?: boolean }): what he has now. */
+export async function setNotify(idToken: string, body: Record<string, unknown>) {
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const users = (await db()).collection("users");
+    const u = await users.getOne(uid, { fields: "notify" });
+    const notify: Record<string, boolean> = { ...(u.notify ?? {}) };
+    for (const k of NOTIFY_KINDS) if (typeof body[k] === "boolean") notify[k] = body[k] as boolean;
+    await users.update(uid, { notify });
+    return { notify };
+  });
+}
+
+/** A line he just wrote in his clan's chat, to his clanmates' phones (those who didn't turn it off): once, within a minute. */
+export async function pushClanLine(idToken: string, id: string) {
+  const { uid } = await signedIn(idToken);
+  if (!id || pushed.has(id)) return { ok: true };
+  const client = await db();
+  const line = await client.collection("clan_messages").getOne(id, { expand: "clan,user" });
+  if (line.user !== uid || line.kind !== "text" || Date.now() - Date.parse(String(line.created).replace(" ", "T")) > 60_000) {
+    return { ok: true };
+  }
+  pushed.add(id);
+  if (pushed.size > 10_000) pushed.clear();
+  const clan = line.expand?.clan, who = line.expand?.user;
+  const others = await client.collection("clan_members").getFullList({
+    filter: client.filter("clan = {:clan} && user != {:uid}", { clan: line.clan, uid }), fields: "user",
+  });
+  await pushToUsers(others.map((o) => o.user), {
+    sender: "clan", title: `[${clan?.tag ?? ""}] ${clan?.name ?? ""}`,
+    body: `${who?.name || who?.username || ""}: ${String(line.text ?? "")}`.slice(0, 300),
+  }, "clanChat");
+  return { ok: true };
+}
+
 /**
  * A message he has just saved (a line, a voice message, an invitation), to his friend's phones: his name, its text.
  * Only his own, once, within a minute of it.
  */
-/** [data] pushed to these players' phones (the app shows its title and body; a tap opens what its sender says). */
-export async function pushToUsers(uids: string[], data: Record<string, string>) {
+/**
+ * [data] pushed to these players' phones (the app shows its title and body; a tap opens what its sender says).
+ * [kind]: a notification each may turn off (users.notify), skipped for those who did.
+ */
+export async function pushToUsers(uids: string[], data: Record<string, string>, kind?: NotifyKind) {
   if (!pb || uids.length === 0) return;
   const client = await db();
   const rows = await client.collection("users").getFullList({
     filter: uids.map((_, i) => `id = {:u${i}}`).map((f, i) => client.filter(f, { [`u${i}`]: uids[i] })).join(" || "),
-    fields: "id,pushTokens",
+    fields: "id,pushTokens,notify",
   });
   for (const u of rows) {
+    if (kind && u.notify?.[kind] === false) continue;
     const tokens: string[] = Array.isArray(u.pushTokens) ? u.pushTokens : [];
     const dead = await pushTo(tokens, data).catch(() => [] as string[]);
     if (dead.length === 0) continue;

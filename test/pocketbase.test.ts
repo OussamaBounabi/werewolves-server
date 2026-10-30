@@ -799,6 +799,15 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${p.id}_${weekKey()}`)).vip, "vip");
     });
 
+    it("turns his clan notifications off and on (one at a time, the other kept); a clan line pushed once", async () => {
+      const p = await player();
+      assert.deepStrictEqual(await accounts.setNotify(p.idToken, { clanChat: false, other: false }), { notify: { clanChat: false } });
+      assert.deepStrictEqual(await accounts.setNotify(p.idToken, { clanRooms: false }), { notify: { clanChat: false, clanRooms: false } });
+      assert.deepStrictEqual(await accounts.setNotify(p.idToken, { clanChat: true }), { notify: { clanChat: true, clanRooms: false } });
+      assert.deepStrictEqual((await user(p.id)).notify, { clanChat: true, clanRooms: false });
+      await assert.rejects(accounts.pushClanLine(p.idToken, "nosuchline12345"));
+    });
+
     it("deletes chat messages older than the cutoff (voice files too) and keeps the newer ones", async () => {
       const [a, b] = [await player(), await player()];
       await befriend(a, b);

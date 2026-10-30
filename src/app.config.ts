@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { catalog, legends, playerInfo } from "./guess.js";
 import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
-  buyAvatar, buyCoins, buyFrame, claimAchievement, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
+  buyAvatar, buyCoins, buyFrame, claimAchievement, pushClanLine, setNotify, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
@@ -203,6 +203,8 @@ const server = defineServer({
           ["invite", (t, b) => inviteToClan(t, String(b.user ?? ""))],
           ["pin", (t, b) => pinClan(t, b.text)],
           ["room", (t, b) => shareRoom(t, b.roomId, b.game)],
+          ["line", (t, b) => pushClanLine(t, String(b.id ?? ""))], // a line just written: to the others' phones
+          ["notify", (t, b) => setNotify(t, b)], // my clan notifications on or off
         ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]
       ).map(([name, run]) => [
         `api_clan_${name}`,
