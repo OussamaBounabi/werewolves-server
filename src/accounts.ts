@@ -938,25 +938,25 @@ async function recordResult(r: GameResult) {
   await forPlayer(r.uid, async () => {
     const client = await db();
     const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro,boostUntil,clan" });
-    const double = user.vip === true ? 2 : 1; // VIP: double coins and XP
+    const double = user.vip === true ? 2 : 1; // VIP: double coins (never XP: everyone climbs the rankings alike)
     const { coins } = rewardFor(r);
     const xp = rewardFor(r).xp * (parseDate(user.boostUntil) > Date.now() ? 2 : 1); // the wheel's 2× XP
     const stats = user.stats;
     const batch = client.createBatch(); // all of it or none of it
-    batch.collection("users").update(r.uid, { "xp+": xp * double, "coins+": coins * double, stats: addResult(stats, r, xp * double) });
+    batch.collection("users").update(r.uid, { "xp+": xp, "coins+": coins * double, stats: addResult(stats, r, xp) });
     for (const period of [day, week]) {
       batch.collection("missions").upsert({ id: missionsId(r.uid, period), user: r.uid, period, ...inc });
     }
     batch.collection("leaderboard").upsert({
-      id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp * double, name: r.name, avatar: r.avatar, frame: r.frame,
+      id: leaderboardId(r.uid, week), week, user: r.uid, "xp+": xp, name: r.name, avatar: r.avatar, frame: r.frame,
       vip: vipLevel(user),
     });
     if (user.clan) {
       // His clan's XP, its points this week and his share of them.
-      batch.collection("clans").update(user.clan, { "xp+": xp * double });
-      batch.collection("clan_weeks").upsert({ id: `${user.clan}_${week}`, clan: user.clan, week, "points+": xp * double });
+      batch.collection("clans").update(user.clan, { "xp+": xp });
+      batch.collection("clan_weeks").upsert({ id: `${user.clan}_${week}`, clan: user.clan, week, "points+": xp });
       batch.collection("clan_scores").upsert({
-        id: `${user.clan}_${r.uid}_${week}`, clan: user.clan, user: r.uid, week, "points+": xp * double,
+        id: `${user.clan}_${r.uid}_${week}`, clan: user.clan, user: r.uid, week, "points+": xp,
       });
     }
     await batch.send();

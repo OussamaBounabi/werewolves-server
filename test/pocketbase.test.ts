@@ -781,7 +781,7 @@ describe("PocketBase", function () {
       await accounts.savePlan("store", cleanStorePlan({}));
     });
 
-    it("pays today's planned missions (not the usual ones), and doubles a VIP's coins and XP from games", async () => {
+    it("pays today's planned missions (not the usual ones), and doubles a VIP's coins from games, not his XP", async () => {
       const p = await player();
       await accounts.savePlan("missions", cleanMissionPlan({
         daysStart: dayKey(), days: [[{ id: "m1", counter: "games", target: 1, coins: 42 }]], weeksStart: weekKey(), weeks: [],
@@ -790,12 +790,12 @@ describe("PocketBase", function () {
       await assert.rejects(accounts.claimMission(p.idToken, "d_play3"), /unknown mission/);
       assert.deepStrictEqual(await accounts.claimMission(p.idToken, "m1"), { coins: 42, xp: 0, diamonds: 0 });
       await accounts.savePlan("missions", cleanMissionPlan({}));
-      // A VIP wins double (10 minutes won: 30 XP and 30 coins, twice), his badge in the ranking.
+      // A VIP wins double coins (10 minutes won: 30 coins, twice) but the same 30 XP as anyone; his badge in the ranking.
       await accounts.grantVip(p.id, "vip", 1);
       const before = await user(p.id);
       await accounts.recordResults([result(p.id, true)]);
       const after = await user(p.id);
-      assert.deepStrictEqual([after.xp - before.xp, after.coins - before.coins], [60, 60]);
+      assert.deepStrictEqual([after.xp - before.xp, after.coins - before.coins], [30, 60]);
       assert.strictEqual((await admin.collection("leaderboard").getOne(`${p.id}_${weekKey()}`)).vip, "vip");
     });
 
