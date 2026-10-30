@@ -725,6 +725,27 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(r.roles.get(seer.sessionId), "villager");
   });
 
+  it("the green wolf may steal the newer village powers too (the priest); never the doubler, wolfdog or brothers", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, priest: true, greenwolf: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    const [priest, green] = [byRole("priest"), byRole("greenwolf")];
+    room.state.dayNumber = 2;
+    r.wolfTarget = null;
+    r.startGreenWolfStep();
+    const result = green.waitForMessage("green_result");
+    green.send("green_guess", { targetId: priest.sessionId, role: "priest" });
+    assert.strictEqual(((await result) as any).right, true);
+    assert.strictEqual(r.powerOf(green.sessionId), "priest");
+    assert.strictEqual(r.roles.get(priest.sessionId), "villager");
+    for (const never of ["doubler", "wolfdog", "brothers", "villager"]) {
+      r.startGreenWolfStep();
+      green.send("green_guess", { targetId: priest.sessionId, role: never });
+      await new Promise((res) => setTimeout(res, 80));
+      assert.strictEqual(r.greenLeft.get(green.sessionId), 2, never); // refused: no guess spent
+    }
+  });
+
   it("red wolf's pick sleeps through his turn; the white wolf wins alone", async () => {
     const mix = { wolves: 1, villagers: 1, seer: true, witch: false, protector: false, redwolf: true, whitewolf: true };
     const { room, byRole } = await startGame(mix, 5);
@@ -1387,6 +1408,21 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.nightStep === "wolves");
     assert.strictEqual(r.protects.get(doubler.sessionId), villager.sessionId);
     assert.strictEqual(r.protects.get(protector.sessionId), wolf.sessionId);
+  });
+
+  it("a doubler who copies a loner (the alien) becomes a simple villager, not a second alien", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, alien: true, doubler: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    const [doubler, alien] = [byRole("doubler"), byRole("alien")];
+    assert.strictEqual(room.state.nightStep, "doubler");
+    const result = doubler.waitForMessage("doubler_result");
+    doubler.send("copy", { targetId: alien.sessionId });
+    assert.strictEqual(((await result) as any).role, "villager");
+    assert.strictEqual(r.roles.get(doubler.sessionId), "villager");
+    assert.strictEqual(r.powerOf(doubler.sessionId), "villager");
+    assert.strictEqual(r.teamOf(doubler.sessionId), "village");
+    assert.strictEqual(r.roles.get(alien.sessionId), "alien"); // the alien keeps his card
   });
 
   it("the idiot survives his first vote, card shown; the seer wolf reads a card in secret; the hunter wolf shoots when he dies", async () => {

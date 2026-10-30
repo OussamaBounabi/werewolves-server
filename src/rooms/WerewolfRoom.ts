@@ -102,10 +102,16 @@ const isEvil = (r: Role) => WOLF_ROLES.has(r) || LONERS.has(r);
 const cardsOf = (r: Role) => (r === "brothers" ? 2 : 1);
 /** Killing the ancient this way (the village's own hand) switches off every village power. */
 const VILLAGE_KILLS: readonly DeathCause[] = ["vote", "witch", "hunter", "dragon", "dictator", "alchemist"];
-/** Village powers the green wolf can guess — and steal on a right guess. */
+/**
+ * Village powers the green wolf can guess — and steal on a right guess: every village role with a power, except the
+ * doubler (his copy would replace the thief's own wolf card), the wolfdog (his choice is made on night 1) and the two
+ * brothers (a pair). The app offers those dealt in the game.
+ */
 const STEALABLE: readonly Role[] = [
   "seer", "witch", "protector", "hunter", "wildhunter", "detective", "bear", "redhood", "tripleface",
   "dragon", "barbe", "dictator", "judge", "trickster", "fox", "ancient", "joker", "raven", "owl",
+  "cupid", "wildchild", "idiot", "knight", "cat", "littlegirl", "shepherd", "rabbit", "policeman", "mirror", "priest",
+  "alchemist", "servant", "puppet",
 ];
 /** When fewer players join than the mix plans, specials leave the deck in this order. */
 const DROP_ORDER: readonly Special[] = [
@@ -1107,14 +1113,17 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * He becomes the copied role, fresh (unused powers, both potions), and plays it this very night beside the
-   * player he copied: every step waits for all the holders of its role. A wolf copy hunts tonight.
+   * player he copied: every step waits for all the holders of its role. A wolf copy hunts tonight. A loner's card
+   * (white wolf, alien, bomber, piper, guitarist, killer) isn't copied: he becomes a simple villager (his rule).
    */
   private handleCopy(client: Client, msg: { targetId: string }) {
     if (!this.stepActor(client, "doubler", "doubler")) return;
     const id = client.sessionId;
     const target = msg?.targetId;
     if (!this.isAlive(target) || target === id) return;
-    const copied = this.roles.get(target)!;
+    const card = this.roles.get(target)!;
+    const copied: Role = LONERS.has(card) ? "villager" : card;
+    if (copied === "villager") this.dealt.add("villager"); // (there is one in the game now, whatever was dealt)
     this.roles.set(id, copied);
     this.powers.set(id, copied);
     this.spent.delete(id);
