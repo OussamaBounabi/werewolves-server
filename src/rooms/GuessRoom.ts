@@ -30,6 +30,10 @@ import { cupPlaces, StakeTable } from "./stake.js";
  *
  * Mystery Item (MysteryRoom, below) is this game with things instead of footballers: always in trust mode, an item
  * from a category (one chosen, or any: the same for both or each his own), whose category everyone sees.
+ * Its own images (a room setting, "custom"): no categories; each round each player names his thing and sends the
+ * picture he chose from an image search on his phone ("custom_pick" { name, image: base64 }); it goes only to those
+ * who may see his secret (as an item's would), and to everyone once the round is over; nothing is kept. Not chosen
+ * in time: a random item. The host may put a player out mid-game (a bad picture): he loses his match.
  */
 type Mode = "duel" | "cup";
 type Meta = {
@@ -38,7 +42,7 @@ type Meta = {
 };
 type Settings = {
   mode?: string; category?: string; categories?: string[]; same?: boolean; roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
-  stake?: number;
+  stake?: number; custom?: boolean;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
@@ -50,6 +54,7 @@ type Side = {
   answers: Answer[]; // his questions about the other's, answered
   wrong: string[]; // the footballers he guessed wrong
   clockMs: number; // what's left of his time this round
+  custom?: { name: string; image: string } | null; // Mystery Item's own images: his thing's name and picture (base64)
 };
 type Phase = "lobby" | "bracket" | "pick" | "playing" | "round" | "between" | "gameover";
 
@@ -58,6 +63,8 @@ const ROUNDS = [1, 3, 5];
 const CUP_SIZES = [4, 6, 8];
 const TIME_MIN = 30, TIME_MAX = 900, TIME_STEP = 30; // seconds per player and round
 const PICK_MS = 30_000; // picking one's footballer (random off)
+const CUSTOM_PICK_MS = 90_000; // own images: searching and choosing one's picture
+const MAX_IMAGE_BYTES = 100_000;
 const ANSWER_MS = 1_600; // the answer shows, then the turn passes
 const ROUND_END_MS = 5_000; // both footballers revealed
 const BRACKET_MS = 6_000; // the cup's draw, and the bracket between matches
@@ -87,6 +94,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private time = 180;
   private cupSize = 8;
   private spectate = false; // a cup's waiting players see both secrets
+  private custom = false; // Mystery Item: each player's own image, no categories
   private seats: Seat[] = [];
   private members = new Map<string, string>(); // sessionId → account uid (friends rooms)
   private invited = new Set<string>();
@@ -137,6 +145,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     on("start_game", (c) => this.handleStart(c));
     on("sit", (c) => this.handleSit(c));
     on<{ player: string }>("pick", (c, m) => this.handlePick(this.idOf(c), String(m.player)));
+    on<{ name?: string; image?: string }>("custom_pick", (c, m) => this.handleCustomPick(this.idOf(c), m));
+    on<{ id: string }>("kick_player", (c, m) => this.handleKickPlayer(c, String(m.id)));
     on<Question>("ask", (c, m) => this.handleAsk(this.idOf(c), m));
     on<{ player: string }>("guess", (c, m) => this.handleGuess(this.idOf(c), String(m.player)));
     on("concede", (c) => this.handleConcede(this.idOf(c)));
@@ -351,6 +361,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     const size = Number(s.cupSize);
     if (CUP_SIZES.includes(size) && size >= this.seats.length) this.cupSize = size;
     if (typeof s.spectate === "boolean") this.spectate = s.spectate;
+    if (typeof s.custom === "boolean" && this.game === "mystery") this.custom = s.custom;
     if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
@@ -474,7 +485,16 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     this.turn = "";
     const cats = this.categories();
     for (const [k, s] of this.sides.entries()) {
-      Object.assign(s, { secret: "", cat: cats[k], answers: [], wrong: [], clockMs: this.time * 1000 });
+      Object.assign(s, { secret: "", cat: cats[k], answers: [], wrong: [], clockMs: this.time * 1000, custom: null });
+    }
+    if (this.custom) {
+      // Own images: each searches and chooses his picture; too slow, a random item.
+      this.phase = "pick";
+      this.endsAt = Date.now() + CUSTOM_PICK_MS * GuessRoom.pace;
+      return this.later(CUSTOM_PICK_MS, () => {
+        for (const s of this.sides) s.secret ||= this.draw(s);
+        this.play();
+      });
     }
     if (this.random) {
       for (const s of this.sides) s.secret = this.draw(s);
@@ -496,6 +516,31 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     if (!known) return "unknown_player";
     side.secret = footballer;
     if (this.sides.every((s) => s.secret)) this.play();
+  }
+
+  /** Own images: his thing's name and picture (a JPEG, PNG or WebP, 100 KB at most). */
+  private handleCustomPick(id: string, m: { name?: string; image?: string }) {
+    const side = this.sides.find((s) => s.id === id);
+    if (!this.custom || this.phase !== "pick" || !side || side.secret) return;
+    const name = String(m.name ?? "").trim().slice(0, 40);
+    const bytes = Buffer.from(String(m.image ?? ""), "base64");
+    const kind = bytes.subarray(0, 4).toString("hex");
+    const picture = kind.startsWith("ffd8") || kind === "89504e47" || (kind === "52494646" && bytes.subarray(8, 12).toString() === "WEBP");
+    if (!name || !picture || bytes.length > MAX_IMAGE_BYTES) return "bad_image";
+    side.secret = "custom";
+    side.custom = { name, image: bytes.toString("base64") };
+    if (this.sides.every((s) => s.secret)) this.play();
+  }
+
+  /** Own images: the host puts a player out mid-game (a bad picture): kept out, and he loses his match. */
+  private handleKickPlayer(client: Client, id: string) {
+    const by = this.seat(this.idOf(client)), seat = this.seat(id);
+    if (!this.custom || !by || by.id !== this.hostId || !seat || seat === by || this.phase === "lobby" || this.phase === "gameover") return;
+    this.banned.set(seat.playerId, by.playerId);
+    const kicked = this.connectionOf(id);
+    kicked?.send("kicked");
+    this.quit(id);
+    kicked?.leave(4000);
   }
 
   /** [side]'s secret at random, not the other's: an item of his category, or (at the room's level) a legend or one
@@ -731,12 +776,14 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       spectators: this.spectators.size,
       stake: this.stake.amount,
       stakeLast: this.stake.last, // the last game's payouts
+      custom: this.custom,
       serverNow: Date.now(),
     };
     for (const client of this.clients) {
       const me = this.idOf(client);
       const sides = this.sides.map((s) => ({
         id: s.id, cat: s.cat, answers: s.answers, wrong: s.wrong, clockMs: s.clockMs, secret: this.sees(me, s) ? s.secret : "",
+        ...(s.custom && this.sees(me, s) ? { custom: s.custom } : {}),
       }));
       client.send("guess", { ...table, sides, me });
     }

@@ -315,6 +315,38 @@ describe("GuessRoom", () => {
     assert.deepStrictEqual(room.sides.map((s: any) => s.secret).sort(), ["fruits-banana", "fruits-mango"]);
   });
 
+  it("Mystery Item, own images: each names and sends his picture, seen by him only until the round ends", async () => {
+    // A 1×1 PNG, and a "picture" that isn't one.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const { room, a, b } = await mysteryPair({ custom: true });
+    a.client.send("start_game");
+    await until(() => room.phase === "pick" && a.seen.state.custom === true);
+    b.client.send("custom_pick", { name: "Fake", image: Buffer.from("not a picture").toString("base64") });
+    await until(() => b.seen.errors.includes("bad_image"));
+    a.client.send("custom_pick", { name: "DJ Rafik", image: png });
+    await until(() => a.seen.state.sides.some((s: any) => s.custom?.name === "DJ Rafik"));
+    const mine = (x: any) => x.seen.state.sides.find((s: any) => s.id === x.seen.state.me);
+    assert.ok(!b.seen.state.sides.some((s: any) => s.custom), "the other doesn't see it");
+    b.client.send("custom_pick", { name: "Pyramids", image: png });
+    await until(() => room.phase === "playing");
+    assert.strictEqual(mine(b).custom.name, "Pyramids");
+    a.client.send("concede"); // B found DJ Rafik
+    await until(() => b.seen.state.phase === "round" || b.seen.state.phase === "gameover");
+    assert.deepStrictEqual(b.seen.state.sides.map((s: any) => s.custom?.name).sort(), ["DJ Rafik", "Pyramids"], "both shown once it's over");
+  });
+
+  it("Mystery Item, own images: too slow, a random item; the host puts a player out mid-game", async () => {
+    const { room, a, b } = await mysteryPair({ custom: true, rounds: 3 });
+    a.client.send("start_game");
+    await until(() => room.phase === "playing", 10_000); // (nobody chose: a random item each, at the tests' pace)
+    assert.ok(room.sides.every((s: any) => item(s.secret)), "random items");
+    let kicked = false;
+    b.client.onMessage("kicked", () => (kicked = true));
+    a.client.send("kick_player", { id: b.seen.state.me });
+    await until(() => kicked && room.phase === "gameover");
+    assert.strictEqual(room.champion, a.seen.state.me);
+  });
+
   it("leaving a 1 vs 1 hands the match to the other", async () => {
     const room: any = await colyseus.createRoom("guess", { mode: "duel", rounds: 5, time: 900 });
     const a = await player(room, true);

@@ -42,6 +42,7 @@ import {
 } from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import { stakeLedger, stakePlan } from "./stakes.js";
+import { SCRAPER } from "./scraper.js";
 import {
   avatarPrice, cardPrice, cleanChests, cleanMissionPlan, cleanStakePlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
 } from "./plans.js";
@@ -166,6 +167,8 @@ const server = defineServer({
     api_clan_lounge: createEndpoint("/api/clans/lounge/:clan", { method: "GET" }, async (ctx) =>
       loungeOf(String((ctx.params as { clan?: string }).clan ?? ""))),
     // The clan ranking's prizes (each member who played) and the weekly chest's: { tiers, chests }.
+    // Mystery Item's own images: the script the apps run in Google Images to find the thumbnails.
+    api_mystery_scraper: createEndpoint("/api/mystery/scraper", { method: "GET" }, async () => ({ script: SCRAPER })),
     // Playing for coins: the stakes a host may pick, each from a player level, and the house's cut (%).
     api_stakes: createEndpoint("/api/stakes", { method: "GET" }, async () => stakePlan()),
     api_clan_rewards: createEndpoint("/api/clan-rewards", { method: "GET" }, async () => ({
