@@ -132,6 +132,35 @@ describe("DominoRoom", () => {
     assert.deepStrictEqual([room.history.at(-1).winner, room.history.at(-1).points, room.teamScores], ["", 0, [5, 0]]);
   });
 
+  it("2 vs 2: a team at half the target has its round winner choose who opens, he or his partner", async () => {
+    const room: any = await colyseus.createRoom("domino", { teams: true, target: 100 });
+    const host = await colyseus.connectTo(room);
+    let seen: any = null;
+    host.onMessage("domino", (m) => (seen = m));
+    host.onMessage("domino_fx", () => {});
+    for (let i = 0; i < 3; i++) host.send("add_bot", { level: "easy" });
+    await new Promise((r) => setTimeout(r, 200));
+    host.send("start_game");
+    while (room.phase !== "playing") await new Promise((r) => setTimeout(r, 20));
+    const ids = room.seats.map((s: any) => s.id); // the host and ids[2] against ids[1] and ids[3]
+    // Below half (49 of 100): the winner opens, as always.
+    room.lastWinner = host.sessionId;
+    room.teamScores = [49, 0];
+    room.deal();
+    assert.deepStrictEqual([room.choosing, room.turn], ["", host.sessionId]);
+    // Half (50): he chooses, nobody plays meanwhile; he hands the opening to his partner.
+    room.lastWinner = host.sessionId;
+    room.teamScores = [50, 0];
+    room.deal();
+    room.sync();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepStrictEqual([room.choosing, room.turn, seen.choosing], [host.sessionId, "", host.sessionId]);
+    host.send("opener", { partner: true });
+    while (room.choosing) await new Promise((r) => setTimeout(r, 10));
+    assert.strictEqual(room.turn, ids[2]);
+    assert.strictEqual(room.forced, null); // any tile, as a winner opens
+  });
+
   it("a spectator sees the table, never a hand, and can't play", async () => {
     const room: any = await colyseus.createRoom("domino", {});
     const host = await colyseus.connectTo(room);

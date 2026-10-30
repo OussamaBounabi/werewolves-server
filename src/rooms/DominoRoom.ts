@@ -17,7 +17,8 @@ import { gameStarted } from "../metrics.js";
  * once the pile is empty. Round 1 starts with the highest double (6-6), then the last winner starts.
  * Whoever plays his last tile scores every dot left in the opponents' hands; when nobody can play,
  * the fewest dots wins (a tie: nobody scores). 2 vs 2: partners face to face, one score per team; blocked, the
- * single lightest hand of the four wins for its team.
+ * single lightest hand of the four wins for its team. Once a team has half the target, its round winner chooses who
+ * opens the next round: he or his partner (his turn's time; nothing chosen, he opens).
  * The first to the room's target wins the match. Then each player may press "play again": everyone did, the same table
  * plays a new match from 0; one of them left, or a minute went by, whoever pressed goes back to the waiting room.
  *
@@ -107,6 +108,8 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   private round = 0;
   private lastWinner = "";
   private turn = "";
+  private choosing = ""; // 2 vs 2, a team at half the target: its round winner choosing who opens (he or his partner)
+  private dealEndsAt = 0; // the deal's animation is over then
   private turnEndsAt = 0;
   private history: RoundResult[] = [];
   private ready = new Set<string>();
@@ -134,6 +137,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     on("sit", (c) => this.handleSit(c));
     on<{ tile: number; side?: "left" | "right" }>("play", (c, m) => this.handlePlay(this.idOf(c), Number(m.tile), m.side));
     on("draw", (c) => this.handleDraw(this.idOf(c)));
+    on<{ partner?: boolean }>("opener", (c, m) => this.handleOpener(this.idOf(c), m.partner === true));
     on("ready", (c) => this.handleReady(this.idOf(c)));
     on("play_again", (c) => this.handlePlayAgain(this.idOf(c)));
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
@@ -453,6 +457,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.ready.clear();
     this.nextRoundAt = 0;
     this.redeal = null;
+    this.choosing = "";
     this.broadcast("domino_fx", { type: "deal", order: this.seats.map((s) => s.id), pile: this.pile.length });
     // Such a hand: everyone is told why (his hand shown), then the tiles are shuffled and dealt again.
     const bad = misdeal(this.hands);
@@ -470,6 +475,20 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     // any tile.
     const winner = again ? undefined : this.seat(this.lastWinner);
     let first: string;
+    if (winner && this.teams && this.seats.length === 4 && this.teamScores[this.teamOf(winner.id)] * 2 >= this.target) {
+      // His team has half the target: he chooses who opens, he or his partner.
+      this.forced = null;
+      this.turn = "";
+      this.choosing = winner.id;
+      this.dealEndsAt = Date.now() + DEAL_MS;
+      this.turnEndsAt = this.dealEndsAt + this.turnSeconds * 1000;
+      this.timer?.clear();
+      this.botTimer?.clear();
+      this.timer = this.clock.setTimeout(() => (this.handleOpener(winner.id, false), this.sync()), DEAL_MS + this.turnSeconds * 1000);
+      // ponytail: a bot opens himself; choose by the hands if players ask for a smarter partner
+      if (winner.bot) this.botTimer = this.clock.setTimeout(() => (this.handleOpener(winner.id, false), this.sync()), DEAL_MS + 800 / DominoRoom.botSpeed);
+      return;
+    }
     if (winner) {
       first = winner.id;
       this.forced = null;
@@ -479,6 +498,16 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       this.forced = open.tile;
     }
     this.startTurn(first, DEAL_MS);
+  }
+
+  /** The round winner's choice: he opens, or his partner does (any tile, as a winner opens). */
+  private handleOpener(id: string, partner: boolean) {
+    if (this.phase !== "playing" || this.choosing !== id) return;
+    this.choosing = "";
+    const at = this.seats.findIndex((s) => s.id === id);
+    const first = partner ? this.seats[(at + 2) % 4].id : id;
+    this.broadcast("domino_fx", { type: "opener", by: id, first });
+    this.startTurn(first, Math.max(0, this.dealEndsAt - Date.now()));
   }
 
   private startTurn(id: string, extraMs = 0) {
@@ -762,6 +791,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
         cards: this.hands.get(s.id)?.length ?? 0, team: this.teams ? this.teamOf(s.id) : -1,
       })),
       turn: this.turn,
+      choosing: this.choosing,
       turnEndsAt: this.turnEndsAt,
       line: this.line,
       pile: this.pile.length,
