@@ -49,6 +49,20 @@ export type MissionPlan = {
 /** The weekly ranking's prizes: places [from]–[to] each win this. */
 export type RewardTier = { from: number; to: number; coins: number; diamonds: number; vipDays: number };
 
+/** Playing for coins: the house's cut (%) and the stakes a host may pick, each from a player level. */
+export type StakePlan = { cut: number; levels: { amount: number; minLevel: number }[] };
+
+/** The admin's stakes: a cut of 0–50%, up to 8 levels, each amount once, smallest first. */
+export function cleanStakePlan(v: any): StakePlan {
+  const seen = new Set<number>();
+  const levels = (Array.isArray(v?.levels) ? v.levels : [])
+    .map((l: any) => ({ amount: int(l?.amount, 10, 1_000_000), minLevel: int(l?.minLevel, 1, 100) }))
+    .filter((l: { amount: number }) => !seen.has(l.amount) && seen.add(l.amount))
+    .sort((a: { amount: number }, b: { amount: number }) => a.amount - b.amount)
+    .slice(0, 8);
+  return { cut: int(v?.cut, 0, 50), levels };
+}
+
 /** The weekly clan chest: bronze, silver, gold, each its points for a 20-seat clan and what each member who played wins. */
 export type ChestPlan = { goal: number; coins: number; diamonds: number }[];
 

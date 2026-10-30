@@ -12,6 +12,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { cupPlaces, StakeTable } from "./stake.js";
 
 /**
  * Guess Who, football edition. Each player has a secret footballer; turn by turn they ask about the other's
@@ -33,10 +34,11 @@ import { gameStarted } from "../metrics.js";
 type Mode = "duel" | "cup";
 type Meta = {
   host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean;
-  players: number; maxPlayers: number; spectators: number; mode: Mode;
+  players: number; maxPlayers: number; spectators: number; mode: Mode; stake: number;
 };
 type Settings = {
   mode?: string; category?: string; categories?: string[]; same?: boolean; roomType?: string; rounds?: number; random?: boolean; level?: string; trust?: boolean; legends?: boolean; time?: number; cupSize?: number; spectate?: boolean;
+  stake?: number;
 };
 type JoinOptions = Settings & { admin?: boolean; mode?: string; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = { id: string; playerId: string; name: string; uid: string; avatar: number; frame: number; vip?: string; connected: boolean; bot: boolean; quit: boolean };
@@ -114,10 +116,12 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private champion = "";
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
+  private stake = new StakeTable("guess", this); // playing for coins (0: free); its game named at onCreate
 
   onCreate(options: JoinOptions = {}) {
     this.maxClients = Math.max(...CUP_SIZES) + MAX_SPECTATORS; // the seats are counted in onAuth (the mode may change)
     if (this.game === "mystery") this.trust = true; // no tools to ask with: always out loud
+    this.stake.game = this.game; // (guess or mystery, in the stakes' ledger)
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -174,6 +178,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= this.capacity()) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -231,6 +237,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.capacity()) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -299,6 +307,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
     if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
@@ -342,12 +351,14 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     const size = Number(s.cupSize);
     if (CUP_SIZES.includes(size) && size >= this.seats.length) this.cupSize = size;
     if (typeof s.spectate === "boolean") this.spectate = s.spectate;
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
 
   private handleAddBot(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.trust) return;
     if (this.seats.length >= this.capacity()) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -373,6 +384,20 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < this.capacity()) return "not_enough_players";
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < this.capacity()) return false;
+        this.begin();
+        this.sync();
+      },
+      (why) => (client.send("guess_error", why), this.sync()),
+    );
+  }
+
+  /** A duel's one match, or a cup's draw. */
+  private begin() {
     if (this.mode === "duel") {
       this.matches = [{ a: this.seats[0].id, b: this.seats[1].id, winner: "", rounds: [] }];
       return this.startMatch(0);
@@ -577,6 +602,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     const slot = this.mode === "cup" ? nextSlot(this.matches.length + 1, this.current) : null;
     if (!slot) {
       this.champion = m.winner;
+      const playerId = (id: string) => this.seat(id)?.playerId ?? "";
+      if (this.mode === "cup") this.stake.settleCup(cupPlaces(this.matches).map((place) => place.map(playerId)));
+      else this.stake.settle([playerId(m.winner)]);
       this.phase = "gameover";
       this.timer?.clear();
       this.botTimer?.clear();
@@ -593,6 +621,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     const seat = this.seat(id);
     if (!seat || seat.quit) return;
     seat.quit = true;
+    this.stake.leave(seat.playerId); // (his stake stays in the pot)
     seat.connected = false;
     const i = this.sides.findIndex((s) => s.id === id);
     if (i >= 0 && ["pick", "playing", "round"].includes(this.phase)) this.endMatch(1 - i);
@@ -651,6 +680,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
         players: this.seats.length,
         maxPlayers: this.capacity(),
         spectators: this.spectators.size,
+        stake: this.stake.amount,
         mode: this.mode,
       },
     });
@@ -699,6 +729,8 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       roundWinner: this.roundWinner,
       champion: this.champion,
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

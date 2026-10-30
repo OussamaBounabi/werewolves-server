@@ -10,6 +10,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { StakeTable } from "./stake.js";
 
 /**
  * Dominoes, 2–4 players (bots included), double six: 7 tiles each; with fewer than 4 players the rest
@@ -25,8 +26,8 @@ import { gameStarted } from "../metrics.js";
  * No schema: each player gets his own "domino" message (the table, plus his tiles) after every change,
  * and "domino_fx" for what the apps animate (the deal, draws, plays, passes).
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; target?: number; teams?: boolean };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
+type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; target?: number; teams?: boolean; stake?: number };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
@@ -118,6 +119,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
+  private stake = new StakeTable("domino", this); // playing for coins (0: free)
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -178,6 +180,8 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -235,6 +239,8 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.maxPlayers) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -303,7 +309,10 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     }
     if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
-    else this.becomeBot(id); // (after a match too: he won't play the next one)
+    else {
+      this.stake.leave(this.seat(id)?.playerId ?? ""); // (mid-game: his stake stays in the pot)
+      this.becomeBot(id); // (after a match too: he won't play the next one)
+    }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
     this.afterGame(false); // (he was the one the others waited for)
     this.updateListing();
@@ -311,6 +320,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
     if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
@@ -337,11 +347,13 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     if (TARGET_OPTIONS.includes(Number(s.target))) this.target = Number(s.target);
     if (typeof s.teams === "boolean") this.teams = s.teams && this.seats.length <= 4;
     if (this.teams) this.maxPlayers = 4;
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
 
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -378,8 +390,17 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
-    this.startedAt = Date.now();
-    this.deal();
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < 2) return false;
+        this.startedAt = Date.now();
+        this.deal();
+        this.sync();
+      },
+      (why) => (client.send("domino_error", why), this.sync()),
+    );
   }
 
   /**
@@ -620,6 +641,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       this.phase = "gameover";
       const won = this.seats.filter((s) => this.sameSide(s.id, winner)).map((s) => s.uid); // the round's winner's side took it
       recordTable("domino", this.seats, won, this.startedAt);
+    this.stake.settle(this.seats.filter((s) => this.sameSide(s.id, winner)).map((s) => s.playerId));
       this.ready = new Set(this.seats.filter(added).map((x) => x.id)); // (the host's bots always play again)
       this.turnEndsAt = Date.now() + CLOSE_AFTER_GAME_MS;
       this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), CLOSE_AFTER_GAME_MS);
@@ -672,7 +694,18 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       this.abandon.closing = true; // (nobody's seat changes hands on the way out)
       return void this.disconnect().catch(() => {});
     }
-    if (again.length === players.length) return this.newMatch();
+    // Everyone again: a new stake each match (one can't pay: the waiting room).
+    if (again.length === players.length) {
+      return this.stake.begin(
+        players.filter((s) => !s.bot),
+        () => {
+          if (this.phase !== "gameover") return false;
+          this.newMatch();
+          this.sync();
+        },
+        (why) => (this.broadcast("domino_error", why), this.backToLobby(), this.sync()),
+      );
+    }
     this.backToLobby();
   }
 
@@ -770,6 +803,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
         players: this.seats.length,
         maxPlayers: this.maxPlayers,
         spectators: this.spectators.size,
+        stake: this.stake.amount,
       },
     });
   }
@@ -801,6 +835,8 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
       nextRoundAt: this.nextRoundAt,
       redeal: this.redeal,
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

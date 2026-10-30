@@ -12,6 +12,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { StakeTable } from "./stake.js";
 
 /**
  * Algerian rummy, 2–5 players (bots included), 14 cards each (the round's first player gets 15 and
@@ -25,7 +26,7 @@ import { gameStarted } from "../metrics.js";
  * No schema: each player gets his own "rummy" message (the table, plus his hand) after every change,
  * and "rummy_fx" for what the apps animate (the deal, draws, discards).
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
 type Settings = {
   roomType?: string;
   maxPlayers?: number;
@@ -34,6 +35,7 @@ type Settings = {
   openPoints?: number;
   rules?: Partial<Rules>;
   teams?: boolean; // 2 vs 2 (4 players): partners sit face to face, one score per team
+  stake?: number;
 };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
@@ -132,6 +134,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
   private waited = new Map<string, number>(); // hard bots: turns spent waiting for a joker finish
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
+  private stake = new StakeTable("rummy", this); // playing for coins (0: free)
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -199,6 +202,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     await this.checkRoomType(account);
     return { account };
@@ -261,6 +266,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.maxPlayers) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -324,13 +331,17 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     }
     if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
-    else if (this.phase !== "gameover") this.becomeBot(id);
+    else if (this.phase !== "gameover") {
+      this.stake.leave(this.seat(id)?.playerId ?? ""); // (his stake stays in the pot)
+      this.becomeBot(id);
+    }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
     this.updateListing();
     this.sync();
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
     if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
@@ -362,6 +373,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     // 2 vs 2 needs exactly four seats.
     if (typeof s.teams === "boolean") this.teams = s.teams && this.seats.length <= 4;
     if (this.teams) this.maxPlayers = 4;
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
 
@@ -396,6 +408,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
 
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -422,9 +435,18 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
-    this.startedAt = Date.now();
-    if (this.teams) this.deal();
-    else this.startSeating();
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < 2) return false;
+        this.startedAt = Date.now();
+        if (this.teams) this.deal();
+        else this.startSeating();
+        this.sync();
+      },
+      (why) => (client.send("rummy_error", why), this.sync()),
+    );
   }
 
   /**
@@ -885,6 +907,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     // Someone passed the losing score: the lowest score wins (a team's, at 2 vs 2; all of those who share it).
     const best = Math.min(...this.seats.map((s) => s.score));
     recordTable("rummy", this.seats, this.seats.filter((s) => s.score === best).map((s) => s.uid), this.startedAt);
+    this.stake.settle(this.seats.filter((s) => s.score === best).map((s) => s.playerId));
     this.turn = "";
     this.turnEndsAt = 0;
     this.clock.setTimeout(() => this.disconnect(), CLOSE_AFTER_GAME_MS);
@@ -998,6 +1021,7 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
         players: this.seats.length,
         maxPlayers: this.maxPlayers,
         spectators: this.spectators.size,
+        stake: this.stake.amount,
       },
     });
   }
@@ -1042,6 +1066,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
       melds: this.melds,
       lastRound: this.lastRound,
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
       serverNow: Date.now(),
     };
     for (const client of this.clients) {

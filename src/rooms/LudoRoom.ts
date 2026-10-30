@@ -8,6 +8,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { StakeTable } from "./stake.js";
 
 /**
  * Ludo, 2–4 players (bots included), 4 pawns each (or 2: quick game). A 6 takes a pawn out of the base
@@ -19,8 +20,8 @@ import { gameStarted } from "../metrics.js";
  *
  * No schema: everyone gets the "ludo" message after every change, and "ludo_fx" (rolls, moves) to animate.
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
-type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; capture?: string; pawns?: number; teams?: boolean };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
+type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; capture?: string; pawns?: number; teams?: boolean; stake?: number };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Aim = { dx?: number; dy?: number; power?: number }; // a swipe on the board: direction (board cells) and strength
 type Seat = {
@@ -97,6 +98,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
+  private stake = new StakeTable("ludo", this); // playing for coins (0: free)
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -155,6 +157,8 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= this.maxPlayers) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -214,6 +218,8 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.maxPlayers) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -277,13 +283,17 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     }
     if (this.abandon.closing) return; // the room is closing: nobody takes his seat, nothing more is played
     if (this.phase === "lobby") this.removeSeat(id);
-    else if (this.phase !== "gameover") this.becomeBot(id);
+    else if (this.phase !== "gameover") {
+      this.stake.leave(this.seat(id)?.playerId ?? ""); // (his stake stays in the pot)
+      this.becomeBot(id);
+    }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && this.connectionOf(s.id))?.id ?? "";
     this.updateListing();
     this.sync();
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
     if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
@@ -311,11 +321,13 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (PAWN_OPTIONS.includes(Number(s.pawns))) this.pawnCount = Number(s.pawns);
     if (typeof s.teams === "boolean") this.teams = s.teams;
     if (this.teams) this.maxPlayers = 4;
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
 
   private handleAddBot(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -354,14 +366,23 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
     if (this.teams && this.seats.length !== 4) return "teams_need_four";
-    const colors = colorsFor(this.seats.length);
-    this.seats.forEach((s, i) => {
-      s.color = colors[i];
-      s.pawns = Array(this.pawnCount).fill(-1);
-    });
-    this.phase = "playing";
-    this.startedAt = Date.now();
-    this.startTurn(this.seats[Math.floor(Math.random() * this.seats.length)].id, START_MS); // a random first player
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < 2) return false;
+        const colors = colorsFor(this.seats.length);
+        this.seats.forEach((s, i) => {
+          s.color = colors[i];
+          s.pawns = Array(this.pawnCount).fill(-1);
+        });
+        this.phase = "playing";
+        this.startedAt = Date.now();
+        this.startTurn(this.seats[Math.floor(Math.random() * this.seats.length)].id, START_MS); // a random first player
+        this.sync();
+      },
+      (why) => (client.send("ludo_error", why), this.sync()),
+    );
   }
 
   /**
@@ -557,6 +578,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     const first = this.seats.findIndex((s) => s.id === this.places[0]);
     const won = this.seats.filter((s, i) => (this.teams ? i % 2 === first % 2 : i === first)).map((s) => s.uid);
     recordTable("ludo", this.seats, won, this.startedAt);
+    this.stake.settle(this.seats.filter((s, i) => (this.teams ? i % 2 === first % 2 : i === first)).map((s) => s.playerId));
     this.turn = "";
     this.turnEndsAt = 0;
     this.timer?.clear();
@@ -628,6 +650,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
         players: this.seats.length,
         maxPlayers: this.maxPlayers,
         spectators: this.spectators.size,
+        stake: this.stake.amount,
       },
     });
   }
@@ -658,6 +681,8 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
       turnEndsAt: this.turnEndsAt,
       places: this.places,
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
       serverNow: Date.now(),
     };
     for (const client of this.clients) client.send("ludo", { ...table, me: this.idOf(client) });

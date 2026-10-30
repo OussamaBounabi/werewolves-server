@@ -3,6 +3,7 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import { ChessRoom } from "../src/rooms/ChessRoom.js";
+import { StakeTable } from "../src/rooms/stake.js";
 import { chessBotMove, chessEnd, legalMoves, makeMove, posKey, startPos, type ChessPos } from "../src/chess.js";
 import { checkersBotMove, checkersEnd, checkersKey, checkersMoves, checkersPlay, checkersStart, type CheckersPos } from "../src/checkers.js";
 
@@ -219,6 +220,47 @@ describe("ChessRoom", () => {
     if (t.phase === "playing") host.send("resign");
     await until(() => t.phase === "gameover");
     assert.ok(t.result.reason, "ended with a reason");
+  });
+
+  it("for coins: no bots, each stake taken at the start, the winner paid 90% of the pot; a new stake each game", async function () {
+    this.timeout(30_000);
+    const coins: Record<string, number> = { pa: 1000, pb: 150 };
+    const wallet = StakeTable.wallet;
+    StakeTable.wallet = {
+      take: async (id, n) => (coins[id] >= n ? ((coins[id] -= n), "ok") : "stake_coins"),
+      give: async (id, n) => void (coins[id] += n),
+      log: async () => {},
+    };
+    try {
+      const room: any = await colyseus.createRoom("chess", { stake: 100 });
+      const a = await colyseus.connectTo(room, { playerId: "pa" });
+      let ta: any = null;
+      const errors: any[] = [];
+      a.onMessage("chess", (m) => (ta = m));
+      a.onMessage("chess_fx", () => {});
+      a.onMessage("chess_error", (e) => errors.push(e));
+      a.send("add_bot", { level: "easy" });
+      await until(() => errors.some((e) => e.code === "stake_bots"));
+      const b = await colyseus.connectTo(room, { playerId: "pb" });
+      b.onMessage("chess", () => {});
+      b.onMessage("chess_fx", () => {});
+      b.onMessage("chess_error", () => {});
+      await until(() => ta?.seats.length === 2 && ta.stake === 100);
+      a.send("start_game");
+      await until(() => ta.phase === "playing");
+      assert.deepStrictEqual([coins.pa, coins.pb], [900, 50]);
+      b.send("resign");
+      await until(() => ta.phase === "gameover" && ta.stakeLast.length === 2);
+      await wait(50);
+      assert.deepStrictEqual([coins.pa, coins.pb], [1080, 50]); // 200 in, 180 to the winner
+      // Again: the other one can't pay 100 any more: back to the waiting room.
+      a.send("play_again");
+      b.send("play_again");
+      await until(() => errors.some((e) => e.code === "stake_coins") && ta.phase === "lobby");
+      assert.deepStrictEqual([coins.pa, coins.pb], [1080, 50]);
+    } finally {
+      StakeTable.wallet = wallet;
+    }
   });
 
   it("checkers between two players: draw offers, takebacks, resign", async function () {

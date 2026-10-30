@@ -9,6 +9,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { cupPlaces, StakeTable } from "./stake.js";
 
 /**
  * 8-ball, as in the app (lib/billiard). The server plays every shot in its own copy of the app's physics
@@ -30,10 +31,11 @@ import { gameStarted } from "../metrics.js";
  * "billiard_shot" for each shot, "billiard_aim" / "billiard_pick" for an aim, "billiard_fx" for a shot clock that ran
  * out. The chat, emojis and voice as at the other tables. Each player plays with his own cue ("cue").
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
 type Mode = "duel" | "cup" | "king";
 type Settings = {
   roomType?: string; turnSeconds?: number; mode?: string; cupSize?: number; bestOf?: number; minutes?: number; callAll?: boolean; eight?: string;
+  stake?: number;
 };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type BotLevel = "easy" | "normal" | "hard";
@@ -153,6 +155,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private ready = new Set<string>();
   private botSeq = 0;
   private timer: { clear(): void } | null = null; // the room's own (the cup's rounds, the end)
+  private stake = new StakeTable("billiard", this); // playing for coins (0: free): 1 vs 1 and cups, not winner stays
   private voiceAt = new Map<string, string>(); // each connection's voice room, once it asked for the voice
   private chatAt = new Map<string, string>(); // each connection's chat, last told
   private voiceRooms = new Set<string>(); // every voice room this room opened, closed with it
@@ -217,6 +220,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= this.capacity()) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -276,6 +281,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= this.capacity()) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -344,7 +351,10 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (this.abandon.closing) return;
     if (this.phase === "lobby") this.removeSeat(id);
     else if (this.mode === "king") this.kingLeave(id);
-    else this.becomeBot(id);
+    else {
+      this.stake.leave(this.seat(id)?.playerId ?? ""); // (his stake stays in the pot)
+      this.becomeBot(id);
+    }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && !s.left && this.connectionOf(s.id))?.id ?? "";
     this.afterGame(false);
     this.updateListing();
@@ -352,6 +362,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     for (const t of this.tables.values()) t.stop();
     if (voiceEnabled) for (const room of [this.roomId, ...this.voiceRooms]) closeVoice(room).catch(() => {});
@@ -414,12 +425,16 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (KING_MINUTES.includes(Number(s.minutes))) this.minutes = Number(s.minutes);
     if (typeof s.callAll === "boolean") this.callAll = s.callAll;
     if (s.eight === "direct" || s.eight === "banks") this.banks = s.eight === "banks";
+    // A stake: 1 vs 1 and cups, never with bots; winner stays is free.
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake);
+    if (this.mode === "king") this.stake.set(0);
     this.updateListing();
   }
 
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.mode === "king") return;
     if (this.seats.length >= this.capacity()) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -447,6 +462,20 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.mode === "king" ? this.seats.length < 3 : this.seats.length < this.capacity()) return "not_enough_players";
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < (this.mode === "king" ? 3 : this.capacity())) return false;
+        this.begin();
+        this.sync();
+      },
+      (why) => (client.send("billiard_error", why), this.sync()),
+    );
+  }
+
+  /** The game starts: 1 vs 1 at one table, a cup's draw, or winner stays' queue. */
+  private begin() {
     for (const s of this.seats) Object.assign(s, { wins: 0, out: false, left: false });
     this.closeTables();
     this.champion = "";
@@ -717,6 +746,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     const players = t.players.map((id) => this.seat(id)).filter((x) => x !== undefined);
     recordTable("billiard", players, winner ? [winner.uid] : [], t.startedAt);
     if (this.mode === "duel") {
+      this.stake.settle(winner ? [winner.playerId] : []);
       this.lastLoser = 1 - w;
       this.phase = "gameover";
       this.ready = new Set(this.seats.filter(added).map((s) => s.id));
@@ -760,6 +790,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if ([...this.tables.values()].some((x) => !x.done)) return; // the round goes on at the other tables
     if (!slot) {
       this.champion = m.winner;
+      this.stake.settleCup(cupPlaces(this.matches).map((place) => place.map((id) => this.seat(id)?.playerId ?? "")));
       return this.end(showMs);
     }
     this.timer?.clear();
@@ -824,12 +855,26 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       return void this.disconnect().catch(() => {});
     }
     if (again.length === players.length && this.mode === "duel") {
-      gameStarted(this.roomName);
-      this.phase = "playing";
-      const t = [...this.tables.values()][0];
-      this.ready.clear();
-      return this.startGame(t, this.lastLoser >= 0 ? this.lastLoser : 0);
+      // A new stake each game: one can't pay, the waiting room.
+      return this.stake.begin(
+        players.filter((s) => !s.bot),
+        () => {
+          if (this.phase !== "gameover") return false;
+          gameStarted(this.roomName);
+          this.phase = "playing";
+          const t = [...this.tables.values()][0];
+          this.ready.clear();
+          this.startGame(t, this.lastLoser >= 0 ? this.lastLoser : 0);
+          this.sync();
+        },
+        (why) => (this.broadcast("billiard_error", why), this.backToLobby(), this.sync()),
+      );
     }
+    this.backToLobby();
+  }
+
+  /** The waiting room again, with those who pressed "play again" (and the host's bots). */
+  private backToLobby() {
     for (const s of [...this.seats]) {
       if (added(s) || this.pressed(s)) continue;
       const client = this.connectionOf(s.id);
@@ -883,6 +928,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
         players: this.seats.length,
         maxPlayers: this.capacity(),
         spectators: this.spectators.size,
+        stake: this.stake.amount,
       },
     });
   }
@@ -914,6 +960,8 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       champion: this.champion,
       ready: [...this.ready],
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
     };
     for (const client of this.clients) {
       const id = this.idOf(client);

@@ -11,6 +11,7 @@ import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
 import { Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
+import { StakeTable } from "./stake.js";
 
 /**
  * Chess & Checkers: one table, two players (one may be a bot the host seats, easy, normal or hard); the host picks
@@ -22,10 +23,10 @@ import { gameStarted } from "../metrics.js";
  * No schema: "chess" (the table) after every change, with the moves the side to move may play; "chess_fx" to one
  * player (his offer refused); "chess_error". The table's chat, emojis and voice, as at the other tables.
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; variant: string };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; variant: string; stake: number };
 type Settings = {
   roomType?: string; variant?: string; minutes?: number; increment?: number; color?: string;
-  takebacks?: boolean; forced?: boolean; swap?: boolean;
+  takebacks?: boolean; forced?: boolean; swap?: boolean; stake?: number;
 };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type BotLevel = "easy" | "normal" | "hard";
@@ -102,6 +103,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
   private botTimer: { clear(): void } | null = null;
+  private stake = new StakeTable("chess", this); // playing for coins (0: free)
 
   onCreate(options: JoinOptions = {}) {
     this.applySettings(options);
@@ -159,6 +161,8 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     } else {
       if (this.phase !== "lobby") throw new ServerError(4409, "started");
       if (this.seats.length >= SEATS) throw new ServerError(4409, "full");
+      const stake = this.stake.joinError(account);
+      if (stake) throw new ServerError(4402, stake);
     }
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
@@ -212,6 +216,8 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     const options = this.spectators.get(this.idOf(client));
     if (this.phase !== "lobby" || !options) return;
     if (this.seats.length >= SEATS) return "full";
+    const stake = this.stake.joinError(client.auth?.account ?? null);
+    if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
     if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
@@ -267,6 +273,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     else if (seat) {
       seat.left = true;
       seat.connected = false;
+      this.stake.leave(seat.playerId);
       if (this.phase === "playing") this.finish((1 - this.colorOf(seat)) as Color, "abandon");
     }
     if (this.hostId === id) this.hostId = this.seats.find((s) => !s.bot && !s.left && this.connectionOf(s.id))?.id ?? "";
@@ -276,6 +283,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   }
 
   onDispose() {
+    this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
     if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
@@ -303,11 +311,13 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     if (typeof s.takebacks === "boolean") this.takebacks = s.takebacks;
     if (typeof s.forced === "boolean") this.forced = s.forced;
     if (typeof s.swap === "boolean") this.swap = s.swap;
+    if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake); // (no bots at a staked table)
     this.updateListing();
   }
 
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= SEATS) return;
+    if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
     this.seats.push({
@@ -333,8 +343,17 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < SEATS) return "not_enough_players";
-    this.lastWhiteSeat = -1; // (the host's color applies to a first game)
-    this.newGame();
+    // Each puts his stake in the pot (a free table: at once); then the game, if nobody left meanwhile.
+    this.stake.begin(
+      this.seats.filter((s) => !s.bot),
+      () => {
+        if (this.phase !== "lobby" || this.seats.length < SEATS) return false;
+        this.lastWhiteSeat = -1; // (the host's color applies to a first game)
+        this.newGame();
+        this.sync();
+      },
+      (why) => (client.send("chess_error", why), this.sync()),
+    );
   }
 
   private async handleKick(client: Client, id: string) {
@@ -586,6 +605,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.phase = "gameover";
     const won = this.seats.filter((s) => winner !== null && this.colorOf(s) === winner).map((s) => s.uid); // a draw: nobody
     recordTable("chess", this.seats, won, this.startedAt);
+    this.stake.settle(this.seats.filter((s) => winner !== null && this.colorOf(s) === winner).map((s) => s.playerId));
     this.offer = null;
     this.timer?.clear();
     this.botTimer?.clear();
@@ -614,8 +634,24 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       return void this.disconnect().catch(() => {});
     }
     if (again.length === players.length) {
-      gameStarted(this.roomName);
-      return this.newGame();
+      // A new stake each game: one can't pay, back to the waiting room.
+      return this.stake.begin(
+        players.filter((s) => !s.bot),
+        () => {
+          if (this.phase !== "gameover") return false;
+          gameStarted(this.roomName);
+          this.newGame();
+          this.sync();
+        },
+        (why) => {
+          this.broadcast("chess_error", why);
+          this.ready.clear();
+          this.lastWhiteSeat = -1;
+          this.phase = "lobby";
+          this.updateListing();
+          this.sync();
+        },
+      );
     }
     for (const s of [...this.seats]) {
       if (added(s) || again.includes(s)) continue;
@@ -657,6 +693,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
         maxPlayers: SEATS,
         spectators: this.spectators.size,
         variant: this.variant,
+        stake: this.stake.amount,
       },
     });
   }
@@ -700,6 +737,8 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       result: this.result,
       ready: [...this.ready],
       spectators: this.spectators.size,
+      stake: this.stake.amount,
+      stakeLast: this.stake.last, // the last game's payouts
     };
     for (const client of this.clients) client.send("chess", { ...table, me: this.idOf(client) });
   }

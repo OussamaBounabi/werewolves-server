@@ -40,8 +40,9 @@ import {
   loungeOf, shareRoom,
 } from "./clans.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
+import { stakeLedger, stakePlan } from "./stakes.js";
 import {
-  avatarPrice, cardPrice, cleanChests, cleanMissionPlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
+  avatarPrice, cardPrice, cleanChests, cleanMissionPlan, cleanStakePlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
 } from "./plans.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -59,6 +60,7 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     spectators: r.metadata?.spectators ?? 0,
     started: r.metadata?.started === true,
     mode: r.metadata?.mode ?? "", // guess who: duel | cup
+    stake: r.metadata?.stake ?? 0, // coins each player puts in (0: free)
   };
 }
 
@@ -162,6 +164,8 @@ const server = defineServer({
     api_clan_lounge: createEndpoint("/api/clans/lounge/:clan", { method: "GET" }, async (ctx) =>
       loungeOf(String((ctx.params as { clan?: string }).clan ?? ""))),
     // The clan ranking's prizes (each member who played) and the weekly chest's: { tiers, chests }.
+    // Playing for coins: the stakes a host may pick, each from a player level, and the house's cut (%).
+    api_stakes: createEndpoint("/api/stakes", { method: "GET" }, async () => stakePlan()),
     api_clan_rewards: createEndpoint("/api/clan-rewards", { method: "GET" }, async () => ({
       tiers: currentPlans().clanrewards ?? [],
       chests: chests(),
@@ -456,6 +460,13 @@ const server = defineServer({
       chests: chests(),
     })),
     // The weekly clan chest's goals (a 20-seat clan's) and prizes: { chests: [{ goal, coins, diamonds }] × 3 }.
+    // Playing for coins: the plan (the house's cut, the levels) and the last staked games, with what the house kept.
+    api_admin_stakes: adminEndpoint("/api/admin/stakes", "GET", async () => ({ plan: stakePlan(), ...(await stakeLedger()) })),
+    api_admin_stakes_save: adminEndpoint("/api/admin/stakes/save", "POST", async (ctx) => {
+      const plan = cleanStakePlan((ctx.body as { plan?: unknown } | undefined)?.plan);
+      await savePlan("stakes", plan);
+      return { plan };
+    }),
     api_admin_clan_chests_save: adminEndpoint("/api/admin/clan-chests/save", "POST", async (ctx) => {
       const list = cleanChests((ctx.body as { chests?: unknown } | undefined)?.chests);
       await savePlan("chests", list);

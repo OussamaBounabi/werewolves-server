@@ -8,7 +8,7 @@ import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missio
 import { atNight, reached } from "./achievements.js";
 import { clanWeek } from "./clans.js";
 import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
-import { missionsNow, prizeFor, storeNow, type ChestPlan, type MissionPlan, type RewardTier, type StorePlan } from "./plans.js";
+import { missionsNow, prizeFor, storeNow, type ChestPlan, type MissionPlan, type RewardTier, type StakePlan, type StorePlan } from "./plans.js";
 
 /**
  * Player accounts. Players log in with Firebase Auth, as before: the server checks their Firebase ID
@@ -138,6 +138,8 @@ export type Account = {
   vipPro: boolean;
   roleCardDay: string; // the day a VIP last played the role his Master card chose (one a day)
   roomLook: unknown; // a VIP Pro's saved room name and style (rooms/perks.ts checks it)
+  coins?: number; // when he joined (a staked table checks it; the stake is taken when the game starts)
+  xp?: number;
 };
 
 /** "pro", "vip" or "": the badge a player wears by his name (a VIP Pro is a VIP too). */
@@ -159,6 +161,8 @@ export async function accountFor(idToken: string): Promise<Account> {
     vipPro: user.vipPro === true, // (a VIP Pro is a VIP too)
     roleCardDay: String(user.roleCardDay ?? ""),
     roomLook: user.roomLook ?? null,
+    coins: Number(user.coins) || 0,
+    xp: Number(user.xp) || 0,
   };
 }
 
@@ -513,12 +517,14 @@ const plans: {
   rewards: RewardTier[] | null;
   clanrewards: RewardTier[] | null; // the clan ranking's, for each member who played
   chests: ChestPlan | null; // the weekly clan chest's goals and prizes
+  stakes: StakePlan | null; // playing for coins: the house's cut and the levels
 } = {
   store: null,
   missions: null,
   rewards: null,
   clanrewards: null,
   chests: null,
+  stakes: null,
 };
 type PlanId = keyof typeof plans;
 
