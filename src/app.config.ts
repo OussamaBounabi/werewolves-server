@@ -64,6 +64,7 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
     started: r.metadata?.started === true,
     mode: r.metadata?.mode ?? "", // guess who: duel | cup
     stake: r.metadata?.stake ?? 0, // coins each player puts in (0: free)
+    chat: r.metadata?.chat === true, // a chat room: no voice
   };
 }
 

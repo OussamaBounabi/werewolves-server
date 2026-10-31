@@ -28,7 +28,7 @@ import { StakeTable } from "./stake.js";
  * No schema: "chess" (the table) after every change, with the moves the side to move may play; "chess_fx" to one
  * player (his offer refused); "chess_error". The table's chat, emojis and voice, as at the other tables.
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; variant: string; stake: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean; players: number; maxPlayers: number; spectators: number; variant: string; stake: number };
 type Settings = {
   roomType?: string; variant?: string; minutes?: number; increment?: number; color?: string;
   takebacks?: boolean; forced?: boolean; swap?: boolean; stake?: number;
@@ -112,7 +112,14 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   private botTimer: { clear(): void } | null = null;
   private stake = new StakeTable("chess", this); // playing for coins (0: free)
 
+  /** A chat room (so from its creation, for good): no voice, everyone writes in the text chat. */
+  private chatOnly = false;
+  private get voiceOn() {
+    return voiceEnabled && !this.chatOnly;
+  }
+
   onCreate(options: JoinOptions = {}) {
+    this.chatOnly = (options as { chat?: unknown }).chat === true;
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -233,7 +240,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
-    if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
+    if (this.voiceOn) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
     this.updateListing();
   }
 
@@ -267,7 +274,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
 
   onLeave(client: Client) {
     if (this.admins.delete(client.sessionId)) {
-      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      if (this.voiceOn) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
       return;
     }
     const id = this.idOf(client);
@@ -275,7 +282,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) leaveRoom(uid, this.roomId);
-    if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.voiceOn) dropFromVoice(this.roomId, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();
       return this.sync();
@@ -299,11 +306,11 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     this.botTimer?.clear();
-    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+    if (this.voiceOn) closeVoice(this.roomId).catch(() => {});
   }
 
   private async handleVoiceJoin(client: Client) {
-    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (!this.voiceOn) return client.send("voice", { enabled: false, chat: this.chatOnly });
     if (this.admins.has(client.sessionId)) { // the admin listens, unseen
       return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
     }
@@ -733,6 +740,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
         roomName: this.look.name,
         roomStyle: this.look.style,
         roomType: this.roomType,
+      chat: this.chatOnly,
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: SEATS,
@@ -758,6 +766,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
       phase: this.phase,
       hostId: this.hostId,
       roomType: this.roomType,
+      chat: this.chatOnly,
       variant: this.variant,
       minutes: this.minutes,
       increment: this.increment,

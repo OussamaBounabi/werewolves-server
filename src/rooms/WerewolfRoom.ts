@@ -34,7 +34,7 @@ const SPECIALS = [...CLASSIC, ...EXTRA] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
 type Meta = {
-  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number;
+  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean; players: number; maxPlayers: number;
   spectators: number;
   phase: string; day: number;
 };
@@ -272,17 +272,24 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.syncVoice();
     this.syncGraveChat();
     this.sendGod();
-    const snapshot = this.state.toJSON();
+    const snapshot = { ...this.state.toJSON(), chat: this.chatOnly };
     const json = JSON.stringify(snapshot);
     if (json === this.lastSnapshot) return;
     this.lastSnapshot = json;
     this.broadcast("state", { ...snapshot, serverNow: Date.now() });
   }
 
+  /** A chat room (so from its creation, for good): no voice, everyone writes in the text chat. */
+  private chatOnly = false;
+  private get voiceOn() {
+    return voiceEnabled && !this.chatOnly;
+  }
+
   onCreate(options: Settings = {}) {
+    this.chatOnly = (options as { chat?: unknown }).chat === true;
     this.applySettings(options);
     this.clock.setTimeout(() => this.expire(), ROOM_LIFESPAN_MS);
-    if (voiceEnabled) this.clock.setInterval(() => { void this.checkVoice(); }, 1000);
+    if (this.voiceOn) this.clock.setInterval(() => { void this.checkVoice(); }, 1000);
 
     this.onMessage("settings", (client, msg: Settings) => {
       if (this.state.phase === "lobby" && client.sessionId === this.state.hostId) this.applySettings(msg ?? {});
@@ -806,6 +813,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         roomName: this.look.name,
         roomStyle: this.look.style,
         roomType: this.state.roomType,
+        chat: this.chatOnly,
         started: this.state.phase !== "lobby", // "starting" counts: joining is closed
         players: this.state.players.size,
         maxPlayers: this.state.maxPlayers,
@@ -2755,7 +2763,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
     if (phase !== "night") {
       // The host may close the chat to the living while the game runs: then only the dead and the spectators write.
-      if (this.option("noLivingChat") && this.gameRunning()) {
+      if (this.option("noLivingChat") && !this.chatOnly && this.gameRunning()) {
         client.send("error", { code: "living_chat_off" });
         return;
       }
@@ -2968,7 +2976,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   onDispose() {
     for (const id of [...this.members.keys()]) this.clearRoomOf(id);
-    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+    if (this.voiceOn) closeVoice(this.roomId).catch(() => {});
   }
 
   // ---- voice ----
@@ -3032,7 +3040,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   }
 
   private async handleVoiceJoin(client: Client) {
-    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (!this.voiceOn) return client.send("voice", { enabled: false, chat: this.chatOnly });
     const id = client.sessionId;
     this.voiceRights.set(id, "joining"); // (checkVoice grants his rights once he's in)
     const name = this.state.players.get(id)?.name ?? "spectator";
@@ -3050,7 +3058,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    * and dawn, whose gate opens once a check finds nobody to correct.
    */
   private async checkVoice() {
-    if (!voiceEnabled || this.checkingVoice) return;
+    if (!this.voiceOn || this.checkingVoice) return;
     this.checkingVoice = true;
     try {
       let corrected = false;
@@ -3094,7 +3102,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** Runs before each patch: pushes changed rights to LiveKit (only when they change). */
   private syncVoice() {
-    if (!voiceEnabled) return;
+    if (!this.voiceOn) return;
     const night = this.gameRunning() && this.state.phase === "night";
     if (night !== this.wasNight) {
       this.wasNight = night;

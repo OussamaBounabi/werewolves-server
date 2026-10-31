@@ -634,6 +634,21 @@ describe("PocketBase", function () {
       const oops = await send(a, b, { text: "oops" });
       await a.pb.collection("messages").update(oops.id, { type: "deleted", text: "-" });
       assert.deepStrictEqual([(await list(b))[0].lastType, (await list(b))[0].unread], ["deleted", 1]);
+      // Reactions: each player his own (one of six), nothing else with it, none on a deleted mark; taken back with "".
+      const hi = await send(a, b, { text: "hi again" });
+      await b.pb.collection("messages").update(hi.id, { toReaction: "❤️" });
+      await a.pb.collection("messages").update(hi.id, { fromReaction: "😆" });
+      await refused(b.pb.collection("messages").update(hi.id, { fromReaction: "👍" })); // not his side
+      await refused(a.pb.collection("messages").update(hi.id, { toReaction: "👍" }));
+      await refused(b.pb.collection("messages").update(hi.id, { toReaction: "👍", text: "changed" }));
+      await refused(b.pb.collection("messages").update(hi.id, { toReaction: "🍕" })); // not one of the six
+      await refused(c.pb.collection("messages").update(hi.id, { toReaction: "👍" }));
+      await refused(b.pb.collection("messages").update(oops.id, { toReaction: "👍" })); // a deleted mark
+      await b.pb.collection("messages").update(hi.id, { toReaction: "" });
+      const reacted = await a.pb.collection("messages").getOne(hi.id);
+      assert.deepStrictEqual([reacted.fromReaction, reacted.toReaction, reacted.text], ["😆", "", "hi again"]);
+      // A reply names the message it answers.
+      assert.strictEqual((await send(b, a, { text: "hey", replyTo: hi.id })).replyTo, hi.id);
     });
 
     it("takes one report per reporter and target, never about oneself, and lets no player read them", async () => {

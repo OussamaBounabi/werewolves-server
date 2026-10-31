@@ -31,7 +31,7 @@ import { cupPlaces, StakeTable } from "./stake.js";
  * "billiard_shot" for each shot, "billiard_aim" / "billiard_pick" for an aim, "billiard_fx" for a shot clock that ran
  * out. The chat, emojis and voice as at the other tables. Each player plays with his own cue ("cue").
  */
-type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
+type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
 type Mode = "duel" | "cup" | "king";
 type Settings = {
   roomType?: string; turnSeconds?: number; mode?: string; cupSize?: number; bestOf?: number; minutes?: number; callAll?: boolean; eight?: string;
@@ -160,7 +160,14 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private chatAt = new Map<string, string>(); // each connection's chat, last told
   private voiceRooms = new Set<string>(); // every voice room this room opened, closed with it
 
+  /** A chat room (so from its creation, for good): no voice, everyone writes in the text chat. */
+  private chatOnly = false;
+  private get voiceOn() {
+    return voiceEnabled && !this.chatOnly;
+  }
+
   onCreate(options: JoinOptions = {}) {
+    this.chatOnly = (options as { chat?: unknown }).chat === true;
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -285,7 +292,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     if (stake) return stake;
     this.spectators.delete(this.idOf(client));
     this.addSeat(client, options);
-    if (voiceEnabled) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
+    if (this.voiceOn) setVoiceRights(this.roomId, this.idOf(client), { talk: true, hear: true }).catch(() => {});
     this.updateListing();
   }
 
@@ -334,7 +341,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     this.voiceAt.delete(client.sessionId);
     this.chatAt.delete(client.sessionId);
     if (this.admins.delete(client.sessionId)) {
-      if (voiceEnabled) dropFromVoice(voiceRoom, client.sessionId).catch(() => {});
+      if (this.voiceOn) dropFromVoice(voiceRoom, client.sessionId).catch(() => {});
       return;
     }
     const id = this.idOf(client);
@@ -343,7 +350,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) leaveRoom(uid, this.roomId);
-    if (voiceEnabled) dropFromVoice(voiceRoom, id).catch(() => {});
+    if (this.voiceOn) dropFromVoice(voiceRoom, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();
       return this.sync();
@@ -365,7 +372,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     this.stake.refund(); // (closing mid-game: those still here get their stake back)
     this.timer?.clear();
     for (const t of this.tables.values()) t.stop();
-    if (voiceEnabled) for (const room of [this.roomId, ...this.voiceRooms]) closeVoice(room).catch(() => {});
+    if (this.voiceOn) for (const room of [this.roomId, ...this.voiceRooms]) closeVoice(room).catch(() => {});
   }
 
   /** The voice room [id] belongs in: the room's own; in a cup's games, his table's. */
@@ -384,7 +391,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   }
 
   private async handleVoiceJoin(client: Client) {
-    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (!this.voiceOn) return client.send("voice", { enabled: false, chat: this.chatOnly });
     if (this.admins.has(client.sessionId)) { // the admin listens, unseen
       const room = this.voiceOf(client.sessionId);
       this.voiceAt.set(client.sessionId, room);
@@ -924,6 +931,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
         roomName: this.look.name,
         roomStyle: this.look.style,
         roomType: this.roomType,
+      chat: this.chatOnly,
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: this.capacity(),
@@ -945,6 +953,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
       phase: this.phase,
       hostId: this.hostId,
       roomType: this.roomType,
+      chat: this.chatOnly,
       turnSeconds: this.turnSeconds,
       mode: this.mode,
       cupSize: this.cupSize,

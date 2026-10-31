@@ -20,7 +20,7 @@ import { gameStarted } from "../metrics.js";
  * No schema: everyone gets the "imposter" message after every change (with his own card only).
  */
 type Meta = {
-  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; started: boolean;
+  host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean;
   players: number; maxPlayers: number; spectators: number;
 };
 type Settings = { roomType?: string; imposters?: number; category?: string; categories?: string[]; talk?: number; mode?: string };
@@ -94,7 +94,14 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
   private startedAt = 0; // the game's start, for its minutes
   private timer: { clear(): void } | null = null;
 
+  /** A chat room (so from its creation, for good): no voice, everyone writes in the text chat. */
+  private chatOnly = false;
+  private get voiceOn() {
+    return voiceEnabled && !this.chatOnly;
+  }
+
   onCreate(options: JoinOptions = {}) {
+    this.chatOnly = (options as { chat?: unknown }).chat === true;
     this.applySettings(options);
     const on = <T>(type: string, handler: (client: Client, msg: T) => string | void) =>
       this.onMessage(type, (client, msg: T) => {
@@ -266,7 +273,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   onLeave(client: Client) {
     if (this.admins.delete(client.sessionId)) {
-      if (voiceEnabled) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
+      if (this.voiceOn) dropFromVoice(this.roomId, client.sessionId).catch(() => {});
       return;
     }
     const id = this.idOf(client);
@@ -274,7 +281,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     const uid = this.members.get(id);
     this.members.delete(id);
     if (uid) leaveRoom(uid, this.roomId);
-    if (voiceEnabled) dropFromVoice(this.roomId, id).catch(() => {});
+    if (this.voiceOn) dropFromVoice(this.roomId, id).catch(() => {});
     if (this.spectators.delete(id)) {
       this.updateListing();
       return this.sync();
@@ -291,11 +298,11 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   onDispose() {
     this.timer?.clear();
-    if (voiceEnabled) closeVoice(this.roomId).catch(() => {});
+    if (this.voiceOn) closeVoice(this.roomId).catch(() => {});
   }
 
   private async handleVoiceJoin(client: Client) {
-    if (!voiceEnabled) return client.send("voice", { enabled: false });
+    if (!this.voiceOn) return client.send("voice", { enabled: false, chat: this.chatOnly });
     if (this.admins.has(client.sessionId)) { // the admin listens, unseen
       return client.send("voice", { enabled: true, ...(await voiceToken(this.roomId, client.sessionId, "admin", { talk: false, hear: true }, false, true)) });
     }
@@ -307,7 +314,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   /** Who's out of the game hears the table but doesn't talk to it; back in the waiting room, everyone talks again. */
   private voice(seat: Seat, talk: boolean) {
-    if (voiceEnabled && !seat.left) setVoiceRights(this.roomId, seat.id, { talk, hear: true }).catch(() => {});
+    if (this.voiceOn && !seat.left) setVoiceRights(this.roomId, seat.id, { talk, hear: true }).catch(() => {});
   }
 
   private voiceName(client: Client) {
@@ -323,7 +330,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
 
   /** The graveyard's voice: they talk there among themselves, the table never hears them. */
   private async sendGrave(client: Client | undefined) {
-    if (!voiceEnabled || !client) return;
+    if (!this.voiceOn || !client) return;
     const access = await voiceToken(this.roomId, this.idOf(client), this.voiceName(client), { talk: true, hear: true }, true);
     client.send("voice_grave", access);
   }
@@ -543,7 +550,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       s.score += s.gained;
       this.voice(s, true);
     }
-    if (voiceEnabled) closeVoice(this.roomId, { graveOnly: true }).catch(() => {}); // everyone together again
+    if (this.voiceOn) closeVoice(this.roomId, { graveOnly: true }).catch(() => {}); // everyone together again
     const won = this.seats.filter((s) => !s.left && s.imposter === (winner === "imposters")).map((s) => s.uid); // gone: lost
     recordTable("imposter", this.seats, won, this.startedAt);
   }
@@ -588,6 +595,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
         roomName: this.look.name,
         roomStyle: this.look.style,
         roomType: this.roomType,
+      chat: this.chatOnly,
         started: this.phase !== "lobby",
         players: this.seats.length,
         maxPlayers: MAX_SEATS,
@@ -615,6 +623,7 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
       phase: this.phase,
       hostId: this.hostId,
       roomType: this.roomType,
+      chat: this.chatOnly,
       imposters: this.imposters,
       category: this.categories.length === 1 ? this.categories[0] : "random", // (apps before 1.0.22)
       categories: this.categories,

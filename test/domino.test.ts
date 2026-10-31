@@ -189,6 +189,23 @@ describe("DominoRoom", () => {
     room.disconnect();
   });
 
+  it("a chat room: so in the list and the table, no voice; a room without it has voice", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const chat: any = await colyseus.createRoom("domino", { chat: true });
+    const voice: any = await colyseus.createRoom("domino", {});
+    assert.deepStrictEqual([chat.metadata.chat, voice.metadata.chat], [true, false]);
+    assert.deepStrictEqual([chat.voiceOn, chat.chatOnly], [false, true]);
+    const host = await colyseus.connectTo(chat);
+    let seen: any = null, told: any = null;
+    host.onMessage("domino", (s: any) => (seen = s));
+    host.onMessage("voice", (v: any) => (told = v));
+    host.send("voice_join");
+    while (!seen || !told) await sleep(20);
+    assert.deepStrictEqual([seen.chat, told.enabled], [true, false]);
+    chat.disconnect();
+    voice.disconnect();
+  });
+
   it("tells the room list its game started, and gives a returning player his seat back from the bot", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const room: any = await colyseus.createRoom("domino", {});
