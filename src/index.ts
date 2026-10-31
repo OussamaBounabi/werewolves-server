@@ -13,6 +13,7 @@ import { listen } from "@colyseus/tools";
 import app from "./app.config.js";
 import { resetPresence, startSchedules, watchNewPlayers } from "./accounts.js";
 import { startMetrics } from "./metrics.js";
+import { startAdminSchedules } from "./admin.js";
 
 // Nobody is connected yet: nobody is online or in a room (a crash may have left some marked). 10 s at most.
 await Promise.race([resetPresence(), new Promise((done) => setTimeout(done, 10_000).unref())])
@@ -22,4 +23,5 @@ await Promise.race([resetPresence(), new Promise((done) => setTimeout(done, 10_0
 listen(app);
 watchNewPlayers(); // each new player's welcome gift
 startSchedules(); // the admin's plans, VIP time, VIP diamonds on the 1st, the ranking's prizes on Monday
+startAdminSchedules(); // reports' context kept, scheduled announcements sent
 startMetrics().catch((e) => console.error("starting the day's numbers failed", e)); // (the admin app's)

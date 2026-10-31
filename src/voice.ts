@@ -22,6 +22,19 @@ const rooms = voiceEnabled ? new RoomServiceClient(api, key, secret) : null;
 
 export type VoiceRights = { talk: boolean; hear: boolean };
 
+/** The players support muted, by room ("<roomId>/<identity>"): whatever their room grants, no mic. */
+const muted = new Set<string>();
+const mic = (roomId: string, identity: string, talk: boolean) => talk && !muted.has(`${roomId}/${identity}`);
+
+/** Support mutes (or unmutes) a player in a room's voice: [talk], what his room lets him do once unmuted. */
+export async function muteVoice(roomId: string, identity: string, on: boolean, talk: boolean) {
+  if (on) muted.add(`${roomId}/${identity}`);
+  else muted.delete(`${roomId}/${identity}`);
+  if (on || talk) await setVoiceRights(roomId, identity, { talk: !on && talk, hear: true }).catch(() => {});
+}
+
+export const voiceMuted = (roomId: string, identity: string) => muted.has(`${roomId}/${identity}`);
+
 /** Nothing: what an access to a werewolf voice room carries (the room grants the rights of the moment once he's in). */
 export const NO_VOICE: VoiceRights = { talk: false, hear: false };
 
@@ -41,7 +54,7 @@ export async function voiceToken(
   token.addGrant({
     room: voiceRoom(roomId, grave),
     roomJoin: true,
-    canPublish: rights.talk,
+    canPublish: mic(roomId, identity, rights.talk),
     canSubscribe: rights.hear,
     canPublishData: false,
     hidden,
@@ -81,7 +94,7 @@ export async function setVoiceRights(roomId: string, identity: string, rights: V
   if (!rooms) return;
   const player = `${roomId}/${identity}`;
   wantedRights.set(player, rights);
-  const permission = { canPublish: rights.talk, canSubscribe: rights.hear, canPublishData: false };
+  const permission = { canPublish: mic(roomId, identity, rights.talk), canSubscribe: rights.hear, canPublishData: false };
   await insist(() => rooms.updateParticipant(voiceRoom(roomId), identity, { permission }), () => wantedRights.get(player) === rights);
   if (wantedRights.get(player) === rights) wantedRights.delete(player);
 }
@@ -103,7 +116,7 @@ export async function voiceParticipants(roomId: string, grave = false) {
 
 /** One participant's rights, set now (no retries: the werewolf room checks its voice rooms again every second). */
 export async function grantVoice(roomId: string, identity: string, rights: VoiceRights, { grave = false, hidden = false } = {}) {
-  const permission = { canPublish: rights.talk, canSubscribe: rights.hear, canPublishData: false, hidden };
+  const permission = { canPublish: mic(roomId, identity, rights.talk), canSubscribe: rights.hear, canPublishData: false, hidden };
   await rooms?.updateParticipant(voiceRoom(roomId, grave), identity, { permission });
 }
 

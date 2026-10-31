@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   botMove, ends, misdeal, opener, pips, place, playable, shuffledTiles, sidesFor, type BotLevel, type Line, type Misdeal,
@@ -360,6 +360,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
 
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (settings().bots["domino"] === false) return "bots_off"; // (the owner took this game's bots away)
     if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;

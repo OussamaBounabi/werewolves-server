@@ -32,20 +32,28 @@ import express from "express";
 import { fileURLToPath } from "node:url";
 import { catalog, legends, playerInfo } from "./guess.js";
 import {
-  adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminStats, announce, AuthError, BanError,
+  adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminRole, adminStats, announce, AuthError, BanError, settings,
+  type Staff,
   buyAvatar, buyCoins, buyFrame, claimAchievement, pushClanLine, setNotify, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
   savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
-  answerRequest, changeMember, chests, ClanError, createClan, editClan, inviteToClan, joinClan, leaveClan, pinClan, removeInactive,
-  loungeOf, shareRoom,
+  adminClan, adminClanAct, adminClanChat, adminClans, answerRequest, changeMember, chests, ClanError, createClan, editClan, inviteToClan,
+  joinClan, leaveClan, pinClan, removeInactive, loungeOf, shareRoom,
 } from "./clans.js";
+import {
+  adminItem, adminLog, adminReset, adminWallet, backupNow, cheatFlags, content, crashList, deleteCrash, economy, gameHistory, handleReport,
+  health, logAction, playerExtra, publicConfig, pushSegment, recordCrash, reportPicture, reportQueue, restartSoon, retention, setStaff,
+  staffList, versions, walletHistory, type Segment,
+} from "./admin.js";
+import { moderate, roomPeople } from "./rooms/moderate.js";
 import { dayKey, MISSIONS, periodEnds, weekKey } from "./missions.js";
 import { stakeLedger, stakePlan } from "./stakes.js";
 import { SCRAPER } from "./scraper.js";
 import {
-  avatarPrice, cardPrice, cleanChests, cleanMissionPlan, cleanStakePlan, cleanStorePlan, cleanTiers, framePrice, missionsNow, ROLE_CARDS, storeNow,
+  avatarPrice, cardPrice, cleanChests, cleanEvents, cleanMissionPlan, cleanScheduled, cleanSettings, cleanStakePlan, cleanStorePlan, cleanTiers,
+  framePrice, missionsNow, ROLE_CARDS, SETTINGS, storeNow,
 } from "./plans.js";
 
 function roomInfo(r: { roomId: string; metadata?: any }) {
@@ -71,12 +79,34 @@ function roomInfo(r: { roomId: string; metadata?: any }) {
 /** A query parameter of a request. */
 const param = (ctx: { request?: Request }, key: string) => new URL(ctx.request?.url ?? "http://x/").searchParams.get(key) ?? "";
 
-/** An endpoint of the admin app: its Firebase ID token (Authorization: Bearer) is one of ADMIN_EMAILS'. */
-function adminEndpoint(path: string, method: "GET" | "POST", run: (ctx: { body?: unknown; request?: Request }) => Promise<unknown>) {
+const OWNER = true; // an endpoint for the owner alone
+
+/** What a change in the admin app was made to (the log's target): a player, a room, a clan… */
+const targetOf = (body: unknown) => {
+  const b = (body ?? {}) as Record<string, unknown>;
+  return String(b.uid ?? b.roomId ?? b.id ?? b.who ?? "");
+};
+
+/**
+ * An endpoint of the admin app: its Firebase ID token (Authorization: Bearer) is the owner's or a moderator's
+ * (accounts.adminRole); [owner]: the owner's alone. Every change (a POST) that worked is written to the log.
+ */
+function adminEndpoint(
+  path: string,
+  method: "GET" | "POST",
+  run: (ctx: { body?: unknown; request?: Request }, staff: Staff) => Promise<unknown>,
+  owner = false,
+) {
   return createEndpoint(path, { method }, async (ctx) => {
-    if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+    const staff = await adminRole(bearer(ctx));
+    if (!staff) throw ctx.error(403, { error: "admins only" });
+    if (owner && staff.role !== "owner") throw ctx.error(403, { error: "owner only" });
     try {
-      return await run(ctx);
+      const out = await run(ctx, staff);
+      if (method === "POST") {
+        logAction(staff, path.replace("/api/admin/", ""), targetOf(ctx.body), ctx.body).catch((e) => console.error("admin log failed", e));
+      }
+      return out;
     } catch (e) {
       throw ctx.error(400, { error: (e as Error).message });
     }
@@ -344,40 +374,48 @@ const server = defineServer({
       const idToken = (ctx.body as { idToken?: unknown } | undefined)?.idToken;
       if (typeof idToken !== "string" || !idToken) throw ctx.error(400, { error: "missing idToken" });
       try {
-        const { version, device } = ctx.body as { version?: unknown; device?: unknown };
-        return await exchangeToken(idToken, version, device);
+        const { version, device, lang } = ctx.body as { version?: unknown; device?: unknown; lang?: unknown };
+        return await exchangeToken(idToken, version, device, lang);
       } catch (e) {
         // A ban says until when and why (year 9999: for good), and whether it's his phone's.
         if (e instanceof BanError) throw ctx.error(403, { error: "banned", until: e.until, reason: e.reason, phone: e.phone });
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }
     }),
-    // Admins only: a message from support to every player, body { ar, en, fr } (at least one).
-    api_admin_announce: createEndpoint("/api/admin/announce", { method: "POST" }, async (ctx) => {
-      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
-      try {
-        const sent = await announce((ctx.body ?? {}) as { ar?: unknown; en?: unknown; fr?: unknown });
-        return { id: sent.id };
-      } catch (e) {
-        throw ctx.error(400, { error: (e as Error).message });
-      }
-    }),
-    // Admins only (Authorization: Bearer <ID token>): every room of a game (?game=, werewolf by default), private ones
-    // included.
-    api_admin_rooms: createEndpoint("/api/admin/rooms", { method: "GET" }, async (ctx) => {
-      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
-      const game = new URL(ctx.request?.url ?? "http://x/").searchParams.get("game") || "werewolf";
+    // ---- the admin app (Authorization: Bearer <the admin's Firebase ID token>) ----
+    // Who is asking: the owner or a moderator. The owner alone has the economy, the store, the plans, the settings,
+    // the staff and the log.
+    api_admin_me: adminEndpoint("/api/admin/me", "GET", async (_ctx, staff) => ({ role: staff.role, email: staff.email })),
+    // A message from support to every player, body { ar, en, fr } (at least one).
+    api_admin_announce: adminEndpoint("/api/admin/announce", "POST", async (ctx) => {
+      const sent = await announce((ctx.body ?? {}) as { ar?: unknown; en?: unknown; fr?: unknown });
+      return { id: sent.id };
+    }, OWNER),
+    // Every room of a game (?game=, werewolf by default), private ones included.
+    api_admin_rooms: adminEndpoint("/api/admin/rooms", "GET", async (ctx) => {
+      const game = param(ctx, "game") || "werewolf";
       const rooms = (await matchMaker.query({ name: game })).map((r) => ({
         ...roomInfo(r),
         phase: r.metadata?.phase ?? "",
         day: r.metadata?.day ?? 0,
+        clients: r.clients,
       }));
       return { rooms };
     }),
-    // Admins only: the admin app's home — the accounts, the last 30 days, and now (online, each game's rooms and
-    // players; today's online count every ten minutes).
-    api_admin_stats: createEndpoint("/api/admin/stats", { method: "GET" }, async (ctx) => {
-      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
+    // One room's people (?roomId=) and its chat; support's action there (body { roomId, action: close | kick | mute |
+    // unmute | say, uid, text }).
+    api_admin_room: adminEndpoint("/api/admin/room", "GET", async (ctx) => roomPeople(param(ctx, "roomId"))),
+    api_admin_room_act: adminEndpoint("/api/admin/room/act", "POST", async (ctx) => {
+      const { roomId, action, uid, text } = (ctx.body ?? {}) as Record<string, unknown>;
+      await moderate(String(roomId ?? ""), String(action ?? ""), String(uid ?? ""), String(text ?? ""));
+      return { ok: true };
+    }),
+    // Finished games, newest first: one game's (?game=), one player's (?uid=), ?page=.
+    api_admin_history: adminEndpoint("/api/admin/history", "GET", async (ctx) =>
+      gameHistory(param(ctx, "game"), param(ctx, "uid"), Number(param(ctx, "page")) || 1)),
+    // The home: the accounts, the last 30 days, and now (online, each game's rooms and players; today's online count
+    // every ten minutes).
+    api_admin_stats: adminEndpoint("/api/admin/stats", "GET", async () => {
       const stats = await adminStats();
       const today = todayNow();
       const last = stats.days.at(-1);
@@ -392,21 +430,57 @@ const server = defineServer({
       }
       return { ...stats, online: onlineCount(), onlineToday: today.online, now };
     }),
-    // Admins only: the accounts, newest first (?q= searches the names, ?page=), each with where he is now.
-    api_admin_accounts: createEndpoint("/api/admin/accounts", { method: "GET" }, async (ctx) => {
-      if (!(await isAdmin(bearer(ctx)))) throw ctx.error(403, { error: "admins only" });
-      const url = new URL(ctx.request?.url ?? "http://x/");
-      const list = await adminAccounts(url.searchParams.get("q") ?? "", Number(url.searchParams.get("page")) || 1);
+    api_admin_retention: adminEndpoint("/api/admin/retention", "GET", () => retention()),
+    api_admin_versions: adminEndpoint("/api/admin/versions", "GET", () => versions()),
+    api_admin_health: adminEndpoint("/api/admin/health", "GET", () => health(), OWNER),
+    api_admin_backup: adminEndpoint("/api/admin/backup", "POST", () => backupNow(), OWNER),
+    // The server restarts in a minute, everyone told (only once RESTART_BUTTON=1 says systemd starts it again).
+    api_admin_restart: adminEndpoint("/api/admin/restart", "POST", () => restartSoon(), OWNER),
+    api_admin_crashes: adminEndpoint("/api/admin/crashes", "GET", (ctx) => crashList(Number(param(ctx, "page")) || 1), OWNER),
+    api_admin_crash_delete: adminEndpoint("/api/admin/crash/delete", "POST", async (ctx) => {
+      await deleteCrash(String((ctx.body as { id?: unknown } | undefined)?.id ?? ""));
+      return { ok: true };
+    }, OWNER),
+    // The accounts, newest first (?q= searches the names, ?page=), each with where he is now.
+    api_admin_accounts: adminEndpoint("/api/admin/accounts", "GET", async (ctx) => {
+      const list = await adminAccounts(param(ctx, "q"), Number(param(ctx, "page")) || 1);
       return { ...list, items: list.items.map((u) => ({ ...u, where: whereIs(u.uid).state })) };
     }),
-    // Admins only, for the admin app's Support: the reported players (most reported first), one player (?uid=),
-    // who is banned, support's conversations and one of them (?uid=); a message or a warning to a player (body
-    // { uid, kind, text }), a ban (body { uid, days: -1 for good, 0 lifts, reason, phone }), an answer (body { uid, text }).
+    // Support: the reported players (most reported first), the reports one by one (?handled=1: those dealt with), a
+    // reported picture, one player (?uid=), who is banned, support's conversations and one of them (?uid=); a message
+    // or a warning to a player (body { uid, kind, text }), a ban (body { uid, days: -1 for good, 0 lifts, reason,
+    // phone }), an answer (body { uid, text }), an offensive name or avatar reset (body { uid, what }).
     api_admin_reports: adminEndpoint("/api/admin/reports", "GET", async () => ({ players: await adminReports() })),
+    api_admin_report_queue: adminEndpoint("/api/admin/report-queue", "GET", (ctx) =>
+      reportQueue(param(ctx, "handled") === "1", Number(param(ctx, "page")) || 1)),
+    api_admin_report_handle: adminEndpoint("/api/admin/report/handle", "POST", async (ctx) => {
+      const { id, handled } = (ctx.body ?? {}) as { id?: unknown; handled?: unknown };
+      await handleReport(String(id ?? ""), handled !== false);
+      return { ok: true };
+    }),
+    api_admin_report_picture: adminEndpoint("/api/admin/report-picture", "GET", async (ctx) => {
+      const { type, body } = await reportPicture(param(ctx, "id"));
+      return { type, data: body.toString("base64") };
+    }),
+    api_admin_flags: adminEndpoint("/api/admin/flags", "GET", () => cheatFlags()),
     api_admin_player: adminEndpoint("/api/admin/player", "GET", async (ctx) => {
       const uid = param(ctx, "uid");
-      return { ...(await adminPlayer(uid)), where: whereIs(uid).state };
+      return { ...(await adminPlayer(uid)), ...(await playerExtra(uid)), where: whereIs(uid).state };
     }),
+    api_admin_wallet_log: adminEndpoint("/api/admin/wallet-log", "GET", (ctx) => walletHistory(param(ctx, "uid"), Number(param(ctx, "page")) || 1)),
+    api_admin_wallet: adminEndpoint("/api/admin/wallet", "POST", async (ctx) => {
+      const { uid, coins, diamonds, reason } = (ctx.body ?? {}) as Record<string, unknown>;
+      return adminWallet(String(uid ?? ""), Number(coins) || 0, Number(diamonds) || 0, String(reason ?? ""));
+    }, OWNER),
+    api_admin_item: adminEndpoint("/api/admin/item", "POST", async (ctx) => {
+      const { uid, kind, id, give } = (ctx.body ?? {}) as Record<string, unknown>;
+      return adminItem(String(uid ?? ""), kind, Number(id), give !== false);
+    }, OWNER),
+    api_admin_reset: adminEndpoint("/api/admin/reset", "POST", async (ctx) => {
+      const { uid, what } = (ctx.body ?? {}) as Record<string, unknown>;
+      return adminReset(String(uid ?? ""), what);
+    }),
+    api_admin_economy: adminEndpoint("/api/admin/economy", "GET", (ctx) => economy(Math.min(90, Number(param(ctx, "days")) || 7)), OWNER),
     api_admin_bans: adminEndpoint("/api/admin/bans", "GET", () => adminBans()),
     api_admin_support: adminEndpoint("/api/admin/support", "GET", async () => ({ threads: await supportThreads() })),
     api_admin_thread: adminEndpoint("/api/admin/support/thread", "GET", (ctx) => supportThread(param(ctx, "uid"))),
@@ -426,9 +500,59 @@ const server = defineServer({
       }
       return done;
     }),
-    // Admins only, for the admin app's Store and Missions: each plan as saved (null: none yet) with what's live now and
-    // the defaults; saved back whole to …/save (body { plan } / { tiers }), checked first. VIP for a player: body { uid, level:
-    // "vip" | "pro" | "off", days: null for good }.
+    api_admin_reply: adminEndpoint("/api/admin/support/reply", "POST", async (ctx) => {
+      const { uid, text } = (ctx.body ?? {}) as { uid?: unknown; text?: unknown };
+      await supportReply(String(uid), text);
+      return { ok: true };
+    }),
+    // Clans: the list (?q=, ?sort= xp | members | week | new, ?page=), one clan (?id=), its chat (?id=, ?before=);
+    // support's action on one (body { id, action, … }: see adminClanAct).
+    api_admin_clans: adminEndpoint("/api/admin/clans", "GET", (ctx) => adminClans(param(ctx, "q"), param(ctx, "sort"), Number(param(ctx, "page")) || 1)),
+    api_admin_clan: adminEndpoint("/api/admin/clan", "GET", (ctx) => adminClan(param(ctx, "id"))),
+    api_admin_clan_chat: adminEndpoint("/api/admin/clan/chat", "GET", (ctx) => adminClanChat(param(ctx, "id"), param(ctx, "before"))),
+    api_admin_clan_act: adminEndpoint("/api/admin/clan/act", "POST", async (ctx) => {
+      const body = (ctx.body ?? {}) as Record<string, unknown>;
+      return adminClanAct(String(body.id ?? ""), String(body.action ?? ""), body);
+    }),
+    // The owner's: the staff (body { who: a username or e-mail / a moderator's uid, add }), the log (?page=, ?target=),
+    // the settings (body { settings: the sections to change, null puts one back }), the events, the scheduled
+    // announcements, a notification to some players (body { segment, title, body, send: false only counts them}), the
+    // games' content.
+    api_admin_staff: adminEndpoint("/api/admin/staff", "GET", async () => ({ staff: staffList() }), OWNER),
+    api_admin_staff_set: adminEndpoint("/api/admin/staff/set", "POST", async (ctx) => {
+      const { who, add } = (ctx.body ?? {}) as { who?: unknown; add?: unknown };
+      return { staff: await setStaff(String(who ?? "").trim(), add !== false) };
+    }, OWNER),
+    api_admin_log: adminEndpoint("/api/admin/log", "GET", (ctx) => adminLog(Number(param(ctx, "page")) || 1, param(ctx, "target")), OWNER),
+    api_admin_settings: adminEndpoint("/api/admin/settings", "GET", async () => ({
+      settings: settings(), saved: currentPlans().settings ?? {}, defaults: SETTINGS,
+      avatars: Object.keys(AVATARS).map(Number).filter((id) => !FREE_AVATARS.includes(id)), frames: Object.keys(FRAMES).map(Number),
+    }), OWNER),
+    api_admin_settings_save: adminEndpoint("/api/admin/settings/save", "POST", async (ctx) => {
+      const saved = cleanSettings((ctx.body as { settings?: unknown } | undefined)?.settings, currentPlans().settings);
+      await savePlan("settings", saved);
+      return { settings: settings(), saved };
+    }, OWNER),
+    api_admin_events: adminEndpoint("/api/admin/events", "GET", async () => ({ events: currentPlans().events ?? [], now: new Date().toISOString() }), OWNER),
+    api_admin_events_save: adminEndpoint("/api/admin/events/save", "POST", async (ctx) => {
+      const events = cleanEvents((ctx.body as { events?: unknown } | undefined)?.events);
+      await savePlan("events", events);
+      return { events };
+    }, OWNER),
+    api_admin_scheduled: adminEndpoint("/api/admin/scheduled", "GET", async () => ({ scheduled: currentPlans().scheduled ?? [] }), OWNER),
+    api_admin_scheduled_save: adminEndpoint("/api/admin/scheduled/save", "POST", async (ctx) => {
+      const scheduled = cleanScheduled((ctx.body as { scheduled?: unknown } | undefined)?.scheduled, currentPlans().scheduled);
+      await savePlan("scheduled", scheduled);
+      return { scheduled };
+    }, OWNER),
+    api_admin_push: adminEndpoint("/api/admin/push", "POST", async (ctx) => {
+      const { segment, title, body, send } = (ctx.body ?? {}) as Record<string, unknown>;
+      return pushSegment((segment ?? {}) as Segment, String(title ?? ""), String(body ?? ""), send === true);
+    }, OWNER),
+    api_admin_content: adminEndpoint("/api/admin/content", "GET", async () => content(), OWNER),
+    // Store and Missions: each plan as saved (null: none yet) with what's live now and the defaults; saved back whole
+    // to …/save (body { plan } / { tiers }), checked first. VIP for a player: body { uid, level: "vip" | "pro" | "off",
+    // days: null for good }.
     api_admin_store: adminEndpoint("/api/admin/store", "GET", async () => {
       const plan = currentPlans().store;
       const avatars = Object.keys(AVATARS).map(Number).filter((id) => !FREE_AVATARS.includes(id));
@@ -441,12 +565,12 @@ const server = defineServer({
           cards: Object.fromEntries(Object.keys(ROLE_CARDS).map((role) => [role, cardPrice(null, role)])),
         },
       };
-    }),
+    }, OWNER),
     api_admin_store_save: adminEndpoint("/api/admin/store/save", "POST", async (ctx) => {
       const plan = cleanStorePlan((ctx.body as { plan?: unknown } | undefined)?.plan);
       await savePlan("store", plan);
       return { plan, now: storeNow(plan) };
-    }),
+    }, OWNER),
     api_admin_missions: adminEndpoint("/api/admin/missions", "GET", async () => {
       const plan = currentPlans().missions;
       const now = missionsNow(plan);
@@ -458,50 +582,54 @@ const server = defineServer({
         weekIndex: now.weekIndex,
         defaults: { daily: MISSIONS.filter((m) => m.period === "daily"), weekly: MISSIONS.filter((m) => m.period === "weekly"), bonus: missionsNow(null).bonus },
       };
-    }),
+    }, OWNER),
     api_admin_missions_save: adminEndpoint("/api/admin/missions/save", "POST", async (ctx) => {
       const plan = cleanMissionPlan((ctx.body as { plan?: unknown } | undefined)?.plan);
       await savePlan("missions", plan);
       const now = missionsNow(plan);
       return { plan, dayIndex: now.dayIndex, weekIndex: now.weekIndex };
-    }),
-    api_admin_rewards: adminEndpoint("/api/admin/rewards", "GET", async () => ({ tiers: currentPlans().rewards ?? [] })),
+    }, OWNER),
+    api_admin_rewards: adminEndpoint("/api/admin/rewards", "GET", async () => ({ tiers: currentPlans().rewards ?? [] }), OWNER),
     api_admin_clan_rewards: adminEndpoint("/api/admin/clan-rewards", "GET", async () => ({
       tiers: currentPlans().clanrewards ?? [],
       chests: chests(),
-    })),
+    }), OWNER),
     // The weekly clan chest's goals (a 20-seat clan's) and prizes: { chests: [{ goal, coins, diamonds }] × 3 }.
     // Playing for coins: the plan (the house's cut, the levels) and the last staked games, with what the house kept.
-    api_admin_stakes: adminEndpoint("/api/admin/stakes", "GET", async () => ({ plan: stakePlan(), ...(await stakeLedger()) })),
+    api_admin_stakes: adminEndpoint("/api/admin/stakes", "GET", async () => ({ plan: stakePlan(), ...(await stakeLedger()) }), OWNER),
     api_admin_stakes_save: adminEndpoint("/api/admin/stakes/save", "POST", async (ctx) => {
       const plan = cleanStakePlan((ctx.body as { plan?: unknown } | undefined)?.plan);
       await savePlan("stakes", plan);
       return { plan };
-    }),
+    }, OWNER),
     api_admin_clan_chests_save: adminEndpoint("/api/admin/clan-chests/save", "POST", async (ctx) => {
       const list = cleanChests((ctx.body as { chests?: unknown } | undefined)?.chests);
       await savePlan("chests", list);
       return { chests: list };
-    }),
+    }, OWNER),
     api_admin_clan_rewards_save: adminEndpoint("/api/admin/clan-rewards/save", "POST", async (ctx) => {
       const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
       await savePlan("clanrewards", tiers);
       return { tiers };
-    }),
+    }, OWNER),
     api_admin_rewards_save: adminEndpoint("/api/admin/rewards/save", "POST", async (ctx) => {
       const tiers = cleanTiers((ctx.body as { tiers?: unknown } | undefined)?.tiers);
       await savePlan("rewards", tiers);
       return { tiers };
-    }),
+    }, OWNER),
     api_admin_vip: adminEndpoint("/api/admin/vip", "POST", async (ctx) => {
       const { uid, level, days } = (ctx.body ?? {}) as { uid?: unknown; level?: unknown; days?: unknown };
       if (level !== "vip" && level !== "pro" && level !== "off") throw new Error("level");
       const user = await grantVip(String(uid), level, days === null || days === undefined ? null : Number(days));
       return { vip: user.vip === true, vipPro: user.vipPro === true, vipUntil: user.vipUntil ?? "", vipProUntil: user.vipProUntil ?? "" };
-    }),
-    api_admin_reply: adminEndpoint("/api/admin/support/reply", "POST", async (ctx) => {
-      const { uid, text } = (ctx.body ?? {}) as { uid?: unknown; text?: unknown };
-      await supportReply(String(uid), text);
+    }, OWNER),
+    // What the apps read at start and now and then: the owner's switches, daily reward, wheel, clan prices, oldest
+    // build allowed, bad words, bots, and the events on now.
+    api_config: createEndpoint("/api/config", { method: "GET" }, async () => publicConfig()),
+    // An app's error, counted for the admin app (body { message, stack, version, uid }).
+    api_crash: createEndpoint("/api/crash", { method: "POST" }, async (ctx) => {
+      const ip = ctx.request?.headers.get("x-forwarded-for")?.split(",")[0].trim() || "local";
+      await recordCrash(ip, (ctx.body ?? {}) as Record<string, unknown>).catch((e) => console.error("crash report failed", e));
       return { ok: true };
     }),
     // One room by id, whatever its type (invites, joining a friend): { found: false } when it's gone.

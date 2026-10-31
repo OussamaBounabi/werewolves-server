@@ -1,6 +1,9 @@
 import assert from "assert";
 import { claimable } from "../src/missions.js";
-import { cleanMissionPlan, cleanStorePlan, cleanTiers, cycleIndex, missionsNow, prizeFor, storeNow } from "../src/plans.js";
+import {
+  cleanEvents, cleanMissionPlan, cleanScheduled, cleanSettings, cleanStorePlan, cleanTiers, cycleIndex, eventFactor, hasBadWord, missionsNow,
+  prizeFor, SETTINGS, settingsNow, storeNow,
+} from "../src/plans.js";
 
 // Friday 16 October 2026, noon in Algiers; its week began Monday the 12th.
 const now = Date.UTC(2026, 9, 16, 11);
@@ -75,4 +78,54 @@ describe("the admin's plans", () => {
     assert.strictEqual(prizeFor(tiers, 3)?.diamonds, 50);
     assert.strictEqual(prizeFor(tiers, 11), null);
   });
+
+  it("the owner's settings: a section changed alone, the rest kept; null puts one back; a bad section refused", () => {
+    let saved = cleanSettings({ switches: { clanTags: true, other: true }, minBuild: 24.7 }, null);
+    assert.deepStrictEqual(saved, { switches: { clanTags: true, chessAnalysis: false }, minBuild: 24 });
+    saved = cleanSettings({ badWords: ["Bad", "x", "bad", " worse "] }, saved);
+    assert.deepStrictEqual(saved.badWords, ["bad", "worse"]);
+    assert.strictEqual(saved.minBuild, 24, "kept");
+    const now = settingsNow(saved);
+    assert.deepStrictEqual([now.switches.clanTags, now.daily, now.bots.rummy], [true, SETTINGS.daily, true]);
+    assert.strictEqual(settingsNow(cleanSettings({ minBuild: null }, saved)).minBuild, 0);
+    assert.throws(() => cleanSettings({ daily: [{ coins: 1 }] }, saved), /seven days/);
+    assert.throws(() => cleanSettings({ clan: { price: 1, rename: 1, minLevel: 1, levels: [0, 10, 5, 20, 30, 40, 50] } }, saved), /levels/);
+  });
+
+  it("refuses an unknown wheel avatar and keeps a good wheel", () => {
+    assert.throws(() => cleanSettings({ wheel: { prizes: [...SETTINGS.wheel.prizes.slice(0, 7), { kind: "avatar", id: 99999, weight: 1 }] } }, null), /eight prizes/);
+    const ok = cleanSettings({ wheel: { prizes: SETTINGS.wheel.prizes, price: 0, free: 3, vipFree: 4 } }, null);
+    assert.deepStrictEqual([ok.wheel?.price, ok.wheel?.free, ok.wheel?.vipFree], [1, 3, 4]);
+  });
+
+  it("events: on between their times, in their games; the biggest counts", () => {
+    const events = cleanEvents([
+      { kind: "coins", factor: 2, start: "2026-10-16T10:00:00Z", end: "2026-10-16T14:00:00Z" },
+      { kind: "coins", factor: 3, start: "2026-10-16T10:00:00Z", end: "2026-10-16T14:00:00Z", games: ["ludo"] },
+      { kind: "xp", factor: 9, start: "2026-10-17T10:00:00Z", end: "2026-10-17T12:00:00Z" },
+      { kind: "coins", factor: 2, start: "2026-10-16T14:00:00Z", end: "2026-10-16T10:00:00Z" }, // ends before it starts
+    ]);
+    assert.strictEqual(events.length, 3);
+    assert.strictEqual(events[2].factor, 5, "five times at most");
+    assert.deepStrictEqual(
+      [eventFactor(events, "coins", "rummy", now), eventFactor(events, "coins", "ludo", now), eventFactor(events, "xp", "rummy", now)],
+      [2, 3, 1],
+    );
+    assert.strictEqual(eventFactor(events, "coins", "rummy", Date.UTC(2026, 9, 16, 15)), 1, "over");
+  });
+
+  it("scheduled announcements: those sent stay sent", () => {
+    const first = cleanScheduled([{ id: "a1", at: "2026-10-16T12:00:00Z", en: "Hi" }, { at: "x", en: "no time" }], null);
+    assert.deepStrictEqual(first.map((s) => [s.id, s.sent]), [["a1", false]]);
+    const again = cleanScheduled([{ id: "a1", at: "2026-10-16T12:00:00Z", en: "Hi" }], [{ ...first[0], sent: true }]);
+    assert.strictEqual(again[0].sent, true);
+  });
+
+  it("finds a bad word whatever its case, accents, Arabic vowel marks or look-alike letters, inside other words too", () => {
+    const words = ["idiot", "حمار"];
+    assert.ok(hasBadWord("You_1D10T", words));
+    assert.ok(hasBadWord("ياحِمَار", words));
+    assert.ok(!hasBadWord("Idol_Fan", words));
+  });
 });
+

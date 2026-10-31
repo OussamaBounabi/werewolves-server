@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botPlan, EightBall, freeSpot, RAILS, rack, Sim, tune, type Ball, type Shot } from "../billiard.js";
 import { bracket, nextSlot, type Match } from "../guess.js";
@@ -441,6 +441,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
   private handleAddBot(client: Client, level: string) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.mode === "king") return;
     if (this.seats.length >= this.capacity()) return;
+    if (settings().bots["billiard"] === false) return "bots_off"; // (the owner took this game's bots away)
     if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;

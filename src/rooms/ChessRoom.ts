@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import {
   canMate, CHESS_RATINGS, chessBotMove, chessBotTakesDraw, chessEnd, fen, FREE_RATING, fromUci, inCheck, kingOf, legalMoves, makeMove,
@@ -338,6 +338,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
   /** A bot at the table: checkers by its level; chess by a rating (above FREE_RATING, a VIP Pro host's only). */
   private handleAddBot(client: Client, level: string, rating?: number) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= SEATS) return;
+    if (settings().bots["chess"] === false) return "bots_off"; // (the owner took this game's bots away)
     if (this.stake.amount) return "stake_bots";
     const rated = CHESS_RATINGS.includes(Number(rating)) ? Number(rating) : undefined;
     if (rated && rated > FREE_RATING && this.seat(this.hostId)?.vip !== "pro") return "vip_pro_rating";

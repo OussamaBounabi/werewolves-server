@@ -1,4 +1,4 @@
-import { currentPlans, db, forPlayer, maybe } from "./accounts.js";
+import { currentPlans, db, forPlayer, ledger, maybe } from "./accounts.js";
 import { playerLevel } from "./clans.js";
 import type { StakePlan } from "./plans.js";
 
@@ -70,6 +70,7 @@ export const pocketWallet: Wallet = {
       // In a batch, "coins-" can't lose a grant made at the same moment; coins can't go below 0 either.
       const batch = client.createBatch();
       batch.collection("users").update(uid, { "coins-": coins });
+      ledger(batch, uid, -coins, 0, "stake", "in");
       await batch.send();
       return "ok";
     }),
@@ -77,6 +78,7 @@ export const pocketWallet: Wallet = {
     forPlayer(uid, async () => {
       const batch = (await db()).createBatch();
       batch.collection("users").update(uid, { "coins+": coins });
+      ledger(batch, uid, coins, 0, "stake", "out");
       await batch.send();
     }),
   log: async (row) => void (await (await db()).collection("stake_games").create(row)),

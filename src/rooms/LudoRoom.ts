@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { botMove, HOME, movable, target, throwDie, victims, type Board, type BotLevel } from "../ludo.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -334,6 +334,7 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
 
   private handleAddBot(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.seats.length >= this.maxPlayers) return;
+    if (settings().bots["ludo"] === false) return "bots_off"; // (the owner took this game's bots away)
     if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;

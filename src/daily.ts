@@ -57,15 +57,17 @@ export const WHEEL: Prize[] = [
 export const WHEEL_PRICE = 10; // diamonds, once the free spins are used
 export const BOOST_MS = 60 * 60_000; // the wheel's 2× XP: an hour
 
-/** His free spins today: [wheel] is { day, used }. */
-export function freeSpins(wheel: { day?: string; used?: number } | null | undefined, vip: boolean, now = Date.now()): number {
+/** His free spins today: [wheel] is { day, used }; [free] a day ([vipFree] for a VIP). */
+export function freeSpins(
+  wheel: { day?: string; used?: number } | null | undefined, vip: boolean, now = Date.now(), free = 1, vipFree = 2,
+): number {
   const used = wheel?.day === dayKey(now) ? Number(wheel.used) || 0 : 0;
-  return Math.max(0, (vip ? 2 : 1) - used);
+  return Math.max(0, (vip ? vipFree : free) - used);
 }
 
 /** A prize's place on the wheel, drawn by weight ([random] in [0, 1)); what he owns already can't come up. */
-export function spin(owns: { avatars: number[]; frames: number[] }, random = Math.random()): number {
-  const can = WHEEL.map((p) =>
+export function spin(owns: { avatars: number[]; frames: number[] }, random = Math.random(), prizes = WHEEL): number {
+  const can = prizes.map((p) =>
     (p.kind === "avatar" && owns.avatars.includes(p.id)) || (p.kind === "frame" && owns.frames.includes(p.id)) ? 0 : p.weight,
   );
   let r = random * can.reduce((a, b) => a + b, 0);

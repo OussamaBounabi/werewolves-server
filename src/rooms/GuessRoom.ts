@@ -1,7 +1,8 @@
-import { Room, Client, ServerError } from "colyseus";
+import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
+import { findPicturesWith } from "../admin.js";
 import {
   botMove, bracket, covers, found, legend, LEVELS, nextSlot, player, randomLegend, randomPlayer, validQuestion, valueOf,
   type Answer, type Match, type Question,
@@ -376,6 +377,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
   private handleAddBot(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId || this.trust) return;
     if (this.seats.length >= this.capacity()) return;
+    if (settings().bots[this.game] === false) return "bots_off"; // (the owner took this game's bots away)
     if (this.stake.amount) return "stake_bots";
     const taken = new Set(this.seats.map((s) => s.name));
     const id = `bot-${++this.botSeq}`;
@@ -550,6 +552,13 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     kicked?.leave(4000);
   }
 
+  /** Mystery Item's own pictures: the one [uid] played, if any (a report keeps it). */
+  pictureOf(uid: string) {
+    const seat = this.seats.find((s) => s.uid === uid);
+    const image = seat && this.sides.find((s) => s.id === seat.id)?.custom?.image;
+    return image ? Buffer.from(image, "base64") : null;
+  }
+
   /** [side]'s secret at random, not the other's: an item of his category, or (at the room's level) a legend or one
    * of today's footballers. */
   private draw(side: Side) {
@@ -557,7 +566,7 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     for (;;) {
       const id =
         this.game === "mystery"
-          ? pick(itemsOf(side.cat)).id
+          ? pick(liveItems(side.cat)).id
           : (this.legends ? randomLegend(this.level) : randomPlayer(this.level)).id;
       if (id !== taken) return id;
     }
@@ -798,6 +807,18 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     }
     for (const id of this.admins) this.clients.getById(id)?.send("god", { secrets: Object.fromEntries(this.sides.map((s) => [s.id, s.secret])) });
   }
+}
+
+findPicturesWith((roomId, uid) => {
+  const room = matchMaker.getLocalRoomById(roomId);
+  return room instanceof GuessRoom ? room.pictureOf(uid) : null;
+});
+
+/** A category's things, but those the owner took out (all of them, if he took them all). */
+function liveItems(cat: string) {
+  const off = new Set(settings().mysteryOff);
+  const all = itemsOf(cat), live = all.filter((i) => !off.has(i.id));
+  return live.length ? live : all;
 }
 
 /** Mystery Item: Guess Who's room with things to find instead of footballers (see above). */

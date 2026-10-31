@@ -7,8 +7,11 @@ import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { atNight, reached } from "./achievements.js";
 import { clanWeek } from "./clans.js";
-import { BOOST_MS, DAILY_REWARDS, dailyNext, dailyTaken, freeSpins, spin, WHEEL, WHEEL_PRICE } from "./daily.js";
-import { missionsNow, prizeFor, storeNow, type ChestPlan, type MissionPlan, type RewardTier, type StakePlan, type StorePlan } from "./plans.js";
+import { BOOST_MS, dailyNext, dailyTaken, freeSpins, spin } from "./daily.js";
+import {
+  eventFactor, hasBadWord, missionsNow, prizeFor, settingsNow, storeNow, type ChestPlan, type GameEvent, type MissionPlan, type Moderator, type RewardTier,
+  type Scheduled, type Settings, type StakePlan, type StorePlan,
+} from "./plans.js";
 
 /**
  * Player accounts. Players log in with Firebase Auth, as before: the server checks their Firebase ID
@@ -102,6 +105,16 @@ export async function maybe(record: Promise<RecordModel>): Promise<RecordModel |
   }
 }
 
+/** Where a player's coins and diamonds came from or went (wallet_log), for the admin app. */
+export type Source =
+  | "game" | "mission" | "daily" | "wheel" | "achievement" | "store" | "gift" | "pack" | "free" | "welcome" | "vip" | "ranking"
+  | "stake" | "clan" | "chest" | "admin";
+
+/** One change of [user]'s coins and diamonds, written in [batch] with the change itself (nothing when both are 0). */
+export function ledger(batch: ReturnType<PocketBase["createBatch"]>, user: string, coins: number, diamonds: number, source: Source, note = "") {
+  if (coins || diamonds) batch.collection("wallet_log").create({ user, coins, diamonds, source, note: note.slice(0, 100) });
+}
+
 /**
  * Runs [fn] for one player at a time. His writes read his record first (what he owns, his stats), then
  * write it back; the server is one process, so this keeps two of them from crossing.
@@ -171,19 +184,28 @@ export async function saveRoomLook(uid: string, look: { name: string; style: str
   await (await db()).collection("users").update(uid, { roomLook: look });
 }
 
-/** Whether this Firebase ID token belongs to an admin: the admin app's e-mails, comma-separated in ADMIN_EMAILS (.env). */
-export async function isAdmin(idToken: string): Promise<boolean> {
-  const adminEmails = new Set(
-    (process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean),
-  );
-  if (!pb || adminEmails.size === 0) return false;
+/** Who uses the admin app: the owner (everything) or a moderator (rooms, reports, bans, support, clans). */
+export type Staff = { uid: string; email: string; role: "owner" | "moderator" };
+
+/**
+ * The admin behind this Firebase ID token, or null: the owner's e-mails are ADMIN_EMAILS (.env, comma-separated); the
+ * moderators are the owner's list (plan "staff", by account).
+ */
+export async function adminRole(idToken: string): Promise<Staff | null> {
+  const owners = new Set((process.env.ADMIN_EMAILS ?? "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean));
+  if (!pb) return null;
   try {
-    const { email } = await signedIn(idToken);
-    return !!email && adminEmails.has(email);
+    const { uid, email } = await signedIn(idToken);
+    if (email && owners.has(email)) return { uid, email, role: "owner" };
+    if ((plans.staff ?? []).some((m) => m.uid === uid)) return { uid, email, role: "moderator" };
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
+
+/** Whether this Firebase ID token belongs to the owner or a moderator (the admin app may watch any room). */
+export const isAdmin = async (idToken: string) => (await adminRole(idToken)) !== null;
 
 /**
  * The PocketBase account of a Firebase user: found by his uid, or made for him (his first launch of the
@@ -230,7 +252,7 @@ export const EXCHANGE_TOKEN_SECONDS = 60 * 60;
  * account is made at his first exchange), good for an hour and not refreshable: the app exchanges again
  * at each launch and when it expires. [expires] in epoch ms.
  */
-export async function exchangeToken(idToken: string, appVersion?: unknown, device?: unknown) {
+export async function exchangeToken(idToken: string, appVersion?: unknown, device?: unknown, lang?: unknown) {
   const user = await signedIn(idToken);
   const account = await ensurePlayer(user);
   const phone = typeof device === "string" && DEVICE.test(device) ? device : undefined;
@@ -241,6 +263,8 @@ export async function exchangeToken(idToken: string, appVersion?: unknown, devic
   const changes: Record<string, string> = {};
   if (typeof appVersion === "string" && /^[0-9A-Za-z.+-]{1,20}$/.test(appVersion)) changes.appVersion = appVersion;
   if (phone) changes.device = phone;
+  if (lang === "ar" || lang === "en" || lang === "fr") changes.lang = lang; // (targeted notifications)
+  changes.lastSeen = dzDay(Date.now()); // (once a day: the admin app's "not seen for n days")
   if (Object.entries(changes).some(([key, value]) => account[key] !== value)) {
     await client.collection("users").update(user.uid, changes).catch(() => {});
   }
@@ -518,6 +542,10 @@ const plans: {
   clanrewards: RewardTier[] | null; // the clan ranking's, for each member who played
   chests: ChestPlan | null; // the weekly clan chest's goals and prizes
   stakes: StakePlan | null; // playing for coins: the house's cut and the levels
+  staff: Moderator[] | null; // the owner's moderators
+  settings: Partial<Settings> | null; // switches, the daily reward, the wheel, clans, bad words, bots… (admin.ts)
+  events: GameEvent[] | null; // double coins or XP, at set times
+  scheduled: Scheduled[] | null; // announcements sent at a set time
 } = {
   store: null,
   missions: null,
@@ -525,11 +553,18 @@ const plans: {
   clanrewards: null,
   chests: null,
   stakes: null,
+  staff: null,
+  settings: null,
+  events: null,
+  scheduled: null,
 };
 type PlanId = keyof typeof plans;
 
 /** The admin's plans as last read: every minute (startSchedules), and at once when he saves one. */
 export const currentPlans = () => plans;
+
+/** The settings in force (the owner's, else the usual). */
+export const settings = () => settingsNow(plans.settings);
 
 export async function loadPlans() {
   if (!pb) return;
@@ -621,6 +656,7 @@ async function monthlyDiamonds(done: Done) {
     await forPlayer(id, async () => {
       const batch = client.createBatch(); // ("diamonds+" in a batch: see sell)
       batch.collection("users").update(id, { "diamonds+": VIP_DIAMONDS });
+      ledger(batch, id, 0, VIP_DIAMONDS, "vip", month);
       batch.collection("notices").create({
         user: id, kind: "gems", text: `VIP: your ${VIP_DIAMONDS} diamonds for ${month}`, data: { month, diamonds: VIP_DIAMONDS },
       });
@@ -669,6 +705,7 @@ async function weeklyPrizes(done: Done) {
       await forPlayer(row.user, async () => {
         const batch = client.createBatch();
         if (coins || diamonds) batch.collection("users").update(row.user, { "coins+": coins, "diamonds+": diamonds });
+        ledger(batch, row.user, coins, diamonds, "ranking", `#${i + 1} ${last}`);
         batch.collection("notices").create({
           user: row.user, kind: "reward", text: `#${i + 1} in last week's ranking: ${won.join(", ")}`,
           data: { rank: i + 1, week: last, coins, diamonds, vipDays },
@@ -821,10 +858,14 @@ export async function pushClanLine(idToken: string, id: string) {
 export async function pushToUsers(uids: string[], data: Record<string, string>, kind?: NotifyKind) {
   if (!pb || uids.length === 0) return;
   const client = await db();
-  const rows = await client.collection("users").getFullList({
-    filter: uids.map((_, i) => `id = {:u${i}}`).map((f, i) => client.filter(f, { [`u${i}`]: uids[i] })).join(" || "),
-    fields: "id,pushTokens,notify",
-  });
+  const rows: RecordModel[] = [];
+  for (let i = 0; i < uids.length; i += 50) { // (a filter has a length limit: fifty at a time)
+    const some = uids.slice(i, i + 50);
+    rows.push(...(await client.collection("users").getFullList({
+      filter: some.map((uid) => client.filter("id = {:uid}", { uid })).join(" || "),
+      fields: "id,pushTokens,notify",
+    })));
+  }
   for (const u of rows) {
     if (kind && u.notify?.[kind] === false) continue;
     const tokens: string[] = Array.isArray(u.pushTokens) ? u.pushTokens : [];
@@ -866,7 +907,7 @@ export async function pushMessage(idToken: string, id: string) {
 }
 
 /** The account with this e-mail, or this username (admin tools). */
-async function findPlayer(who: string): Promise<RecordModel> {
+export async function findPlayer(who: string): Promise<RecordModel> {
   const client = await db();
   const filter = who.includes("@")
     ? client.filter("email = {:who}", { who: who.trim().toLowerCase() })
@@ -962,6 +1003,13 @@ const leaderboardId = (uid: string, week: string) => `${uid}_${week}`;
 /** Adds each player's result to his account: games, wins/losses (overall, per side, per role), XP, coins. */
 export async function recordResults(results: GameResult[]) {
   if (!pb || results.length === 0) return;
+  // One row per game for the admin app's history: who played, who won, how long.
+  void (await db()).collection("game_log").create({
+    game: results[0].game ?? "werewolf",
+    minutes: Math.max(...results.map((r) => r.minutes)),
+    players: results.map((r) => ({ uid: r.uid, name: r.name, won: r.won, role: r.role ?? "", side: r.side ?? "" })),
+    uids: results.map((r) => r.uid).join(" "),
+  }).catch((e) => console.error("game log failed", e));
   const failed = (await Promise.allSettled(results.map(recordResult))).find((r) => r.status === "rejected");
   if (failed) throw (failed as PromiseRejectedResult).reason;
 }
@@ -982,11 +1030,14 @@ async function recordResult(r: GameResult) {
     const client = await db();
     const user = await client.collection("users").getOne(r.uid, { fields: "stats,vip,vipPro,boostUntil,clan" });
     const double = user.vip === true ? 2 : 1; // VIP: double coins (never XP: everyone climbs the rankings alike)
-    const { coins } = rewardFor(r);
-    const xp = rewardFor(r).xp * (parseDate(user.boostUntil) > Date.now() ? 2 : 1); // the wheel's 2× XP
+    const game = r.game ?? "werewolf";
+    const coins = rewardFor(r).coins * double * eventFactor(plans.events, "coins", game); // (an event: double coins…)
+    const boost = parseDate(user.boostUntil) > Date.now() ? 2 : 1; // the wheel's 2× XP
+    const xp = rewardFor(r).xp * Math.max(boost, eventFactor(plans.events, "xp", game));
     const stats = user.stats;
     const batch = client.createBatch(); // all of it or none of it
-    batch.collection("users").update(r.uid, { "xp+": xp, "coins+": coins * double, stats: addResult(stats, r, xp) });
+    batch.collection("users").update(r.uid, { "xp+": xp, "coins+": coins, stats: addResult(stats, r, xp) });
+    ledger(batch, r.uid, coins, 0, "game", game);
     for (const period of [day, week]) {
       batch.collection("missions").upsert({ id: missionsId(r.uid, period), user: r.uid, period, ...inc });
     }
@@ -1020,7 +1071,10 @@ export async function claimAchievement(idToken: string, id: string) {
     const friends = await client.collection("friends").getList(1, 1, { filter: client.filter("user = {:uid}", { uid }), fields: "id" });
     const a = reached(id, { stats: user.stats, vip: user.vip === true || user.vipPro === true, friends: friends.totalItems, clan: !!user.clan });
     if (!a) throw new ClaimError("not claimable");
-    await client.collection("users").update(uid, { achievements: [...claimed, id], "coins+": a.coins, "diamonds+": a.diamonds });
+    const batch = client.createBatch();
+    batch.collection("users").update(uid, { achievements: [...claimed, id], "coins+": a.coins, "diamonds+": a.diamonds });
+    ledger(batch, uid, a.coins, a.diamonds, "achievement", id);
+    await batch.send();
     return { coins: a.coins, diamonds: a.diamonds };
   });
 }
@@ -1034,14 +1088,17 @@ export async function claimDaily(idToken: string) {
     const { daily } = await client.collection("users").getOne(uid, { fields: "daily" });
     if (dailyNext(daily) === null) throw new ClaimError("not claimable");
     const taken = dailyTaken(daily);
-    const gift = DAILY_REWARDS[taken.day - 1];
-    await client.collection("users").update(uid, { daily: taken, "coins+": gift.coins, "diamonds+": gift.diamonds });
+    const gift = settings().daily[taken.day - 1];
+    const batch = client.createBatch();
+    batch.collection("users").update(uid, { daily: taken, "coins+": gift.coins, "diamonds+": gift.diamonds });
+    ledger(batch, uid, gift.coins, gift.diamonds, "daily", `day ${taken.day}`);
+    await batch.send();
     return { ...taken, ...gift };
   });
 }
 
 /**
- * A turn of the lucky wheel: free while he has free spins today, else WHEEL_PRICE diamonds (refused without them).
+ * A turn of the lucky wheel: free while he has free spins today, else the wheel's price in diamonds (refused without them).
  * The prize is his at once: coins, diamonds, an hour of 2× XP (on top of what's left of one), a frame or an avatar.
  */
 export async function spinWheel(idToken: string) {
@@ -1050,23 +1107,28 @@ export async function spinWheel(idToken: string) {
   return forPlayer(uid, async () => {
     const client = await db();
     const user = await client.collection("users").getOne(uid, { fields: "wheel,vip,diamonds,avatars,frames,boostUntil" });
-    const free = freeSpins(user.wheel, user.vip === true) > 0;
-    if (!free && !(Number(user.diamonds) >= WHEEL_PRICE)) throw new ClaimError("not enough diamonds");
+    const wheel = settings().wheel;
+    const free = freeSpins(user.wheel, user.vip === true, Date.now(), wheel.free, wheel.vipFree) > 0;
+    if (!free && !(Number(user.diamonds) >= wheel.price)) throw new ClaimError("not enough diamonds");
     const today = dayKey();
     const used = user.wheel?.day === today ? Number(user.wheel.used) || 0 : 0;
-    const index = spin({ avatars: user.avatars ?? [], frames: user.frames ?? [] });
-    const prize = WHEEL[index];
-    const change: Record<string, unknown> = {
-      wheel: { day: today, used: free ? used + 1 : used },
-      ...(free ? {} : { "diamonds-": WHEEL_PRICE }),
-    };
-    if (prize.kind === "coins") change["coins+"] = prize.amount;
-    if (prize.kind === "diamonds") change["diamonds+"] = prize.amount;
+    const index = spin({ avatars: user.avatars ?? [], frames: user.frames ?? [] }, Math.random(), wheel.prizes);
+    const prize = wheel.prizes[index];
+    const paid = free ? 0 : wheel.price;
+    const change: Record<string, unknown> = { wheel: { day: today, used: free ? used + 1 : used } };
+    let coins = 0, diamonds = -paid;
+    if (prize.kind === "coins") coins = prize.amount;
+    if (prize.kind === "diamonds") diamonds += prize.amount;
+    if (coins) change["coins+"] = coins;
+    if (diamonds) change[diamonds > 0 ? "diamonds+" : "diamonds-"] = Math.abs(diamonds);
     if (prize.kind === "boost") change.boostUntil = pbDate(Math.max(Date.now(), parseDate(user.boostUntil) || 0) + BOOST_MS);
     if (prize.kind === "avatar") change.avatars = [...(user.avatars ?? []), prize.id]; // (one he owns never comes up)
     if (prize.kind === "frame") change.frames = [...(user.frames ?? []), prize.id];
-    await client.collection("users").update(uid, change);
-    return { index, prize, paid: free ? 0 : WHEEL_PRICE };
+    const batch = client.createBatch(); // ("diamonds-" in a batch: see sell)
+    batch.collection("users").update(uid, change);
+    ledger(batch, uid, coins, diamonds, "wheel", prize.kind);
+    await batch.send();
+    return { index, prize, paid };
   });
 }
 
@@ -1090,7 +1152,10 @@ export async function buyCoins(idToken: string, pack: number) {
     const client = await db();
     const { diamonds } = await client.collection("users").getOne(uid, { fields: "diamonds" });
     if (!(Number(diamonds) >= p.diamonds)) throw new StoreError("funds");
-    await client.collection("users").update(uid, { "diamonds-": p.diamonds, "coins+": p.coins });
+    const batch = client.createBatch();
+    batch.collection("users").update(uid, { "diamonds-": p.diamonds, "coins+": p.coins });
+    ledger(batch, uid, p.coins, -p.diamonds, "pack");
+    await batch.send();
     return p;
   });
 }
@@ -1103,7 +1168,10 @@ export async function freeCoins(idToken: string) {
     const client = await db();
     const { storeGift } = await client.collection("users").getOne(uid, { fields: "storeGift" });
     if (storeGift === dayKey()) throw new ClaimError("not claimable");
-    await client.collection("users").update(uid, { storeGift: dayKey(), "coins+": FREE_COINS });
+    const batch = client.createBatch();
+    batch.collection("users").update(uid, { storeGift: dayKey(), "coins+": FREE_COINS });
+    ledger(batch, uid, FREE_COINS, 0, "free");
+    await batch.send();
     return { coins: FREE_COINS };
   });
 }
@@ -1141,6 +1209,7 @@ export async function sendGift(idToken: string, to: string, kind: "avatar" | "fr
       const name = giver.name || giver.username || "?";
       const batch = client.createBatch();
       batch.collection("users").update(uid, { [`${item.currency}-`]: item.amount });
+      ledger(batch, uid, item.currency === "coins" ? -item.amount : 0, item.currency === "diamonds" ? -item.amount : 0, "gift", `to:${to} ${kind} ${id}`);
       batch.collection("users").update(to, { [owned]: [...has, id] });
       batch.collection("notices").create({
         user: to, kind: "gift", text: `A gift from ${name}`,
@@ -1188,6 +1257,7 @@ async function sell(
     // In a batch, "coins-" can't lose a grant made at the same moment; coins can't go below 0 either.
     const batch = client.createBatch();
     batch.collection("users").update(uid, { [`${currency}-`]: amount, [ownedField]: [...owned, id], [wornField]: id });
+    ledger(batch, uid, currency === "coins" ? -amount : 0, currency === "diamonds" ? -amount : 0, "store", `${wornField} ${id}`);
     await batch.send();
     return { [wornField]: id, [currency]: have - amount };
   });
@@ -1238,6 +1308,7 @@ async function giveWelcomeGift(uid: string) {
       createdAt: user.createdAt || user.created,
       ...(user.stats ? {} : { stats: { games: 0, wins: 0, losses: 0 } }),
     });
+    ledger(batch, uid, WELCOME_GIFT.coins, WELCOME_GIFT.diamonds, "welcome");
     await batch.send();
   });
 }
@@ -1252,6 +1323,7 @@ export async function grantCurrency(username: string, coins: number, diamonds: n
     const client = await db();
     const batch = client.createBatch();
     batch.collection("users").update(uid, { "coins+": coins, "diamonds+": diamonds });
+    ledger(batch, uid, coins, diamonds, "admin", "script");
     await batch.send(); // (fails if it would take him below 0)
     return client.collection("users").getOne(uid);
   });
@@ -1266,9 +1338,12 @@ export async function grantCurrencyToAll(coins: number, diamonds: number, dryRun
   const client = await db();
   const users = await client.collection("users").getFullList({ fields: "id", batch: 1000 });
   if (dryRun) return users.length;
-  for (let i = 0; i < users.length; i += 100) {
-    const batch = client.createBatch(); // (100 requests at most)
-    for (const { id } of users.slice(i, i + 100)) batch.collection("users").update(id, { "coins+": coins, "diamonds+": diamonds });
+  for (let i = 0; i < users.length; i += 50) {
+    const batch = client.createBatch();
+    for (const { id } of users.slice(i, i + 50)) { // (two requests each: 100 a batch at most)
+      batch.collection("users").update(id, { "coins+": coins, "diamonds+": diamonds });
+      ledger(batch, id, coins, diamonds, "admin", "everyone");
+    }
     await batch.send();
   }
   return users.length;
@@ -1298,6 +1373,7 @@ export async function claimMission(idToken: string, id: string) {
       id: missionsId(uid, period), user: uid, period, claimed: { ...(progress?.claimed ?? {}), [id]: true },
     });
     batch.collection("users").update(uid, { "coins+": reward.coins, "xp+": reward.xp, "diamonds+": reward.diamonds });
+    ledger(batch, uid, reward.coins, reward.diamonds, "mission", id);
     batch.collection("leaderboard").upsert({
       id: leaderboardId(uid, week), week, user: uid, "xp+": reward.xp,
       name: user.name || user.username || "?", avatar: user.avatar ?? 0, frame: user.frame ?? 0, vip: vipLevel(user),
@@ -1343,13 +1419,13 @@ export async function updateProfile(idToken: string, changes: ProfileChanges) {
     };
     if (changes.username != null) {
       const username = text(changes.username, "username").toLowerCase();
-      if (!USERNAME.test(username)) throw new ProfileError("username", 400);
+      if (!USERNAME.test(username) || hasBadWord(username, settings().badWords)) throw new ProfileError("username", 400);
       if (!settingUp && username !== user.username) throw new ProfileError("username set", 409);
       if (settingUp) update.username = username;
     }
     if (changes.name != null) {
       const name = text(changes.name, "name");
-      if (!NAME.test(name)) throw new ProfileError("name", 400);
+      if (!NAME.test(name) || hasBadWord(name, settings().badWords)) throw new ProfileError("name", 400); // (the owner's bad words)
       if (name !== user.name) {
         if (!settingUp && Date.now() - parseDate(user.nameChangedAt) < NAME_EVERY_MS) throw new ProfileError("too soon", 409);
         update.name = name;

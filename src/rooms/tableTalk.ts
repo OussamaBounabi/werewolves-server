@@ -1,6 +1,7 @@
 import type { Client, Room } from "colyseus";
 import { vipLevel } from "../accounts.js";
 import { emojisOpen } from "./perks.js";
+import { isChatMuted } from "./moderate.js";
 
 /** The emojis a player can show over his avatar (the apps have their pictures under these names). */
 export const EMOJIS = [
@@ -22,7 +23,7 @@ export function emojiAllowed(last: Map<string, number>, id: string, emoji: unkno
 }
 
 type Face = { id: string; name: string; avatar: number; frame: number; vip?: string };
-type Line = { from: string; name: string; avatar: number; frame: number; vip: string; text: string; at: number };
+type Line = { from: string; name: string; avatar: number; frame: number; vip: string; text: string; at: number; uid: string };
 
 /**
  * The chat of the card and board games. Everyone in the room writes (spectators too); the apps also pop each line
@@ -59,6 +60,24 @@ export class TableTalk {
     return this.channels.get("") ?? [];
   }
 
+  /** Every table's lines (the admin app's view of the room; a report's snapshot). */
+  allLines() {
+    return [...this.channels.values()].flat().sort((a, b) => a.at - b.at).map((l) => ({ name: l.name, text: l.text, at: l.at, uid: l.uid }));
+  }
+
+  /** A line from support, to every table. */
+  say(text: string) {
+    const line: Line = { from: "admin", name: "PlayRoom", avatar: 0, frame: 0, vip: "admin", text, at: Date.now(), uid: "" };
+    const channels = new Set(["", ...this.channels.keys(), ...this.room.clients.map((c) => this.channelOf(c))]);
+    for (const channel of channels) {
+      const lines = this.channels.get(channel) ?? [];
+      this.channels.set(channel, lines);
+      lines.push(line);
+      if (lines.length > HISTORY) lines.shift();
+    }
+    this.room.broadcast("chat", line);
+  }
+
   /** The chat so far, for a newcomer (or an app coming back, or one gone to another table). */
   history(client: Client) {
     client.send("chat_history", this.channels.get(this.channelOf(client)) ?? []);
@@ -72,7 +91,8 @@ export class TableTalk {
 
   private chat(client: Client, text: unknown) {
     const clean = typeof text === "string" ? text.trim().slice(0, CHAT_MAX) : "";
-    if (!clean || client.auth?.admin) return; // (the admin app only watches)
+    if (!clean || client.auth?.admin) return; // (the admin app writes through support's "say")
+    if (isChatMuted(this.room.roomId, client.auth?.account?.uid)) return client.send("error", { code: "admin_muted" });
     const seat = this.seatOf(client);
     const account = client.auth?.account;
     const face: Face = seat
@@ -80,6 +100,7 @@ export class TableTalk {
       : { id: this.idOf(client), name: account?.name ?? "spectator", avatar: account?.avatar ?? 0, frame: account?.frame ?? 0, vip: vipLevel(account) };
     const line: Line = {
       from: face.id, name: face.name, avatar: face.avatar, frame: face.frame, vip: face.vip ?? "", text: clean, at: Date.now(),
+      uid: account?.uid ?? "",
     };
     const channel = this.channelOf(client);
     const lines = this.channels.get(channel) ?? [];

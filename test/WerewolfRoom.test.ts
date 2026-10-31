@@ -3,6 +3,7 @@ import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
 import { WerewolfState } from "../src/rooms/schema/WerewolfState.js";
+import { chatLines, moderate } from "../src/rooms/moderate.js";
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
   const deadline = Date.now() + timeoutMs;
@@ -66,6 +67,24 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.phase, "night");
     assert.strictEqual(room.state.nightStep, "protector");
     assert.strictEqual(room.state.nightRoles, "protector");
+  });
+
+  it("support in a Werewolf room: a muted player's line goes nowhere, support's goes to everyone", async () => {
+    const room = await colyseus.createRoom<WerewolfState>("werewolf", {});
+    const a = await colyseus.connectTo(room), b = await colyseus.connectTo(room);
+    const heard: any[] = [], errors: any[] = [];
+    for (const c of [a, b]) c.onMessage("chat", (l: any) => heard.push(l));
+    b.onMessage("error", (e: any) => errors.push(e.code));
+    b.onMessage("admin_notice", () => {});
+    await waitFor(() => room.clients.length === 2);
+    (room.clients as any[]).forEach((c, i) => (c.auth = { account: { uid: `u${i}`, name: `P${i}`, avatar: 0, frame: 0 } }));
+    await moderate(room.roomId, "mute", "u1");
+    b.send("chat", { text: "can't" });
+    await waitFor(() => errors.includes("admin_muted"));
+    await moderate(room.roomId, "say", "", "Be kind");
+    await waitFor(() => heard.length === 2);
+    assert.deepStrictEqual(heard.map((l) => [l.from, l.text]), [["admin", "Be kind"], ["admin", "Be kind"]]);
+    assert.deepStrictEqual(chatLines(room.roomId).map((l) => l.text), ["Be kind"]);
   });
 
   it("drops villagers first when fewer players join than the mix plans", async () => {

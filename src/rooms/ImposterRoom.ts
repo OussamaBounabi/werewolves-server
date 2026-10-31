@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
-import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, vipLevel, type Account } from "../accounts.js";
+import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { CATEGORIES, WORDS, wordsOf, type Word } from "../imposterWords.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
@@ -354,7 +354,11 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     // The imposters are always fewer than the others: two need five players, three seven, four nine.
     if (this.seats.length < 2 * this.imposters + 1) return this.imposters === 2 ? "too_few_for_two" : "too_few_imposters";
     for (const id of this.spectators.keys()) this.sendGrave(this.connectionOf(id)); // still watching from the last game
-    const pool = this.categories.length ? WORDS.filter((w) => this.categories.includes(w.cat)) : WORDS;
+    const { imposterOff, imposterAdd } = settings(); // (the owner's words in, those he took out out)
+    const off = new Set(imposterOff);
+    const words = [...WORDS, ...imposterAdd].filter((w) => !off.has(w.id));
+    const picked = this.categories.length ? words.filter((w) => this.categories.includes(w.cat)) : words;
+    const pool = picked.length ? picked : WORDS; // (every word of these categories taken out)
     this.word = pool[Math.floor(Math.random() * pool.length)];
     const order = this.seats.map((_, i) => i).sort(() => Math.random() - 0.5);
     this.seats.forEach((s, i) =>

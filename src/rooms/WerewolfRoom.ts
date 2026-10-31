@@ -2,7 +2,7 @@ import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import {
-  closeVoice, dropFromVoice, grantVoice, NO_VOICE, setVoiceRights, voiceEnabled, voiceParticipants, voiceToken,
+  closeVoice, dropFromVoice, grantVoice, NO_VOICE, setVoiceRights, voiceEnabled, voiceMuted, voiceParticipants, voiceToken,
   type VoiceRights,
 } from "../voice.js";
 import {
@@ -12,6 +12,7 @@ import { dayKey } from "../missions.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
+import { isChatMuted } from "./moderate.js";
 import { emojisOpen, Kicks, RoomLooks } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
@@ -2730,12 +2731,28 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const c of this.clients) if (this.inGraveyard(c.sessionId)) c.send("chat", line);
   }
 
+  /** A line from support, to everyone in the room (the living, the dead, the pack, those watching). */
+  adminSay(text: string) {
+    const line: ChatLine = { from: "admin", name: "PlayRoom", uid: "", avatar: 0, frame: 0, vip: "admin", text, at: Date.now(), wolvesOnly: false };
+    this.chatLog.push(line);
+    this.broadcast("chat", line);
+  }
+
+  /** Every chat of the room, oldest first (the admin app; a report's snapshot). */
+  adminLines() {
+    return [...this.chatLog, ...this.wolfChatLog, ...this.deadChatLog]
+      .filter((l) => l.text)
+      .sort((a, b) => a.at - b.at)
+      .map((l) => ({ name: l.wolvesOnly ? `${l.name} (night)` : l.dead ? `${l.name} (dead)` : l.name, text: l.text, at: l.at, uid: l.uid }));
+  }
+
   private handleChat(client: Client, msg: { text: string }) {
     const id = client.sessionId;
     const player = this.state.players.get(id);
     const text = typeof msg?.text === "string" ? msg.text.trim().slice(0, CHAT_MAX) : "";
     if (!text || this.admins.has(id)) return;
     const account: Account | null = client.auth?.account ?? null;
+    if (isChatMuted(this.roomId, account?.uid)) return client.send("error", { code: "admin_muted" });
     const phase = this.state.phase;
     const payload: ChatLine = {
       from: id,
@@ -2986,7 +3003,13 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    * talk and hear each other (the other living hear nothing); votes, nobody talks; otherwise the living
    * talk. The dead listen (they talk in the graveyard); spectators too, except at night.
    */
+  /** His rights in the living's voice now; muted by support, no mic whatever the phase. */
   private voiceRightsOf(id: string): VoiceRights {
+    const rights = this.phaseVoiceRightsOf(id);
+    return rights.talk && voiceMuted(this.roomId, id) ? { ...rights, talk: false } : rights;
+  }
+
+  private phaseVoiceRightsOf(id: string): VoiceRights {
     if (this.admins.has(id)) return { talk: false, hear: true };
     // Dusk and dawn (the night starting, the night ending): nobody talks and nobody hears until the voice server has
     // made it so for everyone (checkVoice); only then the pack talks (night) or the village hears (day). Without it a
@@ -3025,7 +3048,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /** The graveyard: the dead talk among themselves; of those watching, only VIP Pro may talk to them. */
   private graveRightsOf(id: string): VoiceRights {
-    return { talk: !this.admins.has(id) && (!this.spectators.has(id) || this.vipPros.has(id)), hear: true };
+    const talk = !this.admins.has(id) && (!this.spectators.has(id) || this.vipPros.has(id)) && !voiceMuted(this.roomId, id);
+    return { talk, hear: true };
   }
 
   // A voice access gives no rights (NO_VOICE): checkVoice grants the rights of the moment once he's in. An access is

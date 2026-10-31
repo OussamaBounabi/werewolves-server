@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type PocketBase from "pocketbase";
 import {
-  currentPlans, db, type Done, forPlayer, grantVip, isFriendOfAny, maybe, parseDate, pbDate, pushToUsers, saveDone, signedIn,
+  currentPlans, db, type Done, forPlayer, grantVip, isFriendOfAny, ledger, maybe, parseDate, pbDate, pushToUsers, saveDone, settings,
+  signedIn,
 } from "./accounts.js";
 import { weekKey } from "./missions.js";
-import { prizeFor, type ChestPlan } from "./plans.js";
+import { hasBadWord, prizeFor, type ChestPlan } from "./plans.js";
 
 /**
  * Clans: making one (💎100, from level 5), its look and who may join (open, on request, closed; from a level), joining
@@ -14,15 +15,13 @@ import { prizeFor, type ChestPlan } from "./plans.js";
  * its level gives its seats. The chat is in PocketBase (clan_messages): members write their own lines there.
  */
 
-export const CLAN_PRICE = 100; // diamonds
-export const RENAME_PRICE = 50; // diamonds: a new name or tag
-export const CLAN_MIN_LEVEL = 5; // a player's level, to make a clan
+// What a clan costs (diamonds), a new name or tag, the player level to make one and the XP each clan level starts at:
+// the owner's (settings().clan; usually 100, 50, level 5, and 0 … 105,000 for levels 1 … 7).
 export const REJOIN_MS = 24 * 60 * 60_000; // after leaving a clan
 export const INACTIVE_DAYS = 14;
 
-/** The clan XP each level starts at: level 1 at 0 … level 7 (the last) at 105,000. */
-export const CLAN_LEVELS = [0, 5000, 15000, 30000, 50000, 75000, 105000];
-export const clanLevel = (xp: number) => CLAN_LEVELS.filter((at) => xp >= at).length;
+/** A clan's level (1 … 7) from its XP. */
+export const clanLevel = (xp: number) => settings().clan.levels.filter((at) => xp >= at).length;
 export const clanSeats = (xp: number) => 20 + 5 * (clanLevel(xp) - 1); // 20 … 50
 
 /** A player's level from his XP (as the app counts it: level n from 100·(n−1)²). */
@@ -49,6 +48,7 @@ export function cleanLook(v: unknown): Look {
   const motto = String(o.motto ?? "").trim();
   const color = Number(o.color), minLevel = Number(o.minLevel ?? 1);
   if (name.length < 3 || name.length > 20 || !/^[A-Z0-9]{2,4}$/.test(tag) || motto.length > 40) throw new ClanError("invalid");
+  if (hasBadWord(`${name} ${tag} ${motto}`, settings().badWords)) throw new ClanError("invalid"); // (the owner's bad words)
   if (!SHAPES.includes(String(o.shape)) || !JOINS.includes(String(o.join))) throw new ClanError("invalid");
   if (!Number.isInteger(color) || color < 0 || color > 7 || !Number.isInteger(minLevel) || minLevel < 1 || minLevel > 50) {
     throw new ClanError("invalid");
@@ -81,7 +81,7 @@ function free(user: Record<string, any>) {
   if (parseDate(user.clanLeftAt) > Date.now() - REJOIN_MS) throw new ClanError("wait");
 }
 
-/** Makes a clan, its maker its leader: for CLAN_PRICE diamonds, from level CLAN_MIN_LEVEL. */
+/** Makes a clan, its maker its leader: for the clan price in diamonds, from the owner's player level. */
 export async function createClan(idToken: string, look: unknown) {
   const l = cleanLook(look);
   const { uid } = await signedIn(idToken);
@@ -89,13 +89,15 @@ export async function createClan(idToken: string, look: unknown) {
     const client = await db();
     const user = await client.collection("users").getOne(uid, { fields: "xp,diamonds,clan,clanLeftAt" });
     free(user);
-    if (playerLevel(Number(user.xp) || 0) < CLAN_MIN_LEVEL) throw new ClanError("level");
-    if (!(Number(user.diamonds) >= CLAN_PRICE)) throw new ClanError("funds");
+    const { price, minLevel } = settings().clan;
+    if (playerLevel(Number(user.xp) || 0) < minLevel) throw new ClanError("level");
+    if (!(Number(user.diamonds) >= price)) throw new ClanError("funds");
     const id = newId();
     const batch = client.createBatch();
     batch.collection("clans").create({ id, ...l, xp: 0, members: 1, pinned: "" });
     batch.collection("clan_members").create({ clan: id, user: uid, role: "leader" });
-    batch.collection("users").update(uid, { clan: id, "diamonds-": CLAN_PRICE });
+    batch.collection("users").update(uid, { clan: id, "diamonds-": price });
+    ledger(batch, uid, 0, -price, "clan", `made ${l.tag}`);
     try {
       await batch.send();
     } catch (e) {
@@ -105,7 +107,7 @@ export async function createClan(idToken: string, look: unknown) {
   });
 }
 
-/** The leader changes the clan's look or who may join; a new name or tag costs RENAME_PRICE diamonds. */
+/** The leader changes the clan's look or who may join; a new name or tag costs the owner's price in diamonds. */
 export async function editClan(idToken: string, look: unknown) {
   const l = cleanLook(look);
   const { uid } = await signedIn(idToken);
@@ -117,10 +119,12 @@ export async function editClan(idToken: string, look: unknown) {
       const clan = await client.collection("clans").getOne(me.clan);
       const renamed = clan.name !== l.name || clan.tag !== l.tag;
       const batch = client.createBatch();
-      if (renamed) {
+      const price = renamed ? settings().clan.rename : 0;
+      if (price) {
         const { diamonds } = await client.collection("users").getOne(uid, { fields: "diamonds" });
-        if (!(Number(diamonds) >= RENAME_PRICE)) throw new ClanError("funds");
-        batch.collection("users").update(uid, { "diamonds-": RENAME_PRICE });
+        if (!(Number(diamonds) >= price)) throw new ClanError("funds");
+        batch.collection("users").update(uid, { "diamonds-": price });
+        ledger(batch, uid, 0, -price, "clan", `renamed ${l.tag}`);
       }
       batch.collection("clans").update(me.clan, l);
       try {
@@ -128,7 +132,7 @@ export async function editClan(idToken: string, look: unknown) {
       } catch (e) {
         throw new ClanError((e as { status?: number }).status === 400 ? "taken" : "failed");
       }
-      return { paid: renamed ? RENAME_PRICE : 0 };
+      return { paid: price };
     });
   });
 }
@@ -397,7 +401,8 @@ export async function clanWeek(done: Done) {
   await saveDone(done);
   const client = await db();
   const tiers = currentPlans().clanrewards ?? [];
-  const weeks = await client.collection("clan_weeks").getFullList({ filter: client.filter("week = {:last}", { last }), sort: "-points" });
+  const all = await client.collection("clan_weeks").getFullList({ filter: client.filter("week = {:last}", { last }), sort: "-points", expand: "clan" });
+  const weeks = all.filter((w) => w.expand?.clan?.noRanking !== true); // (a clan the admin took out of the ranking)
   for (const [i, row] of weeks.entries()) {
     try {
       const clan = await maybe(client.collection("clans").getOne(row.clan));
@@ -421,6 +426,7 @@ export async function clanWeek(done: Done) {
         await forPlayer(uid, async () => {
           const batch = client.createBatch();
           if (coins || diamonds) batch.collection("users").update(uid, { "coins+": coins, "diamonds+": diamonds });
+          ledger(batch, uid, coins, diamonds, "chest", `${clan.tag} #${i + 1}`);
           batch.collection("notices").create({
             user: uid, kind: "clanChest", text: `${clan.name}: #${i + 1} last week`,
             data: { clan: clan.name, tag: clan.tag, rank: i + 1, chest, coins, diamonds, vipDays, week: last },
@@ -450,4 +456,155 @@ export async function loungeOf(clan: string) {
   const { matchMaker } = await import("colyseus");
   const room = (await matchMaker.query({ name: "clan_lounge" })).find((r) => r.metadata?.clan === clan);
   return { talking: room?.metadata?.talking ?? [], listeners: room?.metadata?.listeners ?? 0 };
+}
+
+// ---- the admin app ----
+
+const clanCard = (c: Record<string, any>, points = 0) => ({
+  id: c.id, name: c.name, tag: c.tag, motto: c.motto ?? "", shape: c.shape, color: Number(c.color) || 0, join: c.join,
+  xp: Number(c.xp) || 0, level: clanLevel(Number(c.xp) || 0), members: Number(c.members) || 0, seats: clanSeats(Number(c.xp) || 0),
+  noRanking: c.noRanking === true, points, created: c.created,
+});
+
+/** Every clan, 50 a page: [q] searches names and tags; [sort] by "xp", "members", "week" (this week's points) or "new". */
+export async function adminClans(q: string, sort: string, page: number) {
+  const client = await db();
+  const week = weekKey();
+  if (sort === "week" && !q.trim()) {
+    const list = await client.collection("clan_weeks").getList(Math.max(1, page), 50, {
+      filter: client.filter("week = {:week}", { week }), sort: "-points", expand: "clan",
+    });
+    return {
+      page: list.page, pages: list.totalPages, total: list.totalItems,
+      items: list.items.filter((w) => w.expand?.clan).map((w) => clanCard(w.expand!.clan, Number(w.points) || 0)),
+    };
+  }
+  const list = await client.collection("clans").getList(Math.max(1, page), 50, {
+    filter: q.trim() ? client.filter("name ~ {:q} || tag ~ {:q}", { q: q.trim() }) : "",
+    sort: sort === "members" ? "-members" : sort === "new" ? "-created" : "-xp",
+  });
+  const ids = list.items.map((c) => `${c.id}_${week}`);
+  const weeks = ids.length
+    ? await client.collection("clan_weeks").getFullList({ filter: ids.map((id) => client.filter("id = {:id}", { id })).join(" || ") })
+    : [];
+  const points = new Map(weeks.map((w) => [w.clan, Number(w.points) || 0]));
+  return { page: list.page, pages: list.totalPages, total: list.totalItems, items: list.items.map((c) => clanCard(c, points.get(c.id) ?? 0)) };
+}
+
+/** One clan for the admin app: its card, members (roles, this week's points, last seen), chest, lounge, pinned line. */
+export async function adminClan(id: string) {
+  const client = await db();
+  const week = weekKey();
+  const [clan, members, scores, row] = await Promise.all([
+    client.collection("clans").getOne(id),
+    client.collection("clan_members").getFullList({ filter: client.filter("clan = {:id}", { id }), expand: "user" }),
+    client.collection("clan_scores").getFullList({ filter: client.filter("clan = {:id} && week = {:week}", { id, week }), fields: "user,points" }),
+    maybe(client.collection("clan_weeks").getOne(`${id}_${week}`)),
+  ]);
+  const share = new Map(scores.map((s) => [s.user, Number(s.points) || 0]));
+  const points = Number(row?.points) || 0;
+  return {
+    ...clanCard(clan, points),
+    pinned: clan.pinned ?? "",
+    chest: chestFor(points, clanSeats(Number(clan.xp) || 0)),
+    lounge: await loungeOf(id),
+    members: members
+      .map((m) => ({
+        uid: m.user, role: m.role as Role, since: m.created, points: share.get(m.user) ?? 0,
+        name: m.expand?.user?.name || m.expand?.user?.username || "?", avatar: Number(m.expand?.user?.avatar) || 0,
+        frame: Number(m.expand?.user?.frame) || 0, lastSeen: m.expand?.user?.lastSeen ?? "",
+      }))
+      .sort((a, b) => RANK[a.role] - RANK[b.role] || b.points - a.points),
+  };
+}
+
+/** A clan's chat for the admin app, newest first, 50 at a time (older than [before], a line's date, if given). */
+export async function adminClanChat(id: string, before: string) {
+  const client = await db();
+  const filter = client.filter(before ? "clan = {:id} && created < {:before}" : "clan = {:id}", { id, before });
+  const { items } = await client.collection("clan_messages").getList(1, 50, { filter, sort: "-created", expand: "user", skipTotal: true });
+  return {
+    lines: items.map((l) => ({
+      id: l.id, kind: l.kind, text: l.text ?? "", data: l.data ?? null, at: l.created, uid: l.user,
+      name: l.expand?.user?.name || l.expand?.user?.username || "?",
+    })),
+  };
+}
+
+/**
+ * Support's action on a clan: "edit" (name, tag, motto, pinned), "clear" (an offensive name: a plain one, no motto,
+ * no pinned line), "kick" / "leader" a member, "ranking" (in or out of the clan ranking), "points" (this week's set),
+ * "line" (a chat line deleted), "disband" (every member out, told why).
+ */
+export async function adminClanAct(id: string, action: string, body: Record<string, unknown>) {
+  const client = await db();
+  const uid = String(body.uid ?? "");
+  const taken = (e: unknown) => {
+    throw new ClanError((e as { status?: number }).status === 400 ? "taken" : "failed");
+  };
+  switch (action) {
+    case "edit": {
+      const clan = await client.collection("clans").getOne(id);
+      const look = cleanLook({ ...clan, ...Object.fromEntries(["name", "tag", "motto"].filter((k) => k in body).map((k) => [k, body[k]])) });
+      const pinned = "pinned" in body ? String(body.pinned ?? "").trim().slice(0, 200) : clan.pinned;
+      await client.collection("clans").update(id, { name: look.name, tag: look.tag, motto: look.motto, pinned }).catch(taken);
+      return { ok: true };
+    }
+    case "clear": {
+      const code = newId().slice(0, 4).toUpperCase();
+      await client.collection("clans").update(id, { name: `Clan ${code}`, tag: code, motto: "", pinned: "" }).catch(taken);
+      return { name: `Clan ${code}`, tag: code };
+    }
+    case "kick":
+      return forPlayer(uid, () => forClan(id, async () => {
+        const m = await memberOf(client, uid);
+        if (m?.clan !== id) throw new ClanError("not in the clan");
+        await removeMember(client, m, "kicked");
+        return { ok: true };
+      }));
+    case "leader":
+      return forClan(id, async () => {
+        const members = (await client.collection("clan_members").getFullList({ filter: client.filter("clan = {:id}", { id }) })) as unknown as Member[];
+        const them = members.find((m) => m.user === uid);
+        if (!them) throw new ClanError("not in the clan");
+        const batch = client.createBatch();
+        for (const m of members) if (m.role === "leader" && m !== them) batch.collection("clan_members").update(m.id, { role: "coLeader" });
+        batch.collection("clan_members").update(them.id, { role: "leader" });
+        batch.collection("clan_messages").create({ clan: id, user: uid, kind: "leader" });
+        await batch.send();
+        return { ok: true };
+      });
+    case "ranking":
+      await client.collection("clans").update(id, { noRanking: body.off === true });
+      return { ok: true };
+    case "points": {
+      const points = Math.max(0, Math.floor(Number(body.points)) || 0);
+      const week = weekKey();
+      const batch = client.createBatch();
+      batch.collection("clan_weeks").upsert({ id: `${id}_${week}`, clan: id, week, points });
+      await batch.send();
+      return { points };
+    }
+    case "line":
+      await client.collection("clan_messages").delete(String(body.line ?? ""));
+      return { ok: true };
+    case "disband":
+      return forClan(id, async () => {
+        const clan = await client.collection("clans").getOne(id, { fields: "name" });
+        const why = String(body.reason ?? "").trim().slice(0, 200);
+        const members = await client.collection("clan_members").getFullList({ filter: client.filter("clan = {:id}", { id }), fields: "user" });
+        for (let i = 0; i < members.length; i += 50) {
+          const batch = client.createBatch();
+          for (const { user } of members.slice(i, i + 50)) {
+            batch.collection("users").update(user, { clan: "" }); // (no wait to join another: not their doing)
+            batch.collection("notices").create({ user, kind: "message", text: `Support closed your clan ${clan.name}${why ? `: ${why}` : ""}` });
+          }
+          await batch.send();
+        }
+        await client.collection("clans").delete(id); // (its members, chat, weeks and scores with it)
+        return { members: members.length };
+      });
+    default:
+      throw new ClanError("action");
+  }
 }

@@ -7,6 +7,7 @@
  */
 import { AVATARS, FRAMES, FREE_AVATARS, PRICES } from "./avatars.js";
 import { COUNTERS, DAILY_BONUS, MISSIONS, dayKey, weekKey, type Mission } from "./missions.js";
+import { DAILY_REWARDS, WHEEL, type Gift, type Prize } from "./daily.js";
 
 export type Price = { amount: number; currency: "coins" | "diamonds" };
 
@@ -241,3 +242,186 @@ export function cleanTiers(v: unknown): RewardTier[] {
   for (const t of tiers) if (!kept.length || t.from > kept[kept.length - 1].to) kept.push(t);
   return kept.slice(0, 20);
 }
+
+// ---- the admin app's settings, events, staff and scheduled announcements ----
+
+/** Features the owner turns on and off without a new app (the apps read them from /api/config). */
+export const SWITCHES = { clanTags: false, chessAnalysis: false };
+export type SwitchId = keyof typeof SWITCHES;
+
+/** The games whose host may add bots, each one on by default. */
+export const BOT_GAMES = ["rummy", "domino", "billiard", "chess", "ludo", "guess", "mystery"] as const;
+
+/** A word the owner added to Imposter (its category and three languages). */
+export type ExtraWord = { id: string; cat: string; en: string; fr: string; ar: string };
+
+/** What the owner sets in the admin app: anything left out is the usual (SETTINGS). */
+export type Settings = {
+  switches: Record<SwitchId, boolean>;
+  daily: Gift[]; // the seven days' gifts
+  wheel: { prizes: Prize[]; price: number; free: number; vipFree: number }; // eight prizes, in the app's order
+  clan: { price: number; rename: number; minLevel: number; levels: number[] }; // levels: the XP each of the 7 starts at
+  minBuild: number; // apps of an older build must update (0: any)
+  badWords: string[]; // starred out of chats; refused in names
+  bots: Record<string, boolean>; // the games whose host may add bots
+  imposterOff: string[]; // Imposter's words taken out
+  imposterAdd: ExtraWord[];
+  mysteryOff: string[]; // Mystery Item's things taken out
+};
+
+export const SETTINGS: Settings = {
+  switches: { ...SWITCHES },
+  daily: DAILY_REWARDS,
+  wheel: { prizes: WHEEL, price: 10, free: 1, vipFree: 2 },
+  clan: { price: 100, rename: 50, minLevel: 5, levels: [0, 5000, 15000, 30000, 50000, 75000, 105000] },
+  minBuild: 0,
+  badWords: [],
+  bots: Object.fromEntries(BOT_GAMES.map((g) => [g, true])),
+  imposterOff: [],
+  imposterAdd: [],
+  mysteryOff: [],
+};
+
+/** The settings in force: the owner's, the usual for anything he left out. */
+export const settingsNow = (saved: Partial<Settings> | null): Settings => ({
+  ...SETTINGS,
+  ...(saved ?? {}),
+  switches: { ...SETTINGS.switches, ...(saved?.switches ?? {}) },
+  bots: { ...SETTINGS.bots, ...(saved?.bots ?? {}) },
+});
+
+const gift = (g: any): Gift => ({ coins: int(g?.coins, 0, 1_000_000), diamonds: int(g?.diamonds, 0, 100_000) });
+
+function prize(p: any): Prize | null {
+  const weight = int(p?.weight, 0, 1000);
+  if (p?.kind === "coins" || p?.kind === "diamonds") return { kind: p.kind, amount: int(p.amount, 1, 1_000_000), weight };
+  if (p?.kind === "boost") return { kind: "boost", amount: int(p.amount, 2, 5), weight };
+  if (p?.kind === "avatar" && isAvatar(p.id)) return { kind: "avatar", id: p.id, weight };
+  if (p?.kind === "frame" && isFrame(p.id)) return { kind: "frame", id: p.id, weight };
+  return null;
+}
+
+const WORD_ID = /^[a-z]+-[0-9a-z]{1,12}$/;
+const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+const ids = (v: unknown, pattern: RegExp) =>
+  [...new Set((Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && pattern.test(x)))].slice(0, 5000);
+
+/**
+ * The sections of the settings the admin app sent, checked, over [saved]: only those it holds change; null puts one
+ * back to the usual. A section that doesn't check out throws.
+ */
+export function cleanSettings(v: any, saved: Partial<Settings> | null): Partial<Settings> {
+  const out: Partial<Settings> = { ...(saved ?? {}) };
+  const set = <K extends keyof Settings>(key: K, clean: (x: any) => Settings[K]) => {
+    if (!v || !(key in v)) return;
+    if (v[key] === null) delete out[key];
+    else out[key] = clean(v[key]);
+  };
+  set("switches", (s) => Object.fromEntries(Object.keys(SWITCHES).map((k) => [k, s?.[k] === true])) as Settings["switches"]);
+  set("daily", (d) => {
+    const days = (Array.isArray(d) ? d : []).slice(0, 7).map(gift);
+    if (days.length !== 7) throw new Error("seven days");
+    return days;
+  });
+  set("wheel", (w) => {
+    const prizes = (Array.isArray(w?.prizes) ? w.prizes : []).slice(0, 8).map(prize);
+    if (prizes.length !== 8 || prizes.some((p: Prize | null) => !p)) throw new Error("eight prizes");
+    if (!prizes.some((p: Prize) => p.weight > 0)) throw new Error("weights");
+    return { prizes, price: int(w.price, 1, 10_000), free: int(w.free, 0, 10), vipFree: int(w.vipFree, 0, 10) };
+  });
+  set("clan", (c) => {
+    const levels = (Array.isArray(c?.levels) ? c.levels : []).slice(0, 7).map((x: unknown) => int(x, 0, 100_000_000));
+    if (levels.length !== 7 || levels[0] !== 0 || levels.some((x: number, i: number) => i > 0 && x <= levels[i - 1])) {
+      throw new Error("levels");
+    }
+    return { price: int(c.price, 0, 100_000), rename: int(c.rename, 0, 100_000), minLevel: int(c.minLevel, 1, 100), levels };
+  });
+  set("minBuild", (b) => int(b, 0, 100_000));
+  set("badWords", (w) =>
+    [...new Set((Array.isArray(w) ? w : []).map((x) => text(x, 40).toLowerCase()).filter((x) => x.length >= 2))].slice(0, 2000),
+  );
+  set("bots", (b) => Object.fromEntries(BOT_GAMES.map((g) => [g, b?.[g] !== false])));
+  set("imposterOff", (o) => ids(o, WORD_ID));
+  set("imposterAdd", (a) =>
+    (Array.isArray(a) ? a : []).slice(0, 2000).flatMap((w: any) => {
+      const word = { id: text(w?.id, 30), cat: text(w?.cat, 20), en: text(w?.en, 40), fr: text(w?.fr, 40), ar: text(w?.ar, 40) };
+      return WORD_ID.test(word.id) && /^[a-z]+$/.test(word.cat) && word.en && word.fr && word.ar ? [word] : [];
+    }),
+  );
+  set("mysteryOff", (o) => ids(o, /^[a-z0-9-]{1,60}$/));
+  return out;
+}
+
+/**
+ * One character as bad words are compared (the app's remote_config.dart does the same): lower case, no accent or
+ * Arabic vowel mark, look-alikes made one (أ إ آ → ا, ى → ي, ة → ه; 0 → o, @ → a…); spaces and signs dropped.
+ */
+const SWAPS: Record<string, string> = {
+  أ: "ا", إ: "ا", آ: "ا", ٱ: "ا", ى: "ي", ة: "ه", ؤ: "و", ئ: "ي",
+  "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "@": "a", $: "s", "7": "t",
+};
+const plain = (text: string) =>
+  [...text.toLowerCase().normalize("NFD")]
+    .map((c) => SWAPS[c] ?? c)
+    .filter((c) => /[a-z0-9؀-ۿ]/.test(c) && !/[ً-ٰٟـ]/.test(c))
+    .join("");
+
+/** Whether [text] holds one of [words] (whatever its case, accents or look-alike letters, inside other words too). */
+export const hasBadWord = (text: string, words: string[]) => {
+  const hay = plain(text);
+  return words.some((w) => plain(w).length >= 2 && hay.includes(plain(w)));
+};
+
+/** Double coins or XP (or more) for a while: in every game, or only some. */
+export type GameEvent = {
+  id: string;
+  title: { ar: string; en: string; fr: string };
+  kind: "coins" | "xp";
+  factor: number; // 2 … 5
+  start: string; // ISO times
+  end: string;
+  games: string[]; // none: every game
+};
+
+const newKey = () => Math.random().toString(36).slice(2, 12);
+
+export function cleanEvents(v: unknown): GameEvent[] {
+  return (Array.isArray(v) ? v : []).slice(0, 100).flatMap((e: any) => {
+    const start = Date.parse(e?.start), end = Date.parse(e?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || (e?.kind !== "coins" && e?.kind !== "xp")) return [];
+    return [{
+      id: /^[a-z0-9]{1,20}$/.test(e?.id) ? e.id : newKey(),
+      title: { ar: text(e?.title?.ar, 80), en: text(e?.title?.en, 80), fr: text(e?.title?.fr, 80) },
+      kind: e.kind,
+      factor: int(e?.factor, 2, 5),
+      start: new Date(start).toISOString(),
+      end: new Date(end).toISOString(),
+      games: ids(e?.games, /^[a-z]{1,20}$/),
+    }];
+  });
+}
+
+/** The events on at [now] (ended ones are kept for the admin app's list). */
+export const eventsOn = (events: GameEvent[] | null, now = Date.now()) =>
+  (events ?? []).filter((e) => Date.parse(e.start) <= now && now < Date.parse(e.end));
+
+/** How many times a game's [kind] counts now in [game]: the biggest event on for it (1: none). */
+export const eventFactor = (events: GameEvent[] | null, kind: GameEvent["kind"], game: string, now = Date.now()) =>
+  Math.max(1, ...eventsOn(events, now).filter((e) => e.kind === kind && (e.games.length === 0 || e.games.includes(game))).map((e) => e.factor));
+
+/** An announcement the server sends at its time (to every phone too, with [push]). */
+export type Scheduled = { id: string; at: string; ar: string; en: string; fr: string; push: boolean; sent: boolean };
+
+export function cleanScheduled(v: unknown, saved: Scheduled[] | null): Scheduled[] {
+  const sent = new Set((saved ?? []).filter((s) => s.sent).map((s) => s.id));
+  return (Array.isArray(v) ? v : []).slice(0, 100).flatMap((s: any) => {
+    const at = Date.parse(s?.at);
+    const texts = { ar: text(s?.ar, 1000), en: text(s?.en, 1000), fr: text(s?.fr, 1000) };
+    if (!Number.isFinite(at) || !(texts.ar || texts.en || texts.fr)) return [];
+    const id = /^[a-z0-9]{1,20}$/.test(s?.id) ? s.id : newKey();
+    return [{ id, at: new Date(at).toISOString(), ...texts, push: s?.push === true, sent: sent.has(id) }];
+  });
+}
+
+/** A moderator, as the owner added him. */
+export type Moderator = { uid: string; name: string; username: string; added: string };

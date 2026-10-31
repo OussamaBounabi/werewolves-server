@@ -10,9 +10,10 @@ import { ColyseusTestServer } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import * as accounts from "../src/accounts.js";
 import * as clans from "../src/clans.js";
+import * as adminTools from "../src/admin.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
-import { cleanMissionPlan, cleanStorePlan, cleanTiers } from "../src/plans.js";
+import { cleanEvents, cleanMissionPlan, cleanSettings, cleanStorePlan, cleanTiers } from "../src/plans.js";
 import { appClosed, appOpened, enterRoom, leaveRoom, presenceSaved } from "../src/presence.js";
 import { kickFromApp } from "../src/rooms/PresenceRoom.js";
 import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.js";
@@ -969,6 +970,125 @@ describe("PocketBase", function () {
       assert.strictEqual((await post("/api/profile", { avatar: 104 }, p.token)).status, 401);
       assert.strictEqual((await post("/api/profile", { avatar: 104 })).status, 400);
       assert.strictEqual((await post("/api/avatars/buy", { id: 101 }, "garbage")).status, 401);
+    });
+  });
+
+  describe("the admin app's round (2026-10-31)", () => {
+    it("records where every coin comes from; the owner gives or takes with a reason the player reads", async () => {
+      const p = await player();
+      await accounts.claimDaily(p.idToken);
+      await accounts.recordResults([result(p.id, true, { game: "ludo", role: undefined, side: undefined })]);
+      const log = await adminTools.walletHistory(p.id, 1);
+      assert.deepStrictEqual(log.items.map((r) => [r.source, r.coins, r.diamonds]), [["game", 30, 0], ["daily", 200, 0]]);
+      const now = await adminTools.adminWallet(p.id, -100, 7, "Sorry for the lost game");
+      assert.deepStrictEqual(now, { coins: (await user(p.id)).coins, diamonds: (await user(p.id)).diamonds });
+      const notice = await admin.collection("notices").getFirstListItem(`user = "${p.id}"`, { sort: "-created" });
+      assert.deepStrictEqual([notice.kind, notice.text], ["message", "-100 coins, +7 diamonds: Sorry for the lost game"]);
+      assert.strictEqual((await adminTools.walletHistory(p.id, 1)).items[0].source, "admin");
+      await assert.rejects(adminTools.adminWallet(p.id, -1_000_000, 0, "too much"), /hasn't that much/);
+      await assert.rejects(adminTools.adminWallet(p.id, 5, 0, " "), /reason/);
+      const history = await adminTools.gameHistory("", p.id, 1);
+      assert.deepStrictEqual(history.items.map((g) => [g.game, g.minutes, (g.players as any[])[0].won]), [["ludo", 10, true]]);
+      assert.ok((await adminTools.gameHistory("ludo", "", 1)).total >= 1);
+      const eco = await adminTools.economy(1);
+      assert.ok(eco.sources.daily.coinsIn >= 200 && eco.sources.admin.coinsOut >= 100 && eco.players > 0);
+    });
+
+    it("an event doubles a game's coins while it's on; the owner's daily reward and wheel are what players get", async () => {
+      const p = await player();
+      const hour = 3_600_000;
+      await accounts.savePlan("events", cleanEvents([
+        { kind: "coins", factor: 3, start: new Date(Date.now() - hour).toISOString(), end: new Date(Date.now() + hour).toISOString(), games: ["domino"] },
+      ]));
+      await accounts.recordResults([result(p.id, true, { game: "domino", role: undefined, side: undefined })]);
+      await accounts.recordResults([result(p.id, true, { game: "rummy", role: undefined, side: undefined })]);
+      const games = (await adminTools.walletHistory(p.id, 1)).items.map((r) => r.coins);
+      assert.deepStrictEqual(games, [30, 90], "rummy as usual, domino ×3");
+      const days = Array.from({ length: 7 }, () => ({ coins: 0, diamonds: 3 }));
+      const wheel = { prizes: Array.from({ length: 8 }, () => ({ kind: "coins", amount: 77, weight: 1 })), price: 4, free: 0, vipFree: 0 };
+      await accounts.savePlan("settings", cleanSettings({ daily: days, wheel }, null));
+      assert.deepStrictEqual(await accounts.claimDaily(p.idToken).then((g) => [g.coins, g.diamonds]), [0, 3]);
+      await admin.collection("users").update(p.id, { diamonds: 10 });
+      const spun = await accounts.spinWheel(p.idToken);
+      assert.deepStrictEqual([spun.paid, spun.prize], [4, { kind: "coins", amount: 77, weight: 1 }], "no free spin: paid");
+      assert.strictEqual((await user(p.id)).diamonds, 6);
+      await accounts.savePlan("events", []);
+      await accounts.savePlan("settings", {});
+    });
+
+    it("moderators: the owner adds one by his username, he is staff but no owner, and is taken away", async () => {
+      const [owner, mod] = [await player(), await player()];
+      process.env.ADMIN_EMAILS = owner.email;
+      assert.deepStrictEqual(await accounts.adminRole(owner.idToken), { uid: owner.id, email: owner.email, role: "owner" });
+      assert.strictEqual(await accounts.adminRole(mod.idToken), null);
+      await adminTools.setStaff(mod.username, true);
+      assert.strictEqual((await accounts.adminRole(mod.idToken))?.role, "moderator");
+      assert.strictEqual(await accounts.isAdmin(mod.idToken), true, "he may watch rooms");
+      await adminTools.logAction({ uid: owner.id, email: owner.email, role: "owner" }, "wallet", mod.id, { coins: 5 });
+      assert.strictEqual((await adminTools.adminLog(1, mod.id)).items[0].action, "wallet");
+      await adminTools.setStaff(mod.id, false);
+      assert.strictEqual(await accounts.adminRole(mod.idToken), null);
+      delete process.env.ADMIN_EMAILS;
+    });
+
+    it("clans: support clears an offensive name, takes a clan out of the ranking, puts a member out, disbands it", async () => {
+      const [lead, member] = [await player(), await player()];
+      await admin.collection("users").update(lead.id, { xp: 10_000, diamonds: 500 });
+      const look = { name: "Bad Clan", tag: "BAD", motto: "rude", shape: "shield", color: 1, join: "open", minLevel: 1 };
+      const { id } = await clans.createClan(lead.idToken, look);
+      await clans.joinClan(member.idToken, id);
+      assert.deepStrictEqual((await adminTools.walletHistory(lead.id, 1)).items.map((r) => [r.source, r.diamonds]), [["clan", -100]]);
+      const cleared = (await clans.adminClanAct(id, "clear", {})) as { name: string; tag: string };
+      const after = await admin.collection("clans").getOne(id);
+      assert.deepStrictEqual([after.name, after.tag, after.motto], [cleared.name, cleared.tag, ""]);
+      await clans.adminClanAct(id, "points", { points: 1234 });
+      const week = weekKey();
+      assert.strictEqual((await member.pb.collection("clan_weeks").getOne(`${id}_${week}`)).points, 1234);
+      await clans.adminClanAct(id, "ranking", { off: true });
+      await refused(member.pb.collection("clan_weeks").getOne(`${id}_${week}`)); // (the apps' ranking no longer lists it)
+      assert.strictEqual((await clans.adminClan(id)).noRanking, true);
+      await clans.adminClanAct(id, "kick", { uid: member.id });
+      assert.strictEqual((await user(member.id)).clan, "");
+      assert.strictEqual((await clans.adminClans("", "xp", 1)).items.some((c) => c.id === id), true);
+      await clans.adminClanAct(id, "disband", { reason: "names" });
+      assert.strictEqual((await user(lead.id)).clan, "");
+      await refused(admin.collection("clans").getOne(id));
+    });
+
+    it("a reported friend chat is kept with the report: the two players' last messages", async () => {
+      const [a, b] = [await player(), await player()];
+      await befriend(a, b);
+      await a.pb.collection("messages").create({ from: a.id, to: b.id, type: "text", text: "you are an idiot" });
+      await b.pb.collection("messages").create({ from: b.id, to: a.id, type: "text", text: "reported" });
+      await b.pb.send("/api/collections/reports/records", { method: "POST", body: { target: a.id, reporter: b.id, reason: "insults", context: "chat" } });
+      await adminTools.snapReports();
+      const queue = await adminTools.reportQueue(false, 1);
+      const r = queue.items.find((x) => x.target.uid === a.id)!;
+      assert.deepStrictEqual((r.snapshot as any).chat.map((m: any) => m.text), ["you are an idiot", "reported"]);
+      await adminTools.handleReport(r.id, true);
+      assert.ok((await adminTools.reportQueue(true, 1)).items.some((x) => x.id === r.id));
+    });
+
+    it("signs of cheating: three accounts on one phone; bad words refused in names", async () => {
+      const ps = [await player(), await player(), await player()];
+      for (const p of ps) await admin.collection("users").update(p.id, { device: "one-phone-123" });
+      const { flags } = await adminTools.cheatFlags();
+      const phone = flags.find((f) => f.kind === "phone" && f.players.some((x) => x.uid === ps[0].id));
+      assert.deepStrictEqual(phone?.players.map((x) => x.uid).sort(), ps.map((p) => p.id).sort());
+      await accounts.savePlan("settings", cleanSettings({ badWords: ["idiot"] }, null));
+      await assert.rejects(accounts.updateProfile(ps[0].idToken, { name: "Big_1d10t" }), /name/);
+      await accounts.savePlan("settings", {});
+    });
+
+    it("counts the apps' crashes by message, stack and version", async () => {
+      const crash = { message: "Null check operator used on a null value", stack: "#0 Foo.bar (package:x/a.dart:10:5)\n#1 main", version: "1.0.25" };
+      await adminTools.recordCrash("1.2.3.4", crash);
+      await adminTools.recordCrash("1.2.3.4", { ...crash, stack: "#0 Foo.bar (package:x/a.dart:11:9)\n#1 main" }); // (another line: the same)
+      await adminTools.recordCrash("1.2.3.4", { ...crash, version: "1.0.26" });
+      const list = await adminTools.crashList(1);
+      assert.deepStrictEqual(list.items.filter((c) => c.message === crash.message).map((c) => [c.version, c.count]).sort(), [["1.0.25", 2], ["1.0.26", 1]]);
+      assert.ok(Array.isArray((await adminTools.retention()).rows));
+      assert.ok(Object.keys((await adminTools.versions()).all).length > 0);
     });
   });
 

@@ -4,6 +4,7 @@ import { ColyseusTestServer, boot } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import { botMove, ends, misdeal, opener, place, shuffledTiles, sidesFor, TILES, type Line } from "../src/domino.js";
 import { DominoRoom } from "../src/rooms/DominoRoom.js";
+import { moderate, roomPeople } from "../src/rooms/moderate.js";
 
 const T = (a: number, b: number) => TILES.findIndex(([lo, hi]) => lo === Math.min(a, b) && hi === Math.max(a, b));
 
@@ -204,6 +205,57 @@ describe("DominoRoom", () => {
     assert.deepStrictEqual([seen.chat, told.enabled], [true, false]);
     chat.disconnect();
     voice.disconnect();
+  });
+
+  it("support in a room: who is there, a mute, a line from support, someone put out and kept out, the room closed", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const room: any = await colyseus.createRoom("domino", {});
+    const host = await colyseus.connectTo(room, { playerId: "p-host" });
+    const guest = await colyseus.connectTo(room, { playerId: "p-guest" });
+    const lines: any[] = [], notices: any[] = [], errors: any[] = [];
+    for (const [who, c] of [["host", host], ["guest", guest]] as const) {
+      c.onMessage("domino", () => {});
+      c.onMessage("domino_fx", () => {});
+      c.onMessage("chat_history", () => {});
+      c.onMessage("chat", (l: any) => lines.push({ to: who, ...l }));
+      c.onMessage("admin_notice", (n: any) => notices.push({ to: who, ...n }));
+      c.onMessage("error", (e: any) => errors.push({ to: who, ...e }));
+    }
+    await sleep(100);
+    // (no accounts in tests: the two are given theirs)
+    for (const [i, c] of room.clients.entries()) {
+      const uid = i === 0 ? "u-host" : "u-guest";
+      c.auth = { account: { uid, name: i === 0 ? "Host" : "Guest", avatar: 0, frame: 0 } };
+      room.members.set(c.sessionId, uid);
+    }
+    assert.deepStrictEqual(roomPeople(room.roomId).people.map((p: any) => [p.uid, p.seated, p.muted]), [["u-host", true, false], ["u-guest", true, false]]);
+
+    await moderate(room.roomId, "mute", "u-guest");
+    guest.send("chat", { text: "hello?" });
+    await sleep(100);
+    assert.deepStrictEqual([notices.at(-1), errors.at(-1)?.code, lines.length], [{ to: "guest", kind: "muted" }, "admin_muted", 0]);
+    assert.strictEqual(roomPeople(room.roomId).people[1].muted, true);
+
+    await moderate(room.roomId, "say", "", "Play nice");
+    await sleep(100);
+    assert.deepStrictEqual(lines.map((l) => [l.to, l.from, l.text]).sort(), [["guest", "admin", "Play nice"], ["host", "admin", "Play nice"]]);
+
+    await moderate(room.roomId, "unmute", "u-guest");
+    guest.send("chat", { text: "sorry" });
+    await sleep(100);
+    assert.strictEqual(lines.at(-1).text, "sorry");
+
+    await moderate(room.roomId, "kick", "u-guest");
+    await sleep(150);
+    assert.ok(notices.some((n) => n.to === "guest" && n.kind === "kicked"));
+    assert.ok(room.banned.has("u-guest"), "kept out while the room lasts");
+    assert.strictEqual(room.seats.length, 1);
+
+    await moderate(room.roomId, "close");
+    await sleep(500);
+    assert.ok(notices.some((n) => n.to === "host" && n.kind === "closed"));
+    assert.strictEqual(room.clients.length, 0);
+    await assert.rejects(moderate(room.roomId, "say", "", "anyone?"), /gone/);
   });
 
   it("tells the room list its game started, and gives a returning player his seat back from the bot", async () => {
