@@ -507,7 +507,7 @@ export async function adminClan(id: string) {
     ...clanCard(clan, points),
     pinned: clan.pinned ?? "",
     chest: chestFor(points, clanSeats(Number(clan.xp) || 0)),
-    lounge: await loungeOf(id),
+    lounge: await loungeOf(id).catch(() => ({ talking: [] as string[], listeners: 0 })), // (no game server: the tests)
     members: members
       .map((m) => ({
         uid: m.user, role: m.role as Role, since: m.created, points: share.get(m.user) ?? 0,
