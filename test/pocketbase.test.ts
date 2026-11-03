@@ -10,6 +10,7 @@ import { ColyseusTestServer } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import * as accounts from "../src/accounts.js";
 import * as clans from "../src/clans.js";
+import * as pro from "../src/clanPro.js";
 import * as adminTools from "../src/admin.js";
 import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
@@ -461,7 +462,6 @@ describe("PocketBase", function () {
     });
 
     it("a Pro clan: by its leader or sponsor; 7 days' notice; the store from the wallet; what Pro gives", async () => {
-      const clans = await import("../src/clans.js"), pro = await import("../src/clanPro.js");
       const lead = await player(), sponsor = await player(), member = await player();
       await admin.collection("users").update(lead.id, { xp: 1_000_000, diamonds: 500 });
       for (const m of [sponsor, member]) await admin.collection("users").update(m.id, { xp: 1_000_000 });
