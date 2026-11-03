@@ -1515,6 +1515,16 @@ export async function resetPresence() {
   }
 }
 
+/** Which of these players [idToken]'s player has blocked: their names. */
+export async function blockedAmong(idToken: string, players: { uid: string; name: string }[]) {
+  const { uid } = await signedIn(idToken);
+  if (players.length === 0) return [];
+  const client = await db();
+  const rows = await client.collection("blocks").getFullList({ filter: client.filter("user = {:uid}", { uid }), fields: "blocked" });
+  const mine = new Set(rows.map((r) => r.blocked));
+  return [...new Map(players.filter((p) => mine.has(p.uid)).map((p) => [p.uid, p.name])).values()];
+}
+
 /** Whether [uid] is friends with any of [others] (friend rooms let their members' friends in). */
 export async function isFriendOfAny(uid: string, others: string[]): Promise<boolean> {
   if (!pb || others.length === 0) return false;

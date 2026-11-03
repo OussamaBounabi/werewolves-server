@@ -124,7 +124,7 @@ const DROP_ORDER: readonly Special[] = [
   "redhood", "bear", "tripleface", "detective", "wildhunter", "hunter", "protector", "witch", "seer",
 ];
 const ROOM_TYPES = ["public", "friends", "private", "clan"];
-const ROUND_OPTIONS = [10, ...Array.from({ length: 30 }, (_, i) => (i + 1) * 30)]; // 10s, 30s … 15min
+const ROUND_OPTIONS = [10, ...Array.from({ length: 40 }, (_, i) => (i + 1) * 30)]; // 10s, 30s … 20min
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
 const STEP_OPTIONS = [10, 20, 30, 40, 50, 60]; // night steps, votes, the hunter's shot, the mayor's succession

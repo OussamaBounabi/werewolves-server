@@ -1,3 +1,4 @@
+import { blockedAmong } from "./accounts.js";
 import { addClanEvent, announce as clanAnnounce, buyClanItem, deleteClanEvent, newPoll, pinSecond, sponsorClan, stopSponsoring, votePoll, wearClanItem, wearClanPack } from "./clanPro.js";
 import {
   defineServer,
@@ -312,6 +313,19 @@ const server = defineServer({
       if (!token) throw ctx.error(400, { error: "missing token" });
       try {
         return await freeCoins(token);
+      } catch (e) {
+        throw ctx.error(statusFor(e), { error: (e as Error).message });
+      }
+    }),
+    // Who I blocked is in this room (Authorization: Bearer <ID token>, body { room }): { names }, before I go in.
+    api_rooms_blocked: createEndpoint("/api/rooms-blocked", { method: "POST" }, async (ctx) => {
+      const token = bearer(ctx);
+      if (!token) throw ctx.error(400, { error: "missing token" });
+      const room = matchMaker.getLocalRoomById(String((ctx.body as { room?: unknown } | undefined)?.room ?? ""));
+      const players = (room?.clients ?? []).flatMap((c: { auth?: { account?: { uid: string; name: string } | null } }) =>
+        c.auth?.account ? [{ uid: c.auth.account.uid, name: c.auth.account.name }] : []);
+      try {
+        return { names: await blockedAmong(token, players) };
       } catch (e) {
         throw ctx.error(statusFor(e), { error: (e as Error).message });
       }

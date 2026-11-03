@@ -98,6 +98,11 @@ describe("WerewolfRoom", () => {
     const host = await colyseus.connectTo(room);
     const guest = await colyseus.connectTo(room);
     guest.send("settings", { maxPlayers: 12 });
+    host.send("settings", { roundSeconds: 1200 }); // 20 minutes, the longest day
+    await waitFor(() => room.state.roundSeconds === 1200);
+    host.send("settings", { roundSeconds: 1230, maxPlayers: 8 }); // past it: not taken
+    await waitFor(() => room.state.maxPlayers === 8);
+    assert.strictEqual(room.state.roundSeconds, 1200);
     host.send("settings", { roundSeconds: 90, maxPlayers: 99, roomType: "friends", witch: false });
     await waitFor(() => room.state.roundSeconds === 90);
     assert.notStrictEqual(room.state.maxPlayers, 12); // the guest's change was ignored
