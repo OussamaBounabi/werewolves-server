@@ -10,6 +10,22 @@ import { storeNow } from "../plans.js";
 
 type Face = { uid: string; vip?: string }; // vip: "" | "vip" | "pro"
 
+/**
+ * How many are watching a room's game, on anyone's asking ("watchers": { count }), and who, for a VIP Pro only ({ count,
+ * list }). Support, in the room unseen, has no account here and isn't counted. [watching]: whether a connection is
+ * watching, not playing.
+ */
+export function listWatchers(room: Room, watching: (client: Client) => boolean) {
+  room.onMessage("watchers", (client) => {
+    const me = (client as { auth?: { account?: Account | null } }).auth?.account;
+    const list = room.clients.flatMap((c) => {
+      const a = (c as { auth?: { account?: Account | null } }).auth?.account;
+      return a && watching(c) ? [{ uid: a.uid, name: a.name, avatar: a.avatar, frame: a.frame, vip: a.vipPro ? "pro" : a.vip ? "vip" : "" }] : [];
+    });
+    client.send("watchers", me?.vipPro === true ? { count: list.length, list } : { count: list.length });
+  });
+}
+
 /** Seconds a VIP Pro has to choose between leaving and staying when someone tries to put him out. */
 export const STAY_SECONDS = 15;
 

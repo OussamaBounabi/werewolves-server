@@ -1,9 +1,27 @@
 import assert from "assert";
 import type { Account } from "../src/accounts.js";
-import { Kicks, RoomLooks, STAY_SECONDS } from "../src/rooms/perks.js";
+import { Kicks, listWatchers, RoomLooks, STAY_SECONDS } from "../src/rooms/perks.js";
 
 const account = (uid: string, vipPro: boolean, roomLook: unknown = null): Account =>
   ({ uid, name: uid, avatar: 101, frame: 0, vip: vipPro, vipPro, roleCardDay: "", roleCardUsed: 0, roomLook });
+
+describe("who is watching", () => {
+  it("how many is told to all, who to a VIP Pro only, without the players or support", () => {
+    const client = (id: string, a: Account | null, sent: unknown[] = []) => ({ id, auth: { account: a }, send: (_: string, m: unknown) => sent.push(m) });
+    const pro: unknown[] = [], plain: unknown[] = [];
+    const clients = [
+      client("pro", account("u1", true), pro), client("plain", account("u2", false), plain),
+      client("seen", account("u3", false)), client("support", null),
+    ];
+    let ask: (c: unknown) => void = () => {};
+    const room = { clients, onMessage: (_: string, fn: (c: unknown) => void) => (ask = fn) } as never;
+    listWatchers(room, (c) => ["seen", "support"].includes((c as unknown as { id: string }).id));
+    ask(clients[1]);
+    assert.deepStrictEqual(plain, [{ count: 1 }]);
+    ask(clients[0]);
+    assert.deepStrictEqual(pro, [{ count: 1, list: [{ uid: "u3", name: "u3", avatar: 101, frame: 0, vip: "" }] }]);
+  });
+});
 
 describe("a VIP Pro host's room look", () => {
   const silent = console.warn;

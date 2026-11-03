@@ -9,7 +9,7 @@ import {
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { Kicks, RoomLooks } from "./perks.js";
+import { Kicks, RoomLooks, listWatchers } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 import { StakeTable } from "./stake.js";
 
@@ -153,6 +153,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
+    listWatchers(this, (c) => this.spectators.has(this.idOf(c)));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;

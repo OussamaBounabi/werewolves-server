@@ -13,7 +13,7 @@ import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
 import { isChatMuted } from "./moderate.js";
-import { emojisOpen, Kicks, RoomLooks } from "./perks.js";
+import { emojisOpen, Kicks, RoomLooks, listWatchers } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 
 /** The first roles: each has its own switch in the room state. */
@@ -350,6 +350,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("alien_guess", (client, msg: { targetId: string; role: string }) => this.handleAlienGuess(client, msg));
     this.onMessage("knife", (client, msg: { targetId: string }) => this.handleKnife(client, msg));
     clanEntrances(this);
+    listWatchers(this, (c) => this.spectators.has(c.sessionId));
     this.onMessage("emoji", (client, msg: { id: string }) => this.handleEmoji(client, msg));
     this.onMessage("joker_pick", (client, msg: { targetId: string }) => this.handleJokerPick(client, msg));
     this.onMessage("dictator_ready", (client, msg: { use: boolean }) => this.handleDictatorReady(client, msg));

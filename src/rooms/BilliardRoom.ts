@@ -8,7 +8,7 @@ import { bracket, nextSlot, type Match } from "../guess.js";
 import { closeVoice, dropFromVoice, setVoiceRights, voiceEnabled, voiceToken } from "../voice.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { TableTalk } from "./tableTalk.js";
-import { Kicks, RoomLooks } from "./perks.js";
+import { Kicks, RoomLooks, listWatchers } from "./perks.js";
 import { gameStarted } from "../metrics.js";
 import { cupPlaces, StakeTable } from "./stake.js";
 
@@ -194,6 +194,7 @@ export class BilliardRoom extends Room<{ metadata: Meta }> {
     this.onMessage("aim", (client, m: Record<string, unknown>) => this.handleAim(client, m ?? {}));
     this.onMessage("pick", (client, m: Record<string, unknown>) => this.handlePick(client, m ?? {}));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
+    listWatchers(this, (c) => this.spectators.has(this.idOf(c)));
     this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c), (c) => this.chatOf(this.idOf(c)));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     this.onMessage("invite", (client, msg: { uid: string }) => {
