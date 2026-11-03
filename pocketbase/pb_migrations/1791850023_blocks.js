@@ -1,12 +1,13 @@
 /**
- * blocks: who a player blocked. Only he reads and writes his own. A player can't ask someone he blocked, or someone who
- * blocked him, to be his friend; the apps' search leaves out those who blocked the one searching.
+ * blocks: who a player blocked. Only he writes his own; he and the one he blocked may read it (the apps' search leaves out
+ * those who blocked the one searching). A player can't ask someone he blocked, or someone who blocked him, to be his friend.
  */
 const NOT_BLOCKED = ' && @request.auth.blocks_via_user.blocked != @request.body.to && @request.body.to.blocks_via_user.blocked != @request.auth.id';
 
 migrate((app) => {
   const users = app.findCollectionByNameOrId("users");
   const mine = "user = @request.auth.id";
+  const either = "user = @request.auth.id || blocked = @request.auth.id";
   app.save(new Collection({
     type: "base",
     name: "blocks",
@@ -19,8 +20,8 @@ migrate((app) => {
       "CREATE UNIQUE INDEX idx_blocks_pair ON blocks (user, blocked)",
       "CREATE INDEX idx_blocks_blocked ON blocks (blocked)",
     ],
-    listRule: mine,
-    viewRule: mine,
+    listRule: either,
+    viewRule: either,
     createRule: "@request.body.user = @request.auth.id && @request.body.blocked != @request.auth.id",
     deleteRule: mine,
   }));

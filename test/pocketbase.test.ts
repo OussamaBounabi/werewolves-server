@@ -666,14 +666,19 @@ describe("PocketBase", function () {
   describe("friends and chat", () => {
     it("blocking: no search, no friend request, either way; only his own list; gone when he unblocks", async () => {
       const [me, him, other] = [await player(), await player(), await player()];
-      const search = (q: Player, who: Player) => q.pb.collection("users").getFullList({ filter: `id = "${who.id}" && blocks_via_user.blocked != "${q.id}"`, fields: "id" });
+      // (as the app: those who blocked the one searching, left out by their ids)
+      const search = async (q: Player, who: Player) => {
+        const hide = await q.pb.collection("blocks").getFullList({ filter: `blocked = "${q.id}"`, fields: "user" });
+        return q.pb.collection("users").getFullList({ filter: [`id = "${who.id}"`, ...hide.map((b) => `id != "${b.user}"`)].join(" && "), fields: "id" });
+      };
       assert.strictEqual((await search(him, me)).length, 1);
       const block = await me.pb.collection("blocks").create({ user: me.id, blocked: him.id });
       await refused(him.pb.collection("blocks").create({ user: me.id, blocked: other.id })); // (not in my name)
       assert.deepStrictEqual(await search(him, me), []); // he doesn't find me
       assert.strictEqual((await search(other, me)).length, 1); // anyone else does
       assert.strictEqual((await search(me, him)).length, 1); // and I still find him
-      assert.deepStrictEqual(await him.pb.collection("blocks").getFullList(), []); // he can't read who blocked him
+      assert.deepStrictEqual(await other.pb.collection("blocks").getFullList(), []); // no one else reads it
+      await refused(him.pb.collection("blocks").update(block.id, { blocked: other.id }));
       await refused(him.pb.collection("friend_requests").create({ from: him.id, to: me.id }));
       await refused(me.pb.collection("friend_requests").create({ from: me.id, to: him.id })); // unblock first
       await other.pb.collection("friend_requests").create({ from: other.id, to: me.id }); // anyone else may
