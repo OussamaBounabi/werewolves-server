@@ -3,7 +3,7 @@ import type { Account } from "../src/accounts.js";
 import { Kicks, RoomLooks, STAY_SECONDS } from "../src/rooms/perks.js";
 
 const account = (uid: string, vipPro: boolean, roomLook: unknown = null): Account =>
-  ({ uid, name: uid, avatar: 101, frame: 0, vip: vipPro, vipPro, roleCardDay: "", roomLook });
+  ({ uid, name: uid, avatar: 101, frame: 0, vip: vipPro, vipPro, roleCardDay: "", roleCardUsed: 0, roomLook });
 
 describe("a VIP Pro host's room look", () => {
   const silent = console.warn;

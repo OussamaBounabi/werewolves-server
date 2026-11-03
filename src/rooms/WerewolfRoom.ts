@@ -1,3 +1,4 @@
+import { clanEntrances, sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { WerewolfState, PlayerState } from "./schema/WerewolfState.js";
 import { randomAvatar, randomFrame } from "../avatars.js";
@@ -6,9 +7,8 @@ import {
   type VoiceRights,
 } from "../voice.js";
 import {
-  accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, useRoleCard, vipLevel, type Account, type GameResult,
+  accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordResults, rewardFor, roleCardsLeft, useRoleCard, vipLevel, type Account, type GameResult,
 } from "../accounts.js";
-import { dayKey } from "../missions.js";
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
@@ -123,7 +123,7 @@ const DROP_ORDER: readonly Special[] = [
   "trickster", "judge", "dictator", "barbe", "dragon", "wildchild", "cupid",
   "redhood", "bear", "tripleface", "detective", "wildhunter", "hunter", "protector", "witch", "seer",
 ];
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const ROUND_OPTIONS = [10, ...Array.from({ length: 30 }, (_, i) => (i + 1) * 30)]; // 10s, 30s … 15min
 const MIN_PLAYERS = 4;
 const MAX_PLAYERS = 16;
@@ -142,6 +142,7 @@ const LOVERS_MS = 5_000; // night 1: the lovers open their eyes and see each oth
 const JUDGE_MS = 10_000; // after a vote puts someone out: the judge may order a new vote
 const REVOTE_MS = 60_000; // the judge's revote: a one-minute day
 const SHRINK_MS = 30_000; // all voters but one have voted: the day ends in 30 seconds
+const FLED_VOTE_MS = 30_000; // the one with votes left the game with less than this to go: back to this, to vote again
 const TIE_MS = 30_000; // the day ends on a tie: this much more to break it
 
 export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }> {
@@ -187,7 +188,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private rolePicks = new Map<string, Role>(); // the roles VIP Pro players picked for themselves (host or not)
   private vips = new Set<string>(); // sessionIds of VIP accounts (players and spectators)
   private vipPros = new Set<string>(); // …and of VIP Pro ones
-  private roleCards = new Set<string>(); // VIPs whose Master card (their role, chosen once a day) isn't played today
+  private roleCards = new Set<string>(); // VIPs with a Master card left today (their role: the owner's number a day)
   private kicks = new Kicks(this); // who may put whom out of the waiting room (a VIP Pro may choose to stay)
   private looks = new RoomLooks(); // a VIP Pro host's name and style for his room in the lists (kept on his account)
   private get look() {
@@ -348,6 +349,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.onMessage("bomb_pass", (client, msg: { targetId: string }) => this.handleBombPass(client, msg));
     this.onMessage("alien_guess", (client, msg: { targetId: string; role: string }) => this.handleAlienGuess(client, msg));
     this.onMessage("knife", (client, msg: { targetId: string }) => this.handleKnife(client, msg));
+    clanEntrances(this);
     this.onMessage("emoji", (client, msg: { id: string }) => this.handleEmoji(client, msg));
     this.onMessage("joker_pick", (client, msg: { targetId: string }) => this.handleJokerPick(client, msg));
     this.onMessage("dictator_ready", (client, msg: { use: boolean }) => this.handleDictatorReady(client, msg));
@@ -408,7 +410,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     if (account && this.invited.has(account.uid)) return;
     if (playerId && this.welcomed.has(String(playerId))) return; // played the last game with the host
     if (type === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) return;
-    throw new ServerError(4410, type === "private" ? "private" : "friends");
+    if (type === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())]))) return;
+    throw new ServerError(4410, type);
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {
@@ -423,7 +426,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.sendHistory(client);
     if (client.auth?.account?.vip) this.vips.add(client.sessionId);
     if (client.auth?.account?.vipPro) this.vipPros.add(client.sessionId);
-    else if (client.auth?.account?.vip && client.auth.account.roleCardDay !== dayKey()) this.roleCards.add(client.sessionId);
+    else if (client.auth?.account?.vip && roleCardsLeft(client.auth.account) > 0) this.roleCards.add(client.sessionId);
     const uid: string | undefined = client.auth?.account?.uid;
     if (uid) {
       this.members.set(client.sessionId, uid);
@@ -732,6 +735,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private removeFromGame(id: string, reason: "quit" | "timeout" | "banned") {
     if (!this.isAlive(id)) return;
     this.quitAlive.set(id, Date.now()); // leaving alive is a loss, whatever his team does
+    const hadVotes = this.state.phase === "day" && (this.state.players.get(id)!.voteBonus > 0 || [...this.state.players.values()].some((p) => p.votedFor === id));
     this.kill(id, reason);
     const role = this.roles.get(id);
     this.broadcast("player_gone", { id, reason, role });
@@ -743,7 +747,11 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.broadcast("mayor_result", { mayorId: null, successor: true });
       this.logEvent("mayor", { name: null, successor: true });
     }
-    this.endGameIfOver();
+    if (this.endGameIfOver()) return;
+    // Fleeing the vote mustn't send it to the next one in the count: the village gets time to vote again.
+    if (hadVotes && this.state.phase === "day" && this.state.phaseEndsAt - Date.now() < FLED_VOTE_MS) {
+      this.setPhaseTimer(FLED_VOTE_MS, () => this.resolveVote());
+    }
   }
 
   /**
@@ -896,7 +904,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
 
   /**
    * A player's own role, picked in the waiting room (anything else: at random), dealt to him if the game has it: a VIP
-   * Pro's every game, a VIP's with his Master card (once a day).
+   * Pro's every game, a VIP's with a Master card (the owner's number a day).
    */
   private pickRole(id: string, role: unknown) {
     const waiting = this.state.phase === "lobby" || this.state.phase === "starting";

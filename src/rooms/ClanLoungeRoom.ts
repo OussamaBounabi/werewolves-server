@@ -29,7 +29,7 @@ export class ClanLoungeRoom extends Room {
     // Without accounts (the tests): anyone, by the name he gives, as at the game tables.
     if (!accountsEnabled) {
       const name = String(options.name ?? "?");
-      return { account: { uid: name, name, avatar: 0, frame: 0, vip: false, vipPro: false, roleCardDay: "", roomLook: null } };
+      return { account: { uid: name, name, avatar: 0, frame: 0, vip: false, vipPro: false, roleCardDay: "", roleCardUsed: 0, roomLook: null } };
     }
     if (!options.idToken) throw new ServerError(4401, "auth");
     let account: Account;

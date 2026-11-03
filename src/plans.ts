@@ -5,6 +5,7 @@
  * starts at midnight, a week (the store's, the missions', the ranking's) on Monday. A plan of n days or weeks goes
  * round: after the last, the first comes again.
  */
+import { CLAN_STORE_IDS, type ClanPrice } from "./clanItems.js";
 import { AVATARS, FRAMES, FREE_AVATARS, PRICES } from "./avatars.js";
 import { COUNTERS, DAILY_BONUS, MISSIONS, dayKey, weekKey, type Mission } from "./missions.js";
 import { DAILY_REWARDS, WHEEL, type Gift, type Prize } from "./daily.js";
@@ -260,8 +261,10 @@ export type Settings = {
   switches: Record<SwitchId, boolean>;
   daily: Gift[]; // the seven days' gifts
   wheel: { prizes: Prize[]; price: number; free: number; vipFree: number }; // eight prizes, in the app's order
-  clan: { price: number; rename: number; minLevel: number; levels: number[] }; // levels: the XP each of the 7 starts at
+  clan: { price: number; rename: number; minLevel: number; levels: number[]; proLevels: number[] }; // levels: the XP each of the 7 starts at; proLevels: a Pro clan's 6 more
+  clanStore: { hidden: string[]; prices: Record<string, ClanPrice> }; // what the clan store hides, and the prices changed
   minBuild: number; // apps of an older build must update (0: any)
+  vipRolePicks: number; // the Werewolf roles a VIP may choose a day (a VIP Pro: every game)
   badWords: string[]; // starred out of chats; refused in names
   bots: Record<string, boolean>; // the games whose host may add bots
   imposterOff: string[]; // Imposter's words taken out
@@ -273,8 +276,10 @@ export const SETTINGS: Settings = {
   switches: { ...SWITCHES },
   daily: DAILY_REWARDS,
   wheel: { prizes: WHEEL, price: 10, free: 1, vipFree: 2 },
-  clan: { price: 100, rename: 50, minLevel: 5, levels: [0, 5000, 15000, 30000, 50000, 75000, 105000] },
+  clan: { price: 100, rename: 50, minLevel: 5, levels: [0, 5000, 15000, 30000, 50000, 75000, 105000], proLevels: [140000, 180000, 225000, 275000, 330000, 390000] },
+  clanStore: { hidden: [], prices: {} },
   minBuild: 0,
+  vipRolePicks: 3,
   badWords: [],
   bots: Object.fromEntries(BOT_GAMES.map((g) => [g, true])),
   imposterOff: [],
@@ -287,6 +292,8 @@ export const settingsNow = (saved: Partial<Settings> | null): Settings => ({
   ...SETTINGS,
   ...(saved ?? {}),
   switches: { ...SETTINGS.switches, ...(saved?.switches ?? {}) },
+  clan: { ...SETTINGS.clan, ...(saved?.clan ?? {}) },
+  clanStore: { ...SETTINGS.clanStore, ...(saved?.clanStore ?? {}) },
   bots: { ...SETTINGS.bots, ...(saved?.bots ?? {}) },
 });
 
@@ -334,9 +341,20 @@ export function cleanSettings(v: any, saved: Partial<Settings> | null): Partial<
     if (levels.length !== 7 || levels[0] !== 0 || levels.some((x: number, i: number) => i > 0 && x <= levels[i - 1])) {
       throw new Error("levels");
     }
-    return { price: int(c.price, 0, 100_000), rename: int(c.rename, 0, 100_000), minLevel: int(c.minLevel, 1, 100), levels };
+    const proLevels = (Array.isArray(c?.proLevels) ? c.proLevels : SETTINGS.clan.proLevels).slice(0, 6).map((x: unknown) => int(x, 0, 100_000_000));
+    if (proLevels.length !== 6 || proLevels.some((x: number, i: number) => x <= (i > 0 ? proLevels[i - 1] : levels[6]))) throw new Error("levels");
+    return { price: int(c.price, 0, 100_000), rename: int(c.rename, 0, 100_000), minLevel: int(c.minLevel, 1, 100), levels, proLevels };
   });
+  set("clanStore", (c) => ({
+    hidden: [...new Set((Array.isArray(c?.hidden) ? (c.hidden as unknown[]) : []).map(String))].filter((id) => CLAN_STORE_IDS.includes(id)),
+    prices: Object.fromEntries(
+      Object.entries((c?.prices ?? {}) as Record<string, { coins?: unknown; diamonds?: unknown }>)
+        .filter(([id]) => CLAN_STORE_IDS.includes(id))
+        .map(([id, p]) => [id, { coins: int(p?.coins, 0, 100_000_000), diamonds: int(p?.diamonds, 0, 1_000_000) }]),
+    ),
+  }));
   set("minBuild", (b) => int(b, 0, 100_000));
+  set("vipRolePicks", (n) => int(n, 0, 100));
   set("badWords", (w) =>
     [...new Set((Array.isArray(w) ? w : []).map((x) => text(x, 40).toLowerCase()).filter((x) => x.length >= 2))].slice(0, 2000),
   );

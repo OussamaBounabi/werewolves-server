@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -51,7 +52,7 @@ type RoundResult = {
 };
 
 const MAX_SEATS = 4;
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const TURN_OPTIONS = [15, 30, 45, 60];
 const TARGET_OPTIONS = [100, 150, 200, 250];
 const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
@@ -193,8 +194,9 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

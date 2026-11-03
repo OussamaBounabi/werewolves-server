@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError, matchMaker } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -59,7 +60,7 @@ type Side = {
 };
 type Phase = "lobby" | "bracket" | "pick" | "playing" | "round" | "between" | "gameover";
 
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const ROUNDS = [1, 3, 5];
 const CUP_SIZES = [4, 6, 8];
 const TIME_MIN = 30, TIME_MAX = 900, TIME_STEP = 30; // seconds per player and round
@@ -202,8 +203,9 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

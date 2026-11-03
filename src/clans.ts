@@ -4,6 +4,7 @@ import {
   currentPlans, db, type Done, forPlayer, grantVip, isFriendOfAny, ledger, maybe, parseDate, pbDate, pushToUsers, saveDone, settings,
   signedIn,
 } from "./accounts.js";
+import { refreshPro } from "./clanPro.js";
 import { weekKey } from "./missions.js";
 import { hasBadWord, prizeFor, type ChestPlan } from "./plans.js";
 
@@ -20,9 +21,10 @@ import { hasBadWord, prizeFor, type ChestPlan } from "./plans.js";
 export const REJOIN_MS = 24 * 60 * 60_000; // after leaving a clan
 export const INACTIVE_DAYS = 14;
 
-/** A clan's level (1 … 7) from its XP. */
-export const clanLevel = (xp: number) => settings().clan.levels.filter((at) => xp >= at).length;
-export const clanSeats = (xp: number) => 20 + 5 * (clanLevel(xp) - 1); // 20 … 50
+/** A clan's level (1 … 7, a Pro clan's up to 13) from its XP. */
+export const clanLevel = (xp: number, pro = false) =>
+  (pro ? [...settings().clan.levels, ...settings().clan.proLevels] : settings().clan.levels).filter((at) => xp >= at).length;
+export const clanSeats = (xp: number, pro = false) => 20 + 5 * (clanLevel(xp, pro) - 1); // 20 … 50; a Pro clan goes on to 80
 
 /** A player's level from his XP (as the app counts it: level n from 100·(n−1)²). */
 export const playerLevel = (xp: number) => 1 + Math.floor(Math.sqrt(Math.max(0, xp) / 100));
@@ -32,7 +34,7 @@ const RANK: Record<Role, number> = { leader: 0, coLeader: 1, elder: 2, member: 3
 
 /** The lowest role that may do each thing (and every role above it). */
 export const RIGHTS = { accept: "elder", kick: "coLeader", promote: "coLeader", pin: "coLeader", edit: "leader" } as const;
-const may = (role: Role, right: keyof typeof RIGHTS) => RANK[role] <= RANK[RIGHTS[right]];
+export const may = (role: Role, right: keyof typeof RIGHTS) => RANK[role] <= RANK[RIGHTS[right]];
 
 export class ClanError extends Error {}
 
@@ -60,16 +62,16 @@ const ID = "abcdefghijklmnopqrstuvwxyz0123456789";
 const newId = () => Array.from(randomBytes(15), (b) => ID[b % ID.length]).join("");
 
 /** One clan's changes at a time (seats, members, leader), after the player's own lock. */
-const forClan = <T>(clan: string, fn: () => Promise<T>) => forPlayer(`clan:${clan}`, fn);
+export const forClan = <T>(clan: string, fn: () => Promise<T>) => forPlayer(`clan:${clan}`, fn);
 
 type Member = { id: string; clan: string; user: string; role: Role; created: string };
 
-async function memberOf(client: PocketBase, uid: string): Promise<Member | null> {
+export async function memberOf(client: PocketBase, uid: string): Promise<Member | null> {
   const { items } = await client.collection("clan_members").getList(1, 1, { filter: client.filter("user = {:uid}", { uid }) });
   return (items[0] as unknown as Member) ?? null;
 }
 
-async function myMembership(client: PocketBase, uid: string): Promise<Member> {
+export async function myMembership(client: PocketBase, uid: string): Promise<Member> {
   const m = await memberOf(client, uid);
   if (!m) throw new ClanError("not in a clan");
   return m;
@@ -103,6 +105,7 @@ export async function createClan(idToken: string, look: unknown) {
     } catch (e) {
       throw new ClanError((e as { status?: number }).status === 400 ? "taken" : "failed"); // (the name or the tag)
     }
+    await refreshPro(id); // (a VIP Pro's clan is Pro from the start)
     return { id };
   });
 }
@@ -145,7 +148,7 @@ async function addMember(client: PocketBase, clanId: string, uid: string) {
   ]);
   free(user);
   if (playerLevel(Number(user.xp) || 0) < (Number(clan.minLevel) || 1)) throw new ClanError("level");
-  if ((Number(clan.members) || 0) >= clanSeats(Number(clan.xp) || 0)) throw new ClanError("full");
+  if ((Number(clan.members) || 0) >= clanSeats(Number(clan.xp) || 0, clan.pro === true)) throw new ClanError("full");
   const pair = client.filter("clan = {:clan} && user = {:uid}", { clan: clanId, uid });
   const [invites, requests] = await Promise.all([
     client.collection("clan_invites").getFullList({ filter: pair, fields: "id" }),
@@ -204,18 +207,24 @@ async function removeMember(client: PocketBase, m: Member, kind: "left" | "kicke
   const batch = client.createBatch();
   batch.collection("users").update(m.user, { clan: "", clanLeftAt: pbDate(Date.now()) });
   if (others.length === 0) {
+    // The last one out takes what's left in its wallet.
+    const { coins, diamonds } = await client.collection("clans").getOne(m.clan, { fields: "coins,diamonds" });
+    if (coins || diamonds) batch.collection("users").update(m.user, { "coins+": Number(coins) || 0, "diamonds+": Number(diamonds) || 0 });
+    ledger(batch, m.user, Number(coins) || 0, Number(diamonds) || 0, "clan", "the clan's wallet, last one out");
     batch.collection("clans").delete(m.clan); // (its members, chat, requests and invitations with it)
     return batch.send();
   }
+  const { sponsor } = await client.collection("clans").getOne(m.clan, { fields: "sponsor" });
   batch.collection("clan_members").delete(m.id);
-  batch.collection("clans").update(m.clan, { "members-": 1 });
+  batch.collection("clans").update(m.clan, { "members-": 1, ...(sponsor === m.user ? { sponsor: "", sponsorSince: "" } : {}) });
   batch.collection("clan_messages").create({ clan: m.clan, user: m.user, kind: "left", data: { kicked: kind === "kicked" } });
   if (m.role === "leader") {
     const next = others.sort((a, b) => RANK[a.role] - RANK[b.role] || a.created.localeCompare(b.created))[0];
     batch.collection("clan_members").update(next.id, { role: "leader" });
     batch.collection("clan_messages").create({ clan: m.clan, user: next.user, kind: "leader" });
   }
-  return batch.send();
+  await batch.send();
+  await refreshPro(m.clan); // (its leader or sponsor may be the one who left)
 }
 
 /** Leaves his clan; 24 hours before he may join another. */
@@ -272,6 +281,7 @@ export async function changeMember(idToken: string, player: string, action: stri
         batch.collection("clan_members").update(me.id, { role: "coLeader" });
         batch.collection("clan_messages").create({ clan: me.clan, user: player, kind: "leader" });
         await batch.send();
+        await refreshPro(me.clan);
         return { role: "leader" };
       }
       if (theirs <= mine) throw new ClanError("not allowed"); // only those below him
@@ -351,13 +361,25 @@ export async function pinClan(idToken: string, text: unknown) {
 /** A clan push's sender: a tap opens the clan (the app's Push). */
 export const CLAN_SENDER = "clan";
 
-/** A member opened a room: a card with Join in the clan's chat, and the others' phones told. */
-export async function shareRoom(idToken: string, roomId: unknown, game: unknown) {
+/**
+ * A member opened a room ([joined]: took a seat in one, once a room, public rooms only): a line in the clan's Rooms tab,
+ * with Join while the room is there. A room opened: the others' phones told.
+ */
+export async function shareRoom(idToken: string, roomId: unknown, game: unknown, joined = false) {
   const room = String(roomId ?? ""), g = String(game ?? "");
   if (!/^[A-Za-z0-9_-]{1,40}$/.test(room) || !/^[a-z]{1,20}$/.test(g)) throw new ClanError("invalid");
   const { uid } = await signedIn(idToken);
   const client = await db();
   const me = await myMembership(client, uid);
+  if (joined) {
+    const { matchMaker } = await import("colyseus");
+    const [open] = await matchMaker.query({ roomId: room });
+    if (!open || !["public", "clan"].includes(open.metadata?.roomType ?? "public")) return { ok: true };
+    const same = client.filter('clan = {:clan} && user = {:uid} && kind = "room" && data.roomId = {:room}', { clan: me.clan, uid, room });
+    if ((await client.collection("clan_messages").getList(1, 1, { filter: same, fields: "id", skipTotal: true })).items.length > 0) return { ok: true };
+    await client.collection("clan_messages").create({ clan: me.clan, user: uid, kind: "room", data: { roomId: room, game: g, joined: true } });
+    return { ok: true };
+  }
   const [clan, who, others] = await Promise.all([
     client.collection("clans").getOne(me.clan, { fields: "name,tag" }),
     client.collection("users").getOne(uid, { fields: "name,username" }),
@@ -370,9 +392,72 @@ export async function shareRoom(idToken: string, roomId: unknown, game: unknown)
   return { ok: true };
 }
 
+/** Which of these rooms ([ids], from the Rooms tab) are still there. */
+export async function openRooms(idToken: string, ids: unknown) {
+  await signedIn(idToken);
+  const wanted = new Set((Array.isArray(ids) ? ids : []).slice(0, 50).map(String));
+  const { matchMaker } = await import("colyseus");
+  return { open: (await matchMaker.query({})).map((r) => r.roomId).filter((id) => wanted.has(id)) };
+}
+
+export const CLAN_REACTIONS = ["❤️", "😆", "😮", "😢", "😠", "👍"]; // (a friend chat's six)
+
+/** A member's reaction on a line of his clan's chat (one each; the same again takes it back). */
+export async function reactClanLine(idToken: string, id: string, emoji: string) {
+  if (!CLAN_REACTIONS.includes(emoji)) throw new ClanError("invalid");
+  const { uid } = await signedIn(idToken);
+  const client = await db();
+  const me = await myMembership(client, uid);
+  return forClan(me.clan, async () => {
+    const line = await maybe(client.collection("clan_messages").getOne(id));
+    if (!line || line.clan !== me.clan || (line.kind !== "text" && line.kind !== "voice")) throw new ClanError("invalid");
+    const reactions: Record<string, string> = { ...(line.reactions ?? {}) };
+    if (reactions[uid] === emoji) delete reactions[uid];
+    else reactions[uid] = emoji;
+    await client.collection("clan_messages").update(id, { reactions });
+    return { ok: true };
+  });
+}
+
+const WALLET_MAX = 100_000_000; // at most, in one payment
+
+/**
+ * The leader gives a member (himself too) coins and diamonds from the clan's wallet. Every member sees it in the wallet's
+ * history; the player is told.
+ */
+export async function payFromClan(idToken: string, player: string, coinsIn: unknown, diamondsIn: unknown) {
+  const coins = Number(coinsIn ?? 0), diamonds = Number(diamondsIn ?? 0);
+  const fine = (n: number) => Number.isInteger(n) && n >= 0 && n <= WALLET_MAX;
+  if (!fine(coins) || !fine(diamonds) || coins + diamonds === 0) throw new ClanError("invalid");
+  const { uid } = await signedIn(idToken);
+  const client = await db();
+  const me = await myMembership(client, uid);
+  if (me.role !== "leader") throw new ClanError("not allowed");
+  return forClan(me.clan, async () => {
+    const clan = await client.collection("clans").getOne(me.clan, { fields: "name,tag,coins,diamonds" });
+    if (coins > (Number(clan.coins) || 0) || diamonds > (Number(clan.diamonds) || 0)) throw new ClanError("funds");
+    const target = await memberOf(client, player);
+    if (target?.clan !== me.clan) throw new ClanError("invalid");
+    const batch = client.createBatch(); // ("coins+" in a batch: see sell)
+    batch.collection("clans").update(me.clan, { "coins-": coins, "diamonds-": diamonds });
+    batch.collection("users").update(player, { "coins+": coins, "diamonds+": diamonds });
+    batch.collection("clan_wallet").create({ clan: me.clan, kind: "pay", coins: -coins, diamonds: -diamonds, user: player });
+    ledger(batch, player, coins, diamonds, "clan", `from ${clan.tag}'s wallet`);
+    batch.collection("notices").create({
+      user: player, kind: "clanPay", text: `${clan.name}: +${coins} coins, +${diamonds} diamonds`, data: { clan: clan.name, tag: clan.tag, coins, diamonds },
+    });
+    await batch.send();
+    void pushToUsers([player], {
+      sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`, body: [coins && `+${coins} 🪙`, diamonds && `+${diamonds} 💎`].filter(Boolean).join(" "),
+    }).catch(() => {});
+    return { ok: true };
+  });
+}
+
 /**
  * The weekly chest: bronze, silver, gold, each its points for a clan of 20 seats (a bigger clan's goals grow with its
- * seats: 50 seats, 2.5 times) and what every member who played wins. The admin may change them (plan "chests").
+ * seats: 50 seats, 2.5 times) and what it holds for every member who played, all into the clan's wallet. The admin may
+ * change them (plan "chests").
  */
 export const DEFAULT_CHESTS: ChestPlan = [
   { goal: 10_000, coins: 300, diamonds: 0 },
@@ -390,9 +475,9 @@ export function chestFor(points: number, seats: number, list = chests()) {
 }
 
 /**
- * Last week's chests and clan ranking prizes, once (done.clanWeek): every member who played for his clan that week
- * (points in clan_scores) and is still in it gets its highest chest's prize and its place's (the admin's plan), told by
- * a notice and on his phone.
+ * Last week's chests and clan ranking prizes, once (done.clanWeek): for every member who played for his clan that week
+ * (points in clan_scores) and is still in it, its highest chest's prize and its place's (the admin's plan) go to the
+ * clan's wallet; VIP days, which a wallet can't hold, to those members. They're told by a notice and on their phones.
  */
 export async function clanWeek(done: Done) {
   const last = weekKey(Date.now() - 7 * 86_400_000);
@@ -416,28 +501,31 @@ export async function clanWeek(done: Done) {
       const playedThere = new Set(scores.map((s) => s.user));
       const played = members.map((m) => m.user).filter((u) => playedThere.has(u));
       const list = chests();
-      const chest = chestFor(Number(row.points) || 0, clanSeats(Number(clan.xp) || 0), list);
+      const chest = chestFor(Number(row.points) || 0, clanSeats(Number(clan.xp) || 0, clan.pro === true), list);
       const prize = prizeFor(tiers, i + 1);
       const coins = (chest >= 0 ? list[chest].coins : 0) + (prize?.coins ?? 0);
       const diamonds = (chest >= 0 ? list[chest].diamonds : 0) + (prize?.diamonds ?? 0);
       const vipDays = prize?.vipDays ?? 0;
       if (played.length === 0 || (coins === 0 && diamonds === 0 && vipDays === 0)) continue;
-      for (const uid of played) {
-        await forPlayer(uid, async () => {
-          const batch = client.createBatch();
-          if (coins || diamonds) batch.collection("users").update(uid, { "coins+": coins, "diamonds+": diamonds });
-          ledger(batch, uid, coins, diamonds, "chest", `${clan.tag} #${i + 1}`);
+      const total = { coins: coins * played.length, diamonds: diamonds * played.length };
+      await forClan(row.clan, async () => {
+        const batch = client.createBatch();
+        if (total.coins || total.diamonds) {
+          batch.collection("clans").update(row.clan, { "coins+": total.coins, "diamonds+": total.diamonds });
+          batch.collection("clan_wallet").create({ clan: row.clan, kind: "week", ...total, note: last, rank: i + 1, players: played.length });
+        }
+        for (const uid of played) {
           batch.collection("notices").create({
             user: uid, kind: "clanChest", text: `${clan.name}: #${i + 1} last week`,
-            data: { clan: clan.name, tag: clan.tag, rank: i + 1, chest, coins, diamonds, vipDays, week: last },
+            data: { clan: clan.name, tag: clan.tag, rank: i + 1, chest, ...total, vipDays, week: last, wallet: true },
           });
-          await batch.send();
-        });
-        if (vipDays) await grantVip(uid, "vip", vipDays);
-      }
+        }
+        await batch.send();
+      });
+      for (const uid of played) if (vipDays) await grantVip(uid, "vip", vipDays);
       void pushToUsers(played, {
         sender: CLAN_SENDER, title: `[${clan.tag}] ${clan.name}`,
-        body: `🎁 #${i + 1} · ${[coins && `+${coins} 🪙`, diamonds && `+${diamonds} 💎`, vipDays && `+${vipDays} VIP`].filter(Boolean).join(" ")}`,
+        body: `🎁 #${i + 1} · ${[total.coins && `+${total.coins} 🪙`, total.diamonds && `+${total.diamonds} 💎`, vipDays && `+${vipDays} VIP`].filter(Boolean).join(" ")}`,
       }).catch(() => {});
     } catch (e) {
       console.error("clan week prizes failed for", row.clan, e);
@@ -462,8 +550,9 @@ export async function loungeOf(clan: string) {
 
 const clanCard = (c: Record<string, any>, points = 0) => ({
   id: c.id, name: c.name, tag: c.tag, motto: c.motto ?? "", shape: c.shape, color: Number(c.color) || 0, join: c.join,
-  xp: Number(c.xp) || 0, level: clanLevel(Number(c.xp) || 0), members: Number(c.members) || 0, seats: clanSeats(Number(c.xp) || 0),
-  noRanking: c.noRanking === true, points, created: c.created,
+  xp: Number(c.xp) || 0, level: clanLevel(Number(c.xp) || 0, c.pro === true), members: Number(c.members) || 0, seats: clanSeats(Number(c.xp) || 0, c.pro === true),
+  pro: c.pro === true, proEnds: c.proEnds ?? "", sponsor: c.sponsor ?? "", owned: Array.isArray(c.owned) ? c.owned.length : 0,
+  noRanking: c.noRanking === true, points, created: c.created, coins: Number(c.coins) || 0, diamonds: Number(c.diamonds) || 0,
 });
 
 /** Every clan, 50 a page: [q] searches names and tags; [sort] by "xp", "members", "week" (this week's points) or "new". */
@@ -506,7 +595,7 @@ export async function adminClan(id: string) {
   return {
     ...clanCard(clan, points),
     pinned: clan.pinned ?? "",
-    chest: chestFor(points, clanSeats(Number(clan.xp) || 0)),
+    chest: chestFor(points, clanSeats(Number(clan.xp) || 0, clan.pro === true)),
     lounge: await loungeOf(id).catch(() => ({ talking: [] as string[], listeners: 0 })), // (no game server: the tests)
     members: members
       .map((m) => ({

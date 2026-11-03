@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -46,7 +47,7 @@ type Last = { from: number; to: number; path?: number[]; captures?: number[]; ca
 type Snapshot = { chess: ChessPos; checkers: CheckersPos; last: Last | null; keys: number };
 
 const SEATS = 2;
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const VARIANTS = ["chess", "checkers"];
 const MINUTES = [1, 3, 5, 10, 15];
 const INCREMENTS = [0, 2, 5];
@@ -187,8 +188,9 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

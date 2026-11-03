@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -45,7 +46,7 @@ type Seat = {
 };
 type Phase = "lobby" | "reveal" | "talk" | "vote" | "verdict" | "guess" | "result";
 
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const TALK_OPTIONS = [60, 120, 180, 300, 600, 900]; // the talk: 1 to 15 minutes
 const MAX_SEATS = 12;
 const MAX_SPECTATORS = 20;
@@ -161,8 +162,9 @@ export class ImposterRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && this.seats.length > 0) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

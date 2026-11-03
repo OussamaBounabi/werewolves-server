@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -41,7 +42,7 @@ type Seat = {
 type Phase = "lobby" | "playing" | "gameover";
 
 const MAX_SEATS = 4;
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const TURN_OPTIONS = [10, 15, 20, 30];
 const CAPTURE_OPTIONS = ["auto", "ask"];
 const PAWN_OPTIONS = [2, 4];
@@ -170,8 +171,9 @@ export class LudoRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && !this.seats.every((s) => s.bot)) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

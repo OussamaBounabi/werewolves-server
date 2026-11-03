@@ -1,3 +1,4 @@
+import { CLAN_PACKS, CLAN_STORE_IDS, clanPriceOf } from "./clanItems.js";
 import { createHash } from "node:crypto";
 import { statfs, stat, readdir } from "node:fs/promises";
 import os from "node:os";
@@ -75,8 +76,13 @@ export function publicConfig() {
     switches: s.switches,
     daily: s.daily,
     wheel: s.wheel,
-    clan: { price: s.clan.price, rename: s.clan.rename, minLevel: s.clan.minLevel, levels: s.clan.levels },
+    clan: { price: s.clan.price, rename: s.clan.rename, minLevel: s.clan.minLevel, levels: s.clan.levels, proLevels: s.clan.proLevels },
+    clanStore: {
+      items: CLAN_STORE_IDS.map((id) => ({ id, ...(s.clanStore.prices[id] ?? clanPriceOf(id)!), hidden: s.clanStore.hidden.includes(id) })),
+      packs: CLAN_PACKS,
+    },
     minBuild: s.minBuild,
+    vipRolePicks: s.vipRolePicks,
     badWords: s.badWords,
     bots: s.bots,
     events: eventsOn(currentPlans().events).map(({ id, title, kind, factor, end, games }) => ({ id, title, kind, factor, end, games })),

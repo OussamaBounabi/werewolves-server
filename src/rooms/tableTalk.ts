@@ -1,5 +1,6 @@
 import type { Client, Room } from "colyseus";
 import { vipLevel } from "../accounts.js";
+import { clanEntrances } from "../clanPro.js";
 import { emojisOpen } from "./perks.js";
 import { isChatMuted } from "./moderate.js";
 
@@ -41,6 +42,7 @@ export class TableTalk {
     private idOf: (client: Client) => string,
     private channelOf: (client: Client) => string = () => "",
   ) {
+    clanEntrances(room);
     room.onMessage("chat", (client, msg: { text?: unknown }) => this.chat(client, msg?.text));
     room.onMessage("typing", (client, msg: { on?: unknown }) => {
       const seat = this.seatOf(client);

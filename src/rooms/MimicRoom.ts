@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomBytes } from "node:crypto";
 import { randomAvatar, randomFrame } from "../avatars.js";
@@ -46,7 +47,7 @@ type Seat = {
 };
 type Phase = "lobby" | "listen" | "record" | "judge" | "after" | "result";
 
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const ROUNDS = [5, 10, 15];
 const CATEGORIES = [...new Set(MIMIC_SOUNDS.map((s) => s.cat))];
 const MAX_SEATS = 12;
@@ -157,8 +158,9 @@ export class MimicRoom extends Room<{ metadata: Meta }> {
     if (this.roomType !== "public" && this.seats.length > 0) {
       const ok =
         (account && this.invited.has(account.uid)) ||
-        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())])));
-      if (!ok) throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+        (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, [...new Set(this.members.values())]))) ||
+        (this.roomType === "clan" && account && (await sameProClan(account.uid, [...new Set(this.members.values())])));
+      if (!ok) throw new ServerError(4410, this.roomType);
     }
     return { account };
   }

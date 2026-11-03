@@ -196,7 +196,7 @@ describe("PocketBase", function () {
     it("knows a player by his Firebase ID token, as before: his profile, or refused", async () => {
       const p = await player();
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
-      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roomLook: null, coins: 0, xp: 0 });
+      assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roleCardUsed: 0, roomLook: null, coins: 0, xp: 0 });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
       // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
       const fresh = await newcomer();
@@ -410,11 +410,42 @@ describe("PocketBase", function () {
       await admin.collection("clan_scores").create({ id: `${id}_${b.id}_${last}`, clan: id, user: b.id, week: last, points: 800 });
       const [bCoins, aCoins] = [(await user(b.id)).coins, (await user(a.id)).coins];
       await clans.clanWeek({});
-      assert.deepStrictEqual([(await user(b.id)).coins - bCoins, (await user(a.id)).coins - aCoins], [800, 0]);
+      // Into the clan's wallet (800 for the one who played), nothing to the members yet.
+      assert.deepStrictEqual([(await user(b.id)).coins - bCoins, (await user(a.id)).coins - aCoins], [0, 0]);
+      assert.deepStrictEqual([(await admin.collection("clans").getOne(id)).coins, (await admin.collection("clans").getOne(id)).diamonds], [800, 5]);
+      assert.deepStrictEqual((await b.pb.collection("clan_wallet").getFullList()).map((w) => [w.kind, w.coins, w.diamonds, w.players]), [["week", 800, 5, 1]]);
+      // Only the leader gives it out, no more than it holds, to a member.
+      await assert.rejects(clans.payFromClan(b.idToken, b.id, 100, 0), /not allowed/);
+      await assert.rejects(clans.payFromClan(lead.idToken, b.id, 801, 0), /funds/);
+      await assert.rejects(clans.payFromClan(lead.idToken, b.id, 0, 0), /invalid/);
+      const stranger = await player();
+      await assert.rejects(clans.payFromClan(lead.idToken, stranger.id, 1, 0), /invalid/);
+      await clans.payFromClan(lead.idToken, b.id, 300, 2);
+      assert.strictEqual((await user(b.id)).coins - bCoins, 300);
+      assert.deepStrictEqual([(await admin.collection("clans").getOne(id)).coins, (await admin.collection("clans").getOne(id)).diamonds], [500, 3]);
+      assert.strictEqual((await b.pb.collection("notices").getFullList({ filter: 'kind = "clanPay"' })).length, 1);
+      assert.deepStrictEqual((await a.pb.collection("clan_wallet").getFullList({ sort: "-created,-id", filter: 'kind = "pay"' })).map((w) => [w.coins, w.user]), [[-300, b.id]]);
+      // A member can't write the wallet's history or his clan's money.
+      await assert.rejects(b.pb.collection("clan_wallet").create({ clan: id, kind: "week", coins: 1 }));
+      await assert.rejects(b.pb.collection("clans").update(id, { coins: 999999 }));
+      // Reactions: one each, the same again takes it back, not on another clan's or an unknown line.
+      const said = (await b.pb.collection("clan_messages").getFullList({ filter: 'text = "hi"' }))[0];
+      await clans.reactClanLine(a.idToken, said.id, "👍");
+      await clans.reactClanLine(b.idToken, said.id, "❤️");
+      assert.deepStrictEqual((await a.pb.collection("clan_messages").getOne(said.id)).reactions, { [a.id]: "👍", [b.id]: "❤️" });
+      await clans.reactClanLine(b.idToken, said.id, "❤️");
+      assert.deepStrictEqual((await a.pb.collection("clan_messages").getOne(said.id)).reactions, { [a.id]: "👍" });
+      await assert.rejects(clans.reactClanLine(b.idToken, said.id, "💩"), /invalid/);
+      // A member writes a reply himself, not its reactions, nor a room line.
+      const reply = await a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "text", text: "yes", replyTo: said.id });
+      assert.strictEqual(reply.replyTo, said.id);
+      await assert.rejects(a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "text", text: "x", reactions: { [b.id]: "👍" } }));
+      await assert.rejects(a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "room", data: { roomId: "r", game: "domino" } }));
+      await assert.rejects(a.pb.collection("clan_messages").create({ clan: id, user: a.id, kind: "voice", text: "x" })); // (no sound)
       const [chest] = await b.pb.collection("notices").getFullList({ filter: 'kind = "clanChest"' });
       assert.deepStrictEqual([chest.data.chest, chest.data.rank], [1, 1]);
       await clans.clanWeek({ clanWeek: last }); // once only
-      assert.strictEqual((await user(b.id)).coins - bCoins, 800);
+      assert.strictEqual((await admin.collection("clans").getOne(id)).coins, 500);
       // The leader leaves: the co-leader leads; he waits 24 hours to join again.
       await clans.leaveClan(lead.idToken);
       assert.strictEqual((await admin.collection("clan_members").getFirstListItem(`user = "${a.id}"`)).role, "leader");
@@ -423,8 +454,96 @@ describe("PocketBase", function () {
       // A kick, then the last one out ends the clan.
       await clans.changeMember(a.idToken, b.id, "kick");
       assert.strictEqual((await user(b.id)).clan, "");
+      const aCoinsBefore = (await user(a.id)).coins;
       await clans.leaveClan(a.idToken);
       await assert.rejects(admin.collection("clans").getOne(id));
+      assert.strictEqual((await user(a.id)).coins - aCoinsBefore, 500); // what was left in the wallet
+    });
+
+    it("a Pro clan: by its leader or sponsor; 7 days' notice; the store from the wallet; what Pro gives", async () => {
+      const clans = await import("../src/clans.js"), pro = await import("../src/clanPro.js");
+      const lead = await player(), sponsor = await player(), member = await player();
+      await admin.collection("users").update(lead.id, { xp: 1_000_000, diamonds: 500 });
+      for (const m of [sponsor, member]) await admin.collection("users").update(m.id, { xp: 1_000_000 });
+      const { id } = await clans.createClan(lead.idToken, { name: `Pro ${lead.id.slice(0, 8)}`, tag: lead.id.slice(0, 4).toUpperCase().replace(/[^A-Z0-9]/g, "A"), motto: "", shape: "shield", color: 0, join: "open", minLevel: 1 });
+      await clans.joinClan(sponsor.idToken, id);
+      await clans.joinClan(member.idToken, id);
+      const clan = () => admin.collection("clans").getOne(id);
+      assert.strictEqual((await clan()).pro, false);
+      await assert.rejects(pro.buyClanItem(lead.idToken, "shape.wolf"), /not pro/);
+      await assert.rejects(pro.announce(lead.idToken, "hello"), /not pro/);
+      // The sponsor needs VIP Pro; one at a time.
+      await assert.rejects(pro.sponsorClan(sponsor.idToken), /vip pro/);
+      await accounts.grantVip(sponsor.id, "pro", 30);
+      await pro.sponsorClan(sponsor.idToken);
+      assert.deepStrictEqual([(await clan()).pro, (await clan()).sponsor], [true, sponsor.id]);
+      await accounts.grantVip(member.id, "pro", 30);
+      await assert.rejects(pro.sponsorClan(member.idToken), /sponsored/);
+      assert.ok((await lead.pb.collection("clan_messages").getFullList({ filter: 'kind = "sponsor"' })).length === 1);
+      // Only the leader buys, from the wallet, once; a member can't touch it.
+      await admin.collection("clans").update(id, { coins: 5000, diamonds: 900 });
+      await assert.rejects(pro.buyClanItem(member.idToken, "shape.wolf"), /not allowed/);
+      await assert.rejects(pro.buyClanItem(lead.idToken, "badge.16"), /invalid/);
+      await pro.buyClanItem(lead.idToken, "shape.wolf");
+      await assert.rejects(pro.buyClanItem(lead.idToken, "shape.wolf"), /owned/);
+      await assert.rejects(pro.buyClanItem(lead.idToken, "row.1"), /funds/);
+      assert.strictEqual((await clan()).coins, 2000);
+      assert.strictEqual((await user(lead.id)).diamonds, 500 - 100); // (the clan cost him 100; the store takes nothing from him)
+      const [bought] = await member.pb.collection("clan_wallet").getFullList({ filter: 'kind = "buy"' });
+      assert.deepStrictEqual([bought.coins, bought.note], [-3000, "shape.wolf"]);
+      // Wearing: what it owns, or what's free; a pack gives all its places.
+      await assert.rejects(pro.wearClanItem(lead.idToken, "fx", "fx.1"), /not owned/);
+      await assert.rejects(pro.wearClanItem(lead.idToken, "fx", "shape.wolf"), /invalid/);
+      await pro.wearClanItem(lead.idToken, "shape", "shape.wolf");
+      await pro.wearClanItem(lead.idToken, "badge", "badge.1"); // (free)
+      await assert.rejects(pro.wearClanPack(lead.idToken, "moon_wolf"), /not owned/);
+      await pro.buyClanItem(lead.idToken, "pack.moon_wolf");
+      await pro.wearClanPack(lead.idToken, "moon_wolf");
+      const worn = (await clan()).equipped;
+      assert.deepStrictEqual([worn.color, worn.fx, worn.banner, worn.lounge, worn.pin], ["color.moon", "fx.11", "banner.moon_wolf", "lounge.moon_wolf", "pin.1"]);
+      assert.strictEqual((await clan()).diamonds, 100);
+      await assert.rejects(member.pb.collection("clans").update(id, { pro: true }));
+      // An announcement a day, polls, the calendar.
+      await pro.announce(lead.idToken, "war tonight");
+      await assert.rejects(pro.announce(lead.idToken, "again"), /today/);
+      await assert.rejects(pro.announce(member.idToken, "me"), /not allowed/);
+      await pro.newPoll(lead.idToken, "When?", ["Friday", "Saturday"]);
+      await assert.rejects(pro.newPoll(lead.idToken, "When?", ["Only one"]), /invalid/);
+      const [poll] = await member.pb.collection("clan_messages").getFullList({ filter: 'kind = "poll"' });
+      await pro.votePoll(member.idToken, poll.id, 1);
+      await pro.votePoll(lead.idToken, poll.id, 0);
+      assert.deepStrictEqual((await admin.collection("clan_messages").getOne(poll.id)).data.votes, { [member.id]: 1, [lead.id]: 0 });
+      await pro.votePoll(member.idToken, poll.id, 1); // (again: taken back)
+      assert.deepStrictEqual((await admin.collection("clan_messages").getOne(poll.id)).data.votes, { [lead.id]: 0 });
+      await assert.rejects(pro.votePoll(member.idToken, poll.id, 2), /invalid/);
+      await pro.addClanEvent(lead.idToken, "Clan match", Date.now() + 86_400_000);
+      await assert.rejects(pro.addClanEvent(lead.idToken, "Past", Date.now() - 1000), /invalid/);
+      const [event] = await member.pb.collection("clan_events").getFullList();
+      assert.strictEqual(event.title, "Clan match");
+      await assert.rejects(pro.deleteClanEvent(member.idToken, event.id), /not allowed/);
+      await pro.deleteClanEvent(lead.idToken, event.id);
+      await pro.pinSecond(lead.idToken, "second");
+      assert.strictEqual((await clan()).pinned2, "second");
+      // Members-only: the same Pro clan; a stranger stays out.
+      const stranger = await player();
+      assert.deepStrictEqual([await pro.sameProClan(member.id, [lead.id]), await pro.sameProClan(stranger.id, [lead.id])], [true, false]);
+      // The sponsor stops: 7 days' notice, its things stay; then Pro pauses; a sponsor brings it all back.
+      await pro.stopSponsoring(sponsor.idToken);
+      assert.strictEqual((await clan()).pro, true); // (not yet)
+      assert.ok((await clan()).proEnds);
+      await admin.collection("clans").update(id, { proEnds: "2020-01-01 00:00:00.000Z" });
+      await pro.clanProTick();
+      assert.deepStrictEqual([(await clan()).pro, (await clan()).proEnds], [false, ""]);
+      assert.ok((await clan()).owned.includes("shape.wolf"));
+      await assert.rejects(pro.buyClanItem(lead.idToken, "shape.crown"), /not pro/);
+      await pro.sponsorClan(member.idToken);
+      assert.deepStrictEqual([(await clan()).pro, (await clan()).equipped.color], [true, "color.moon"]);
+      // He leaves the clan: no more sponsor; his VIP Pro is the leader's now.
+      await clans.leaveClan(member.idToken);
+      assert.strictEqual((await clan()).sponsor, "");
+      assert.ok((await clan()).proEnds);
+      await accounts.grantVip(lead.id, "pro", 30);
+      assert.deepStrictEqual([(await clan()).pro, (await clan()).proEnds], [true, ""]);
     });
 
     it("sells avatars and frames for what the player has, once each, never below 0", async () => {
@@ -839,9 +958,10 @@ describe("PocketBase", function () {
       assert.strictEqual(file.status, 404);
     });
 
-    it("Monday: last week's best win their prizes, each told in a message; the 1st: VIP diamonds; each once", async () => {
-      const [a, b, vip] = [await player(), await player(), await player()];
-      await accounts.grantVip(vip.id, "vip", 5);
+    it("Monday: last week's best win their prizes, each told in a message; the 1st: VIP Pro diamonds; each once", async () => {
+      const [a, b, vip, plainVip] = [await player(), await player(), await player(), await player()];
+      await accounts.grantVip(vip.id, "pro", 5);
+      await accounts.grantVip(plainVip.id, "vip", 5);
       const last = weekKey(Date.now() - 7 * DAY);
       for (const [p, xp] of [[a, 900], [b, 800]] as const) {
         await admin.collection("leaderboard").create({ id: `${p.id}_${last}`, week: last, user: p.id, xp, name: "x", avatar: 103 });
@@ -856,6 +976,7 @@ describe("PocketBase", function () {
       assert.ok(after[0].vip && at(after[0].vipUntil) > Date.now() + 2.9 * DAY);
       assert.strictEqual(after[1].diamonds - before[1].diamonds, 50);
       assert.strictEqual(after[2].diamonds - before[2].diamonds, accounts.VIP_DIAMONDS);
+      assert.strictEqual((await user(plainVip.id)).diamonds, 0); // a plain VIP: none
       const [prize] = await a.pb.collection("notices").getFullList({ filter: 'kind = "reward"' });
       assert.deepStrictEqual(prize.data, { rank: 1, week: last, coins: 500, diamonds: 0, vipDays: 3 });
       assert.strictEqual((await vip.pb.collection("notices").getFullList({ filter: 'kind = "gems"' })).length, 1);

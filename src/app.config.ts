@@ -1,3 +1,4 @@
+import { addClanEvent, announce as clanAnnounce, buyClanItem, deleteClanEvent, newPoll, pinSecond, sponsorClan, stopSponsoring, votePoll, wearClanItem, wearClanPack } from "./clanPro.js";
 import {
   defineServer,
   defineRoom,
@@ -40,7 +41,7 @@ import {
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
   adminClan, adminClanAct, adminClanChat, adminClans, answerRequest, changeMember, chests, ClanError, createClan, editClan, inviteToClan,
-  joinClan, leaveClan, pinClan, removeInactive, loungeOf, shareRoom,
+  joinClan, leaveClan, openRooms, payFromClan, pinClan, reactClanLine, removeInactive, loungeOf, shareRoom,
 } from "./clans.js";
 import {
   adminItem, adminLog, adminReset, adminWallet, backupNow, cheatFlags, content, crashList, deleteCrash, economy, gameHistory, handleReport,
@@ -233,7 +234,21 @@ const server = defineServer({
           ["inactive", (t) => removeInactive(t)],
           ["invite", (t, b) => inviteToClan(t, String(b.user ?? ""))],
           ["pin", (t, b) => pinClan(t, b.text)],
-          ["room", (t, b) => shareRoom(t, b.roomId, b.game)],
+          ["room", (t, b) => shareRoom(t, b.roomId, b.game, b.joined === true)],
+          ["rooms", (t, b) => openRooms(t, b.ids)], // which of these rooms still are
+          ["react", (t, b) => reactClanLine(t, String(b.id ?? ""), String(b.emoji ?? ""))],
+          ["pay", (t, b) => payFromClan(t, String(b.user ?? ""), b.coins, b.diamonds)], // the leader, from the clan's wallet
+          ["sponsor", (t) => sponsorClan(t)],
+          ["unsponsor", (t) => stopSponsoring(t)],
+          ["buy", (t, b) => buyClanItem(t, b.id)],
+          ["wear", (t, b) => wearClanItem(t, b.slot, b.id)],
+          ["wearpack", (t, b) => wearClanPack(t, b.pack)],
+          ["pin2", (t, b) => pinSecond(t, b.text)],
+          ["announce", (t, b) => clanAnnounce(t, b.text)],
+          ["poll", (t, b) => newPoll(t, b.question, b.answers)],
+          ["vote", (t, b) => votePoll(t, String(b.id ?? ""), b.answer)],
+          ["event", (t, b) => addClanEvent(t, b.title, b.at)],
+          ["eventdel", (t, b) => deleteClanEvent(t, String(b.id ?? ""))],
           ["line", (t, b) => pushClanLine(t, String(b.id ?? ""))], // a line just written: to the others' phones
           ["notify", (t, b) => setNotify(t, b)], // my clan notifications on or off
         ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]

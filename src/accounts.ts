@@ -6,6 +6,7 @@ import { pushTo } from "./push.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { atNight, reached } from "./achievements.js";
+import { clanProTick, refreshAllPro, refreshProOf } from "./clanPro.js";
 import { clanWeek } from "./clans.js";
 import { BOOST_MS, dailyNext, dailyTaken, freeSpins, spin } from "./daily.js";
 import {
@@ -149,7 +150,8 @@ export type Account = {
   frame: number;
   vip: boolean;
   vipPro: boolean;
-  roleCardDay: string; // the day a VIP last played the role his Master card chose (one a day)
+  roleCardDay: string; // the day a VIP last played the role a Master card chose
+  roleCardUsed: number; // …and how many he played that day
   roomLook: unknown; // a VIP Pro's saved room name and style (rooms/perks.ts checks it)
   coins?: number; // when he joined (a staked table checks it; the stake is taken when the game starts)
   xp?: number;
@@ -173,6 +175,7 @@ export async function accountFor(idToken: string): Promise<Account> {
     vip: user.vip === true,
     vipPro: user.vipPro === true, // (a VIP Pro is a VIP too)
     roleCardDay: String(user.roleCardDay ?? ""),
+    roleCardUsed: Number(user.roleCardUsed) || 0,
     roomLook: user.roomLook ?? null,
     coins: Number(user.coins) || 0,
     xp: Number(user.xp) || 0,
@@ -278,7 +281,7 @@ export async function exchangeToken(idToken: string, appVersion?: unknown, devic
 // ---- the admin app ----
 
 const DZ_MS = 60 * 60_000; // Algeria time (UTC+1 all year)
-const dzDay = (ms: number) => new Date(ms + DZ_MS).toISOString().slice(0, 10);
+export const dzDay = (ms: number) => new Date(ms + DZ_MS).toISOString().slice(0, 10);
 export const pbDate = (ms: number) => new Date(ms).toISOString().replace("T", " ");
 const dayId = (day: string) => `d${day.replaceAll("-", "")}`;
 
@@ -595,7 +598,7 @@ export async function saveDone(done: Done) {
  */
 export async function grantVip(uid: string, level: "vip" | "pro" | "off", days: number | null) {
   if (days !== null && !(Number.isInteger(days) && days > 0 && days <= 3650)) throw new Error("days");
-  return forPlayer(uid, async () => {
+  const done = await forPlayer(uid, async () => {
     const client = await db();
     const u = await client.collection("users").getOne(uid, { fields: "vip,vipPro,vipUntil,vipProUntil" });
     if (level === "off") return client.collection("users").update(uid, { vip: false, vipPro: false, vipUntil: "", vipProUntil: "" });
@@ -613,6 +616,8 @@ export async function grantVip(uid: string, level: "vip" | "pro" | "off", days: 
       vipUntil: vipForGood ? "" : pbDate(Math.max(parseDate(vipUntil), parseDate(vipProUntil))),
     });
   });
+  await refreshProOf(uid); // (his clan may be Pro by him)
+  return done;
 }
 
 /** VIP and VIP Pro whose time is up end; a VIP Pro item he wears without owning it goes back to a free one. */
@@ -635,13 +640,14 @@ export async function expireVips() {
       if (store.proFrames.includes(u.frame) && !owns(u.frames, u.frame)) update.frame = 0;
     }
     await forPlayer(u.id, () => client.collection("users").update(u.id, update));
+    if (update.vipPro === false) await refreshProOf(u.id);
   }
 }
 
 export const VIP_DIAMONDS = 1000;
 
 /**
- * The 1st of each month (Algeria time): every VIP (VIP Pro too) gets his 1,000 diamonds, with a message. Once a month
+ * The 1st of each month (Algeria time): every VIP Pro gets his 1,000 diamonds, with a message. Once a month
  * (the month is marked first: a crash halfway never pays twice). The first run only marks it: from next month on.
  */
 async function monthlyDiamonds(done: Done) {
@@ -652,13 +658,13 @@ async function monthlyDiamonds(done: Done) {
   await saveDone(done);
   if (first) return;
   const client = await db();
-  for (const { id } of await client.collection("users").getFullList({ filter: "vip = true", fields: "id" })) {
+  for (const { id } of await client.collection("users").getFullList({ filter: "vipPro = true", fields: "id" })) {
     await forPlayer(id, async () => {
       const batch = client.createBatch(); // ("diamonds+" in a batch: see sell)
       batch.collection("users").update(id, { "diamonds+": VIP_DIAMONDS });
       ledger(batch, id, 0, VIP_DIAMONDS, "vip", month);
       batch.collection("notices").create({
-        user: id, kind: "gems", text: `VIP: your ${VIP_DIAMONDS} diamonds for ${month}`, data: { month, diamonds: VIP_DIAMONDS },
+        user: id, kind: "gems", text: `VIP Pro: your ${VIP_DIAMONDS} diamonds for ${month}`, data: { month, diamonds: VIP_DIAMONDS },
       });
       await batch.send();
     }).catch((e) => console.error("VIP diamonds failed for", id, e));
@@ -723,10 +729,13 @@ async function weeklyPrizes(done: Done) {
 export async function deleteMessagesBefore(cutoff: number) {
   const client = await db();
   const filter = client.filter("created < {:cutoff}", { cutoff: pbDate(cutoff) });
-  for (;;) {
-    const { items } = await client.collection("messages").getList(1, 200, { filter, fields: "id", skipTotal: true });
-    if (items.length === 0) return;
-    for (const { id } of items) await client.collection("messages").delete(id);
+  // (A clan's voice messages and room lines too; its written lines stay.)
+  for (const [name, which] of [["messages", filter], ["clan_messages", `${filter} && (kind = "voice" || kind = "room")`]]) {
+    for (;;) {
+      const { items } = await client.collection(name).getList(1, 200, { filter: which, fields: "id", skipTotal: true });
+      if (items.length === 0) break;
+      for (const { id } of items) await client.collection(name).delete(id);
+    }
   }
 }
 
@@ -749,6 +758,7 @@ export async function runSchedules() {
   await monthlyDiamonds(done);
   await weeklyPrizes(done);
   await clanWeek(done).catch((e) => console.error("clan week failed", e));
+  await clanProTick().catch((e) => console.error("clan pro failed", e));
   await oldChat(done);
 }
 
@@ -757,13 +767,23 @@ export function startSchedules() {
   if (!pb) return;
   const run = () => runSchedules().catch((e) => console.error("schedules failed", e));
   run();
+  refreshAllPro().catch((e) => console.error("clan pro failed", e));
   setInterval(run, 60_000).unref();
 }
 
-/** A VIP played the role his Master card chose: his card for today is spent. */
+/** The Master cards a VIP has left today, of the owner's number a day. */
+export const roleCardsLeft = (a: { roleCardDay: string; roleCardUsed: number }) =>
+  Math.max(0, settings().vipRolePicks - (a.roleCardDay === dayKey() ? a.roleCardUsed : 0));
+
+/** A VIP played the role a Master card chose: one card of today's is spent. */
 export async function useRoleCard(uid: string) {
   if (!pb || !uid) return;
-  await (await db()).collection("users").update(uid, { roleCardDay: dayKey() });
+  await forPlayer(uid, async () => {
+    const client = await db();
+    const u = await client.collection("users").getOne(uid, { fields: "roleCardDay,roleCardUsed" });
+    const day = dayKey();
+    await client.collection("users").update(uid, { roleCardDay: day, roleCardUsed: u.roleCardDay === day ? (Number(u.roleCardUsed) || 0) + 1 : 1 });
+  });
 }
 
 export const PRO_KICKS = 5; // a month
@@ -831,7 +851,7 @@ export async function pushClanLine(idToken: string, id: string) {
   if (!id || pushed.has(id)) return { ok: true };
   const client = await db();
   const line = await client.collection("clan_messages").getOne(id, { expand: "clan,user" });
-  if (line.user !== uid || line.kind !== "text" || Date.now() - Date.parse(String(line.created).replace(" ", "T")) > 60_000) {
+  if (line.user !== uid || (line.kind !== "text" && line.kind !== "voice") || Date.now() - Date.parse(String(line.created).replace(" ", "T")) > 60_000) {
     return { ok: true };
   }
   pushed.add(id);

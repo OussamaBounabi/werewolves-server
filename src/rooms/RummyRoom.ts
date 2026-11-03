@@ -1,3 +1,4 @@
+import { sameProClan } from "../clanPro.js";
 import { Room, Client, ServerError } from "colyseus";
 import { randomAvatar, randomFrame } from "../avatars.js";
 import { accountFor, accountsEnabled, isAdmin, isFriendOfAny, recordTable, settings, vipLevel, type Account } from "../accounts.js";
@@ -55,7 +56,7 @@ type Phase = "lobby" | "seating" | "playing" | "round_end" | "gameover"; // seat
 type RoundResult = { winner: string; joker: boolean; penalties: Record<string, number>; cards: Record<string, number[]> }; // cards: each hand at the end
 
 const MAX_SEATS = 5;
-const ROOM_TYPES = ["public", "friends", "private"];
+const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const TURN_OPTIONS = [30, 45, 60, 90];
 const SCORE_OPTIONS = [500, 1000, 1500, 2000, 3000];
 const OPEN_OPTIONS = [0, 51, 71, 91, 101]; // 0: by the number of players
@@ -222,7 +223,8 @@ export class RummyRoom extends Room<{ metadata: Meta }> {
     if (account && this.invited.has(account.uid)) return;
     const uids = [...new Set(this.members.values())];
     if (this.roomType === "friends" && account && (await isFriendOfAny(account.uid, uids))) return;
-    throw new ServerError(4410, this.roomType === "private" ? "private" : "friends");
+    if (this.roomType === "clan" && account && (await sameProClan(account.uid, uids))) return;
+    throw new ServerError(4410, this.roomType === "friends" ? "friends" : this.roomType);
   }
 
   onJoin(client: Client, options: JoinOptions = {}) {

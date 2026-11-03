@@ -1193,6 +1193,27 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(room.state.phase, "day");
   });
 
+  it("the one with votes leaves with under 30 seconds to go: back to 30, his votes gone; without votes: nothing changes", async () => {
+    const { room, clients } = await startGame({ ...ONE_OF_EACH, wolves: 2, villagers: 3 }, 8);
+    const r = room as any;
+    r.openDebate(10_000);
+    const living = clients.filter((c: any) => room.state.players.get(c.sessionId)?.alive);
+    const [fled, next, nobody, ...others] = living;
+    for (const c of others) c.send("day_vote", { targetId: fled.sessionId });
+    fled.send("day_vote", { targetId: next.sessionId });
+    await waitFor(() => room.state.players.get(others[0].sessionId)?.votedFor === fled.sessionId);
+    // No votes on him: the clock goes on.
+    r.lovers = null;
+    await nobody.leave(true);
+    await waitFor(() => room.state.players.get(nobody.sessionId)?.alive === false);
+    assert.ok(room.state.phaseEndsAt - Date.now() <= 10_000);
+    await fled.leave(true);
+    await waitFor(() => room.state.players.get(fled.sessionId)?.alive === false);
+    assert.strictEqual(room.state.phase, "day");
+    assert.ok(room.state.phaseEndsAt - Date.now() > 25_000);
+    assert.ok(others.every((c: any) => room.state.players.get(c.sessionId)?.votedFor === ""));
+  });
+
   it("the mayor election is a whole day; a tie leaves the village without a mayor; then night 1", async () => {
     const { room, clients } = await startGame({ ...ONE_OF_EACH, roundSeconds: 300 });
     const r = room as any;
