@@ -421,6 +421,32 @@ export async function reactClanLine(idToken: string, id: string, emoji: string) 
 
 const WALLET_MAX = 100_000_000; // at most, in one payment
 
+/** Any member puts coins and diamonds of his own in the clan's wallet. Every member sees it in its history. */
+export async function giveToClan(idToken: string, coinsIn: unknown, diamondsIn: unknown) {
+  const coins = Number(coinsIn ?? 0), diamonds = Number(diamondsIn ?? 0);
+  const fine = (n: number) => Number.isInteger(n) && n >= 0 && n <= WALLET_MAX;
+  if (!fine(coins) || !fine(diamonds) || coins + diamonds === 0) throw new ClanError("invalid");
+  const { uid } = await signedIn(idToken);
+  return forPlayer(uid, async () => {
+    const client = await db();
+    const me = await myMembership(client, uid);
+    return forClan(me.clan, async () => {
+      const [user, clan] = await Promise.all([
+        client.collection("users").getOne(uid, { fields: "coins,diamonds" }),
+        client.collection("clans").getOne(me.clan, { fields: "tag" }),
+      ]);
+      if (coins > (Number(user.coins) || 0) || diamonds > (Number(user.diamonds) || 0)) throw new ClanError("funds");
+      const batch = client.createBatch();
+      batch.collection("users").update(uid, { "coins-": coins, "diamonds-": diamonds });
+      batch.collection("clans").update(me.clan, { "coins+": coins, "diamonds+": diamonds });
+      batch.collection("clan_wallet").create({ clan: me.clan, kind: "give", coins, diamonds, user: uid });
+      ledger(batch, uid, -coins, -diamonds, "clan", `to ${clan.tag}'s wallet`);
+      await batch.send();
+      return { ok: true };
+    });
+  });
+}
+
 /**
  * The leader gives a member (himself too) coins and diamonds from the clan's wallet. Every member sees it in the wallet's
  * history; the player is told.

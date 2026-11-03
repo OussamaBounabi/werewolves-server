@@ -41,7 +41,7 @@ import {
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
   adminClan, adminClanAct, adminClanChat, adminClans, answerRequest, changeMember, chests, ClanError, createClan, editClan, inviteToClan,
-  joinClan, leaveClan, openRooms, payFromClan, pinClan, reactClanLine, removeInactive, loungeOf, shareRoom,
+  joinClan, leaveClan, openRooms, giveToClan, payFromClan, pinClan, reactClanLine, removeInactive, loungeOf, shareRoom,
 } from "./clans.js";
 import {
   adminItem, adminLog, adminReset, adminWallet, backupNow, cheatFlags, content, crashList, deleteCrash, economy, gameHistory, handleReport,
@@ -238,6 +238,7 @@ const server = defineServer({
           ["rooms", (t, b) => openRooms(t, b.ids)], // which of these rooms still are
           ["react", (t, b) => reactClanLine(t, String(b.id ?? ""), String(b.emoji ?? ""))],
           ["pay", (t, b) => payFromClan(t, String(b.user ?? ""), b.coins, b.diamonds)], // the leader, from the clan's wallet
+          ["give", (t, b) => giveToClan(t, b.coins, b.diamonds)], // any member, into the clan's wallet
           ["sponsor", (t) => sponsorClan(t)],
           ["unsponsor", (t) => stopSponsoring(t)],
           ["buy", (t, b) => buyClanItem(t, b.id)],

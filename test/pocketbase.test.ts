@@ -426,6 +426,18 @@ describe("PocketBase", function () {
       assert.deepStrictEqual([(await admin.collection("clans").getOne(id)).coins, (await admin.collection("clans").getOne(id)).diamonds], [500, 3]);
       assert.strictEqual((await b.pb.collection("notices").getFullList({ filter: 'kind = "clanPay"' })).length, 1);
       assert.deepStrictEqual((await a.pb.collection("clan_wallet").getFullList({ sort: "-created,-id", filter: 'kind = "pay"' })).map((w) => [w.coins, w.user]), [[-300, b.id]]);
+      // Any member puts in from his own money, no more than he has.
+      await admin.collection("users").update(b.id, { coins: 1000, diamonds: 10 });
+      await assert.rejects(clans.giveToClan(b.idToken, 1001, 0), /funds/);
+      await assert.rejects(clans.giveToClan(b.idToken, 0, 0), /invalid/);
+      await assert.rejects(clans.giveToClan(b.idToken, -5, 0), /invalid/);
+      await clans.giveToClan(b.idToken, 400, 3);
+      assert.deepStrictEqual([(await user(b.id)).coins, (await user(b.id)).diamonds], [600, 7]);
+      assert.deepStrictEqual([(await admin.collection("clans").getOne(id)).coins, (await admin.collection("clans").getOne(id)).diamonds], [900, 6]);
+      const [given] = await a.pb.collection("clan_wallet").getFullList({ filter: 'kind = "give"' });
+      assert.deepStrictEqual([given.coins, given.diamonds, given.user], [400, 3, b.id]);
+      await assert.rejects(clans.giveToClan(stranger.idToken, 1, 0), /not in a clan/);
+      await clans.payFromClan(lead.idToken, lead.id, 400, 3); // (the wallet as it was)
       // A member can't write the wallet's history or his clan's money.
       await assert.rejects(b.pb.collection("clan_wallet").create({ clan: id, kind: "week", coins: 1 }));
       await assert.rejects(b.pb.collection("clans").update(id, { coins: 999999 }));
