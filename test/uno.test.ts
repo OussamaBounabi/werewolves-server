@@ -42,10 +42,12 @@ describe("UnoRoom", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
   before(async () => {
     UnoRoom.botSpeed = 0.01;
+    UnoRoom.pace = 0.01;
     colyseus = await boot(appConfig);
   });
   after(async () => {
     UnoRoom.botSpeed = 1;
+    UnoRoom.pace = 1;
     await colyseus.shutdown();
   });
 
@@ -66,17 +68,21 @@ describe("UnoRoom", () => {
   const total = (room: any) => [...room.hands.values()].reduce((n: number, h: string[]) => n + h.length, 0) + room.pile.length + room.discard.length;
 
   for (const stacking of [false, true]) {
-    it(`bots play whole games${stacking ? " with stacking" : ""}, every card accounted for`, async function () {
-      this.timeout(60_000);
-      const { room, host } = await started(5, { stacking, maxPlayers: 6 });
+    it(`bots play whole matches${stacking ? " with stacking" : ""} round after round, every card accounted for`, async function () {
+      this.timeout(400_000);
+      const { room, host } = await started(5, { stacking, maxPlayers: 6, target: 500 });
       room.becomeBot(host.sessionId);
-      while (room.phase === "playing") {
-        assert.strictEqual(total(room), 108);
+      room.abandon.check = () => {}; // (only bots at the table: it would close after a minute, before a long match ends)
+      let rounds = 0;
+      while (room.phase !== "gameover") {
+        if (room.phase === "playing") assert.strictEqual(total(room), 108);
+        rounds = Math.max(rounds, room.round);
         await wait(20);
       }
-      assert.strictEqual(room.phase, "gameover");
       assert.strictEqual(room.hands.get(room.winner).length, 0);
-      assert.ok(room.seats.every((s: any) => s.id === room.winner || room.hands.get(s.id).length > 0), "one winner, the others hold cards");
+      assert.ok(room.seats.some((s: any) => s.score >= 500), "someone reached the target");
+      assert.strictEqual(room.history.length, rounds);
+      assert.strictEqual(room.history.reduce((n: number, r: any) => n + r.points, 0), room.seats.reduce((n: number, s: any) => n + s.score, 0));
       await host.leave();
     });
   }
@@ -126,6 +132,49 @@ describe("UnoRoom", () => {
     const before = room.hands.get(b).length;
     room.handleDraw(b);
     assert.deepStrictEqual([room.hands.get(b).length, room.pending, room.turn], [before + 4, 0, me]);
+    await host.leave();
+  });
+
+  it("out with a +4: the next player draws four, they count, the round is over", async () => {
+    const { room, host } = await started(2, { target: 500 });
+    const [me, a] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    rig(room, me, ["w-draw4"], "r-9");
+    room.hands.set(a, ["r-1"]);
+    room.handlePlay(me, "w-draw4", "g");
+    assert.strictEqual(room.phase, "round_end");
+    assert.strictEqual(room.hands.get(a).length, 5);
+    const last = room.history[room.history.length - 1];
+    assert.strictEqual(last.winner, me);
+    assert.strictEqual(last.left[a], room.hands.get(a).reduce((n: number, c: string) => n + points(c), 0));
+    assert.ok(last.left[a] >= 1, "the four drawn count");
+    await host.leave();
+  });
+
+  it("2 vs 2: partners face to face, each sees his partner's cards, a round won scores the opponents' hands for both", async () => {
+    const room: any = await colyseus.createRoom("uno", { teams: true, target: 500 });
+    const host = await colyseus.connectTo(room);
+    let seen: any = null;
+    host.onMessage("uno", (m) => (seen = m));
+    host.onMessage("uno_fx", () => {});
+    host.onMessage("uno_drawn", () => {});
+    for (let i = 0; i < 3; i++) host.send("add_bot", { level: "hard" });
+    await wait(150);
+    host.send("partner", { id: room.seats[3].id });
+    await wait(50);
+    host.send("start_game");
+    while (room.phase !== "playing") await wait(10);
+    await wait(80);
+    const [me, a, b, c] = room.seats.map((s: any) => s.id);
+    assert.deepStrictEqual(seen.partnerHand, room.hands.get(b), "my partner faces me");
+    assert.deepStrictEqual(seen.seats.map((s: any) => s.team), [0, 1, 0, 1]);
+    rig(room, me, ["r-3"], "r-9");
+    room.hands.set(a, ["r-5"]);
+    room.hands.set(b, ["b-9"]);
+    room.hands.set(c, ["w-wild"]);
+    room.handlePlay(me, "r-3");
+    assert.strictEqual(room.history[room.history.length - 1].points, 55, "5 + 50, not my partner's 9");
+    assert.deepStrictEqual(room.seats.map((s: any) => s.score), [55, 0, 55, 0]);
     await host.leave();
   });
 

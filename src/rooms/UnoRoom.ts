@@ -12,19 +12,23 @@ import { gameStarted } from "../metrics.js";
 import { StakeTable } from "./stake.js";
 
 /**
- * UNO, 2–8 players (bots included), 7 cards each, one hand a game: the first to play his last card wins, the others
- * are ranked by the points left in their hands. A card goes on the discard pile's top card by color or by kind; a wild
- * goes on anything and its player names the color. Skip, reverse (with 2 players: a skip), +2 and wild +4. The host's
- * stacking rule: a +2 may answer a +2 (and a +4 a +4), the next player taking the sum; off, the next player draws at
- * once and loses his turn. On his turn a player may draw one card: if it goes he may play it, else his turn ends.
- * Down to one card he must have pressed UNO before (or right after, until someone catches him): caught, he draws 2.
- * Then, as at the domino table: "play again" by everyone, a new game; else the waiting room.
+ * UNO, 2–8 players (bots included), 7 cards each. A match of rounds, as at the domino table: whoever plays his last
+ * card wins the round and scores the points left in the others' hands (a number its face, an action 20, a wild 50);
+ * the first to the room's target (500–2000) wins the match. 2 vs 2 (4 players): partners face to face, one score per
+ * team, the round won by either partner scores the two opponents' hands; each player sees his partner's cards.
+ * A card goes on the discard pile's top card by color or by kind; a wild goes on anything and its player names the
+ * color. Skip, reverse (with 2 players: a skip), +2 and wild +4. The host's stacking rule: a +2 may answer a +2 (and a
+ * +4 a +4), the next player taking the sum; off, the next player draws at once and loses his turn. A round's last
+ * card a +2 or +4: the next player draws them first (they count). On his turn a player may draw one card: if it goes
+ * he may play it, else his turn ends. Down to one card he must have pressed UNO before (or right after, until
+ * someone catches him): caught, he draws 2. Then, as at the domino table: "play again" by everyone, a new match;
+ * else the waiting room.
  *
- * No schema: each player gets his own "uno" message (the table, plus his cards) after every change, and "uno_fx"
- * for what the apps animate (the deal, plays, draws, UNO, a catch, the end).
+ * No schema: each player gets his own "uno" message (the table, plus his cards and his partner's) after every change,
+ * and "uno_fx" for what the apps animate (the deal, plays, draws, UNO, a catch, a round's end).
  */
 type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
-type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; stacking?: boolean; stake?: number };
+type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; stacking?: boolean; target?: number; teams?: boolean; stake?: number };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
@@ -35,19 +39,23 @@ type Seat = {
   frame: number;
   vip?: string;
   connected: boolean;
-  score: number; // the points left in his hand at the end (the winner: 0)
-  bot: BotLevel | null; // a player who leaves mid-game is replaced by a normal bot
+  score: number; // the match's points (2 vs 2: his team's)
+  bot: BotLevel | null; // a player who leaves mid-game is replaced by a bot
 };
-type Phase = "lobby" | "playing" | "gameover";
+type Phase = "lobby" | "playing" | "round_end" | "gameover";
+type RoundResult = { round: number; winner: string; points: number; left: Record<string, number> }; // left: each hand's points
 
 const MAX_SEATS = 8;
 const ROOM_TYPES = ["public", "friends", "private", "clan"];
 const TURN_OPTIONS = [10, 15, 20, 30];
+const TARGET_OPTIONS = [500, 1000, 1500, 2000];
 const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
 const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Walid", "Sara", "Riad", "Meriem"];
 const HAND = 7;
-const DEAL_MS = 3_000; // the apps' shuffle and deal, before the first turn
+const DEAL_MS = 3_000; // the apps' deal, before the first turn
 const PASS_MS = 1_000; // a drawn card that doesn't go: shown, then the turn moves on
+const READY_WAIT_MS = 30_000; // between rounds: who hasn't pressed "ready" by then is ready anyway
+const NEXT_ROUND_MS = 5_000;
 const RECONNECT_SECONDS = 60;
 const CLOSE_AFTER_GAME_MS = 60_000;
 const MAX_SPECTATORS = 20;
@@ -57,6 +65,7 @@ const added = (s: Seat) => s.id.startsWith("bot-");
 export class UnoRoom extends Room<{ metadata: Meta }> {
   private abandon = new Abandon(this);
   static botSpeed = 1; // tests: bots think faster
+  static pace = 1; // tests: the deal and the pause between rounds shorter
   static deck = () => shuffle(newDeck()); // tests: a deal of their choice (cards are drawn from the end)
   maxClients = MAX_SEATS + MAX_SPECTATORS;
 
@@ -66,6 +75,9 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private maxPlayers = 4;
   private turnSeconds = 15;
   private stacking = false;
+  private target = 500;
+  private teams = false; // 2 vs 2: seats 0 & 2 against 1 & 3 (partners face to face)
+  private teamScores = [0, 0];
   private startedAt = 0;
   private seats: Seat[] = []; // seat order = turn order (clockwise)
   private members = new Map<string, string>();
@@ -91,9 +103,13 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private drew: string | null = null; // the card the player whose turn it is drew (he may only play that one)
   private called = new Set<string>(); // pressed UNO on two cards
   private unoOpen = ""; // down to one card without UNO: anyone may catch him until the next player moves
-  private winner = "";
+  private round = 0;
+  private starter = -1; // the seat that played first this round (the next round: the one after)
+  private winner = ""; // the last round's
+  private history: RoundResult[] = [];
   private turn = "";
   private turnEndsAt = 0;
+  private nextRoundAt = 0;
   private ready = new Set<string>();
   private botSeq = 0;
   private timer: { clear(): void } | null = null;
@@ -120,6 +136,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     });
     on<{ level: string }>("add_bot", (c, m) => this.handleAddBot(c, m.level));
     on<{ id: string }>("remove_bot", (c, m) => this.handleRemoveBot(c, m.id));
+    on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("start_game", (c) => this.handleStart(c));
     on("sit", (c) => this.handleSit(c));
     on<{ card: string; color?: string }>("play", (c, m) => this.handlePlay(this.idOf(c), String(m.card), m.color));
@@ -127,6 +144,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     on("pass", (c) => this.handlePass(this.idOf(c)));
     on("uno", (c) => this.handleUno(this.idOf(c)));
     on<{ id: string }>("catch", (c, m) => this.handleCatch(this.idOf(c), String(m.id)));
+    on("ready", (c) => this.handleReady(this.idOf(c)));
     on("play_again", (c) => this.handlePlayAgain(this.idOf(c)));
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
@@ -321,10 +339,13 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
 
   private applySettings(s: Settings) {
     const n = Math.floor(Number(s.maxPlayers));
-    if (n >= 2 && n <= MAX_SEATS) this.maxPlayers = Math.max(n, this.seats.length);
+    if (n >= 2 && n <= MAX_SEATS && !(this.teams && n !== 4)) this.maxPlayers = Math.max(n, this.seats.length);
     if (ROOM_TYPES.includes(s.roomType as string)) this.roomType = s.roomType as string;
     if (TURN_OPTIONS.includes(Number(s.turnSeconds))) this.turnSeconds = Number(s.turnSeconds);
+    if (TARGET_OPTIONS.includes(Number(s.target))) this.target = Number(s.target);
     if (typeof s.stacking === "boolean") this.stacking = s.stacking;
+    if (typeof s.teams === "boolean") this.teams = s.teams && this.seats.length <= 4;
+    if (this.teams) this.maxPlayers = 4;
     if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake);
     this.updateListing();
   }
@@ -344,7 +365,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       frame: 0,
       connected: true,
       score: 0,
-      bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "normal",
+      bot: BOT_LEVELS.includes(level as BotLevel) ? (level as BotLevel) : "hard",
     });
     this.updateListing();
   }
@@ -355,9 +376,20 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.updateListing();
   }
 
+  /** 2 vs 2: the host picks his partner; seats become host, opponent, partner, opponent. */
+  private handlePartner(client: Client, partnerId: string) {
+    const host = this.idOf(client);
+    if (this.phase !== "lobby" || host !== this.hostId || !this.teams || host === partnerId) return;
+    const partner = this.seat(partnerId);
+    if (!partner) return;
+    const others = this.seats.filter((x) => x.id !== host && x.id !== partnerId);
+    this.seats = [this.seat(host)!, others[0], partner, others[1]].filter((x) => x !== undefined);
+  }
+
   private handleStart(client: Client) {
     if (this.phase !== "lobby" || this.idOf(client) !== this.hostId) return;
     if (this.seats.length < 2) return "not_enough_players";
+    if (this.teams && this.seats.length !== 4) return "teams_need_four";
     this.stake.begin(
       this.seats.filter((s) => !s.bot),
       () => {
@@ -409,14 +441,30 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private becomeBot(id: string) {
     const seat = this.seat(id);
     if (!seat || seat.bot) return;
-    seat.bot = "normal";
+    seat.bot = "hard";
     seat.connected = true;
+    if (this.phase === "round_end") this.handleReady(id);
     if (this.turn === id && this.phase === "playing") this.startTurn(id);
   }
 
-  // ---- the game ----
+  private teamOf(id: string) {
+    return this.seats.findIndex((x) => x.id === id) % 2;
+  }
+
+  private sameSide(a: string, b: string) {
+    return a === b || (this.teams && this.teamOf(a) === this.teamOf(b));
+  }
+
+  /** 2 vs 2: the seat facing him. */
+  private partnerOf(id: string) {
+    const at = this.seats.findIndex((x) => x.id === id);
+    return this.teams && this.seats.length === 4 && at >= 0 ? this.seats[(at + 2) % 4].id : "";
+  }
+
+  // ---- a round ----
 
   private deal() {
+    this.round++;
     this.phase = "playing";
     this.pile = UnoRoom.deck();
     this.discard = [];
@@ -427,10 +475,8 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.unoOpen = "";
     this.winner = "";
     this.ready.clear();
-    for (const s of this.seats) {
-      this.hands.set(s.id, []);
-      s.score = 0;
-    }
+    this.nextRoundAt = 0;
+    for (const s of this.seats) this.hands.set(s.id, []);
     for (let i = 0; i < HAND; i++) for (const s of this.seats) this.hands.get(s.id)!.push(this.pile.pop()!);
     // The first card up: a number card (anything else goes back under the pile).
     let top = this.pile.pop()!;
@@ -441,7 +487,9 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.discard.push(top);
     this.color = colorOf(top) as Color;
     this.broadcast("uno_fx", { type: "deal", order: this.seats.map((s) => s.id), top });
-    this.startTurn(this.seats[Math.floor(Math.random() * this.seats.length)].id, DEAL_MS);
+    // The first round: anyone; then each round the next seat round the table.
+    this.starter = this.starter < 0 ? Math.floor(Math.random() * this.seats.length) : (this.starter + 1) % this.seats.length;
+    this.startTurn(this.seats[this.starter].id, DEAL_MS * UnoRoom.pace);
   }
 
   private startTurn(id: string, extraMs = 0) {
@@ -502,7 +550,13 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.discard.push(card);
     this.color = isWild(card) ? (color as Color) : (colorOf(card) as Color);
     this.broadcast("uno_fx", { type: "play", who: id, card, color: this.color });
-    if (hand.length === 0) return this.endGame(id);
+    const kind = kindOf(card);
+    if (kind === "draw2" || kind === "draw4") this.pending += kind === "draw2" ? 2 : 4;
+    if (hand.length === 0) {
+      // Out with a +2 or +4: the next player draws them first, and they count.
+      if (this.pending > 0) this.takePending(this.after(id));
+      return this.endRound(id);
+    }
     if (hand.length === 1) {
       if (this.called.has(id)) this.broadcast("uno_fx", { type: "uno", who: id });
       else {
@@ -511,9 +565,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       }
     }
     this.called.delete(id);
-    const kind = kindOf(card);
     if (kind === "rev") this.direction = -this.direction;
-    if (kind === "draw2" || kind === "draw4") this.pending += kind === "draw2" ? 2 : 4;
     const skip = kind === "skip" || (kind === "rev" && this.seats.length === 2);
     const next = this.after(id, skip ? 2 : 1);
     // Without stacking a +2 or +4 lands at once: the next player draws and loses his turn.
@@ -598,25 +650,58 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.startTurn(this.after(id));
   }
 
-  private endGame(winner: string) {
+  /** [winner] played his last card: he (2 vs 2: his team) scores the points left in the other side's hands. */
+  private endRound(winner: string) {
     this.timer?.clear();
     this.botTimer?.clear();
     this.catchTimer?.clear();
     this.winner = winner;
     this.turn = "";
     this.unoOpen = "";
-    for (const s of this.seats) s.score = this.hands.get(s.id)!.reduce((n, c) => n + points(c), 0);
+    const left: Record<string, number> = {};
+    for (const s of this.seats) left[s.id] = this.hands.get(s.id)!.reduce((n, c) => n + points(c), 0);
+    const won = this.seats.filter((s) => !this.sameSide(s.id, winner)).reduce((n, s) => n + left[s.id], 0);
+    if (this.teams) {
+      this.teamScores[this.teamOf(winner)] += won;
+      for (const s of this.seats) s.score = this.teamScores[this.teamOf(s.id)];
+    } else this.seat(winner)!.score += won;
+    this.history.push({ round: this.round, winner, points: won, left });
     this.broadcast("uno_fx", { type: "end", winner, hands: Object.fromEntries(this.hands) });
-    this.phase = "gameover";
-    const seat = this.seat(winner)!;
-    recordTable("uno", this.seats, seat.uid ? [seat.uid] : [], this.startedAt);
-    this.stake.settle([seat.playerId]);
-    this.ready = new Set(this.seats.filter(added).map((x) => x.id));
-    this.turnEndsAt = Date.now() + CLOSE_AFTER_GAME_MS;
-    this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), CLOSE_AFTER_GAME_MS);
+    if (this.seats.some((s) => s.score >= this.target)) {
+      this.phase = "gameover";
+      const side = this.seats.filter((s) => this.sameSide(s.id, winner));
+      recordTable("uno", this.seats, side.map((s) => s.uid).filter(Boolean), this.startedAt);
+      this.stake.settle(side.map((s) => s.playerId));
+      this.ready = new Set(this.seats.filter(added).map((x) => x.id));
+      this.turnEndsAt = Date.now() + CLOSE_AFTER_GAME_MS;
+      this.timer = this.clock.setTimeout(() => (this.afterGame(true), this.sync()), CLOSE_AFTER_GAME_MS);
+      return;
+    }
+    this.phase = "round_end";
+    this.ready = new Set(this.seats.filter((x) => x.bot).map((x) => x.id));
+    this.turnEndsAt = Date.now() + READY_WAIT_MS * UnoRoom.pace;
+    this.timer = this.clock.setTimeout(() => {
+      for (const x of this.seats) this.ready.add(x.id);
+      this.allReady();
+      this.sync();
+    }, READY_WAIT_MS * UnoRoom.pace);
+    this.allReady();
   }
 
-  // ---- after a game (as at the domino table) ----
+  private handleReady(id: string) {
+    if (this.phase !== "round_end" || !this.seat(id)) return;
+    this.ready.add(id);
+    this.allReady();
+  }
+
+  private allReady() {
+    if (this.nextRoundAt || this.seats.some((x) => !this.ready.has(x.id))) return;
+    this.timer?.clear();
+    this.nextRoundAt = this.turnEndsAt = Date.now() + NEXT_ROUND_MS * UnoRoom.pace;
+    this.timer = this.clock.setTimeout(() => (this.deal(), this.sync()), NEXT_ROUND_MS * UnoRoom.pace);
+  }
+
+  // ---- after a match (as at the domino table) ----
 
   private handlePlayAgain(id: string) {
     if (this.phase !== "gameover" || !this.seat(id) || this.seat(id)!.bot) return;
@@ -639,7 +724,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
         players.filter((s) => !s.bot),
         () => {
           if (this.phase !== "gameover") return false;
-          this.startedAt = Date.now();
+          this.clearMatch();
           gameStarted(this.roomName);
           this.deal();
           this.sync();
@@ -657,16 +742,25 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       this.removeSeat(s.id);
       client?.leave(4000);
     }
-    for (const s of this.seats) s.score = 0;
-    this.ready.clear();
+    this.clearMatch();
     this.hands.clear();
     this.pile = [];
     this.discard = [];
-    this.winner = "";
     this.turn = "";
     this.turnEndsAt = 0;
     this.phase = "lobby";
     this.updateListing();
+  }
+
+  private clearMatch() {
+    this.startedAt = Date.now();
+    this.round = 0;
+    this.starter = -1;
+    this.winner = "";
+    this.history = [];
+    this.teamScores = [0, 0];
+    for (const s of this.seats) s.score = 0;
+    this.ready.clear();
   }
 
   private pressed(s: Seat) {
@@ -680,7 +774,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.botTimer = this.clock.setTimeout(() => {
       if (this.turn !== id || this.phase !== "playing") return;
       const seat = this.seat(id)!;
-      const level = seat.bot ?? "normal";
+      const level = seat.bot ?? "hard";
       const hand = this.hands.get(id)!;
       const move = () =>
         botMove({ level, hand, top: this.top, color: this.color, pending: this.stacking ? this.pending : 0, nextCards: this.hands.get(this.after(id))?.length ?? 7 });
@@ -698,10 +792,10 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     }, (delayMs + 900 + Math.random() * 900) * UnoRoom.botSpeed);
   }
 
-  /** Someone forgot UNO: a normal or hard bot at the table catches him after a moment, if nobody did first. */
+  /** Someone forgot UNO: a normal or hard bot of the other side catches him after a moment, if nobody did first. */
   private botsCatch() {
     const id = this.unoOpen;
-    const catcher = this.seats.find((s) => s.bot && s.bot !== "easy" && s.id !== id);
+    const catcher = this.seats.find((s) => s.bot && s.bot !== "easy" && !this.sameSide(s.id, id));
     if (!catcher) return;
     this.catchTimer?.clear();
     this.catchTimer = this.clock.setTimeout(() => (this.handleCatch(catcher.id, id), this.sync()), (1500 + Math.random() * 1500) * UnoRoom.botSpeed);
@@ -750,12 +844,16 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       maxPlayers: this.maxPlayers,
       turnSeconds: this.turnSeconds,
       stacking: this.stacking,
+      target: this.target,
+      teams: this.teams,
+      round: this.round,
       seats: this.seats.map((s) => ({
         id: s.id, name: s.name, uid: s.uid, avatar: s.avatar, frame: s.frame, vip: s.vip ?? "", connected: s.connected, score: s.score, bot: s.bot ?? "",
-        cards: this.hands.get(s.id)?.length ?? 0, team: -1,
+        cards: this.hands.get(s.id)?.length ?? 0, team: this.teams ? this.teamOf(s.id) : -1,
       })),
       turn: this.turn,
       turnEndsAt: this.turnEndsAt,
+      nextRoundAt: this.nextRoundAt,
       discard: this.discard.slice(-4), // the top and a few under it
       color: this.color,
       direction: this.direction,
@@ -763,6 +861,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       pile: this.pile.length,
       unoOpen: this.unoOpen,
       winner: this.winner,
+      history: this.history,
       ready: [...this.ready],
       spectators: this.spectators.size,
       stake: this.stake.amount,
@@ -771,7 +870,15 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     };
     for (const client of this.clients) {
       const me = this.idOf(client);
-      client.send("uno", { ...table, me, hand: this.hands.get(me) ?? [], drew: this.turn === me ? this.drew ?? "" : "", called: this.called.has(me) });
+      const partner = this.seat(me) ? this.partnerOf(me) : "";
+      client.send("uno", {
+        ...table,
+        me,
+        hand: this.hands.get(me) ?? [],
+        partnerHand: partner ? (this.hands.get(partner) ?? []) : [],
+        drew: this.turn === me ? (this.drew ?? "") : "",
+        called: this.called.has(me),
+      });
     }
     for (const id of this.admins) this.clients.getById(id)?.send("god", { hands: Object.fromEntries(this.seats.map((s) => [s.id, this.hands.get(s.id) ?? []])) });
   }
