@@ -3,7 +3,7 @@ import { playerLevel } from "./clans.js";
 import type { StakePlan } from "./plans.js";
 
 /**
- * Playing for coins (Rummy, Domino, Ludo, Billiard, Chess & Checkers, Guess Who, Mystery Item; never Werewolf,
+ * Playing for coins (Rummy, Domino, Ludo, Billiard, Chess & Checkers, Guess Who, Mystery Item, UNO; never Werewolf,
  * Imposter or Mimic Party). The host picks one of the admin's levels; each player puts that many coins in the pot when
  * the game starts, and the house keeps its cut of what's paid out.
  * - Winners (1 vs 1, 2 vs 2, everyone for himself): the winners share the pot. A draw: each gets his own back, less

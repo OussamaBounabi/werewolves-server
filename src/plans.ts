@@ -251,7 +251,7 @@ export const SWITCHES = { clanTags: false, chessAnalysis: false };
 export type SwitchId = keyof typeof SWITCHES;
 
 /** The games whose host may add bots, each one on by default. */
-export const BOT_GAMES = ["rummy", "domino", "billiard", "chess", "ludo", "guess", "mystery"] as const;
+export const BOT_GAMES = ["rummy", "domino", "billiard", "chess", "ludo", "guess", "mystery", "uno"] as const;
 
 /** A word the owner added to Imposter (its category and three languages). */
 export type ExtraWord = { id: string; cat: string; en: string; fr: string; ar: string };
