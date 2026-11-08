@@ -54,6 +54,12 @@ export function bestColor(hand: string[], rnd = Math.random): Color {
   return [...count].sort((a, b) => b[1] - a[1])[0][0];
 }
 
+/** Does a bot challenge a +4 whose player holds [cards] (unseen)? The more he holds, the likelier a bluff: easy
+ *  never, the others up to one time in two. */
+export function botChallenges(level: BotLevel, cards: number, rnd = Math.random) {
+  return level !== "easy" && rnd() < Math.min(0.5, Math.max(0, (cards - 2) / 12));
+}
+
 /**
  * A bot's card, or null (it draws). Easy: any card that goes. Normal: its own colors first, the heavy cards first,
  * the wilds kept for last. Hard: as normal, but when the next player is close to winning, it hits him first (+2, +4,

@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { botMove, canPlay, newDeck, points } from "../src/uno.js";
+import { botChallenges, botMove, canPlay, newDeck, points } from "../src/uno.js";
 import { UnoRoom } from "../src/rooms/UnoRoom.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,6 +94,7 @@ describe("UnoRoom", () => {
     room.discard.push(top);
     room.color = color;
     room.pending = 0;
+    room.d4 = null;
     room.direction = 1; // (the bots may have played a reverse meanwhile)
     room.unoOpen = "";
     room.startTurn(id);
@@ -149,6 +150,90 @@ describe("UnoRoom", () => {
     assert.strictEqual(last.left[a], room.hands.get(a).reduce((n: number, c: string) => n + points(c), 0));
     assert.ok(last.left[a] >= 1, "the four drawn count");
     await host.leave();
+  });
+
+  it("a +4: drawn, or challenged; a bluff caught, the bluffer draws 4 and I play; honest, I draw 6", async () => {
+    const { room, host } = await started(2);
+    const [me, a, b] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    const play4 = (hand: string[], direction = 1) => {
+      rig(room, a, ["w-draw4", ...hand], "r-9");
+      room.direction = direction;
+      room.handlePlay(a, "w-draw4", "g");
+      room.botTimer?.clear();
+    };
+    const mine = () => room.hands.get(me).length;
+    // Drawn: four, my turn over.
+    play4(["b-1", "y-2"]);
+    assert.deepStrictEqual([room.turn, room.pending, room.d4.who], [b, 4, a], "it waits for the next player");
+    room.hands.set(b, ["g-1", "g-2"]);
+    assert.strictEqual(room.handlePlay(b, "g-1"), "no_match", "no stacking: challenge or draw");
+    room.handleDraw(b);
+    assert.deepStrictEqual([room.hands.get(b).length, room.turn, room.d4], [6, me, null]);
+    // A bluff (he held a red, the color asked): he draws 4, I play, the named color stays.
+    room.hands.set(me, ["r-1", "b-4"]);
+    play4(["r-3", "b-1"], -1); // (a plays before me)
+    assert.strictEqual(room.turn, me);
+    const before = mine();
+    room.handleChallenge(me);
+    assert.deepStrictEqual([room.hands.get(a).length, mine(), room.turn, room.color, room.pending], [6, before, me, "g", 0]);
+    // Honest (a blue and a +2 of another color don't count): I draw 6, my turn over.
+    play4(["b-1", "y-draw2"], -1);
+    room.handleChallenge(me);
+    assert.deepStrictEqual([mine(), room.turn, room.hands.get(a).length], [before + 6, b, 2]);
+    room.handleChallenge(me); // (not my turn, no +4: nothing)
+    assert.strictEqual(mine(), before + 6);
+    await host.leave();
+  });
+
+  it("a +4 with stacking: stacked, the last one judged: a bluff takes the whole stack", async () => {
+    const { room, host } = await started(2, { stacking: true });
+    const [me, a, b] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    rig(room, me, ["w-draw4", "b-1", "b-2"], "r-9");
+    room.handlePlay(me, "w-draw4", "y");
+    room.botTimer?.clear();
+    room.hands.set(a, ["w-draw4", "y-5", "g-1"]); // (a yellow: the color I named; a bluff)
+    room.handlePlay(a, "w-draw4", "g");
+    room.botTimer?.clear();
+    assert.deepStrictEqual([room.turn, room.pending, room.d4.who], [b, 8, a]);
+    room.handleChallenge(b);
+    assert.deepStrictEqual([room.hands.get(a).length, room.turn, room.pending], [10, b, 0]);
+    await host.leave();
+  });
+
+  it("bots challenge a +4 more often the more cards its player holds; easy never", () => {
+    assert.ok(!botChallenges("easy", 20, () => 0));
+    assert.ok(!botChallenges("hard", 2, () => 0), "two cards: he likely had no other");
+    assert.ok(botChallenges("hard", 8, () => 0.4));
+    assert.ok(!botChallenges("normal", 8, () => 0.6), "one time in two at most");
+  });
+
+  it("the round's clock: out of time, the lowest hand wins and scores the others'; even, fewer cards, then turn order", async () => {
+    UnoRoom.roundScale = 0.001; // (5 minutes: 300 ms)
+    try {
+      const { room, host } = await started(2, { roundMinutes: 5 });
+      const [me, a, b] = room.seats.map((s: any) => s.id);
+      rig(room, me, ["r-9", "b-9"], "r-5"); // (my turn: no bot plays meanwhile)
+      room.hands.set(a, ["r-1", "g-2", "y-3"]);
+      room.hands.set(b, ["w-wild"]);
+      while (room.phase === "playing") await wait(10);
+      const last = room.history[room.history.length - 1];
+      assert.deepStrictEqual([last.winner, last.points, last.timeUp], [a, 18 + 50, true]);
+      assert.strictEqual(room.seat(a).score, 68);
+      await host.leave();
+
+      const two = await started(2, { roundMinutes: 3 });
+      const [me2, a2, b2] = two.room.seats.map((s: any) => s.id);
+      rig(two.room, me2, ["r-5"], "r-1");
+      two.room.hands.set(a2, ["r-2", "g-3"]); // (5 points too, but two cards)
+      two.room.hands.set(b2, ["b-5"]); // (even with me: I play first)
+      while (two.room.phase === "playing") await wait(10);
+      assert.strictEqual(two.room.winner, me2);
+      await two.host.leave();
+    } finally {
+      UnoRoom.roundScale = 1;
+    }
   });
 
   it("2 vs 2: partners face to face, each sees his partner's cards, a round won scores the opponents' hands for both", async () => {
