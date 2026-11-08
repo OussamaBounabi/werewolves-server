@@ -172,6 +172,10 @@ describe("UnoRoom", () => {
     room.hands.set(a, ["r-5"]);
     room.hands.set(b, ["b-9"]);
     room.hands.set(c, ["w-wild"]);
+    room.unoOpen = me;
+    room.handleCatch(b, me);
+    assert.strictEqual(room.unoOpen, me, "my partner can't catch me");
+    room.unoOpen = "";
     room.handlePlay(me, "r-3");
     assert.strictEqual(room.history[room.history.length - 1].points, 55, "5 + 50, not my partner's 9");
     assert.deepStrictEqual(room.seats.map((s: any) => s.score), [55, 0, 55, 0]);
@@ -200,6 +204,14 @@ describe("UnoRoom", () => {
     room.handleUno(me);
     room.handleCatch(bot, me);
     assert.strictEqual(room.hands.get(me).length, 1);
+    // No bot to hit the hammer: it stays 2 s, through the others' moves, then goes.
+    room.seats[1].bot = "easy";
+    rig(room, me, ["r-3", "r-5"], "r-9");
+    room.handlePlay(me, "r-3");
+    await wait(1500);
+    assert.strictEqual(room.unoOpen, me, "still open after the bot moved");
+    await wait(700);
+    assert.strictEqual(room.unoOpen, "", "closed after 2 s");
     await host.leave();
   });
 

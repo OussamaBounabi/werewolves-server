@@ -20,9 +20,9 @@ import { StakeTable } from "./stake.js";
  * color. Skip, reverse (with 2 players: a skip), +2 and wild +4. The host's stacking rule: a +2 may answer a +2 (and a
  * +4 a +4), the next player taking the sum; off, the next player draws at once and loses his turn. A round's last
  * card a +2 or +4: the next player draws them first (they count). On his turn a player may draw one card: if it goes
- * he may play it, else his turn ends. Down to one card he must have pressed UNO before (or right after, until
- * someone catches him): caught, he draws 2. Then, as at the domino table: "play again" by everyone, a new match;
- * else the waiting room.
+ * he may play it, else his turn ends. Down to one card he must have pressed UNO before (or right after): forgotten,
+ * the other side has 2 s to hit the hammer over him, and caught, he draws 2. Then, as at the domino table: "play
+ * again" by everyone, a new match; else the waiting room.
  *
  * No schema: each player gets his own "uno" message (the table, plus his cards and his partner's) after every change,
  * and "uno_fx" for what the apps animate (the deal, plays, draws, UNO, a catch, a round's end).
@@ -54,6 +54,7 @@ const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Wali
 const HAND = 7;
 const DEAL_MS = 3_000; // the apps' deal, before the first turn
 const PASS_MS = 1_000; // a drawn card that doesn't go: shown, then the turn moves on
+const CATCH_MS = 2_000; // UNO forgotten: the others' time to hit the hammer
 const READY_WAIT_MS = 30_000; // between rounds: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000;
 const RECONNECT_SECONDS = 60;
@@ -102,7 +103,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private pending = 0; // +2s and +4s stacked, for the next player to draw
   private drew: string | null = null; // the card the player whose turn it is drew (he may only play that one)
   private called = new Set<string>(); // pressed UNO on two cards
-  private unoOpen = ""; // down to one card without UNO: anyone may catch him until the next player moves
+  private unoOpen = ""; // down to one card without UNO: the other side may catch him for CATCH_MS
   private round = 0;
   private starter = -1; // the seat that played first this round (the next round: the one after)
   private winner = ""; // the last round's
@@ -533,11 +534,6 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     return got;
   }
 
-  /** Someone else moves: whoever forgot UNO can't be caught any more. */
-  private closeCatch(id: string) {
-    if (this.unoOpen && this.unoOpen !== id) this.unoOpen = "";
-  }
-
   private handlePlay(id: string, card: string, color?: string) {
     if (this.phase !== "playing" || this.turn !== id) return;
     const hand = this.hands.get(id)!;
@@ -545,7 +541,6 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     if (this.drew && card !== this.drew) return "drawn_only";
     if (!canPlay(card, this.top, this.color, this.stacking ? this.pending : 0)) return "no_match";
     if (isWild(card) && !COLORS.includes(color as Color)) return "pick_color";
-    this.closeCatch(id);
     hand.splice(hand.indexOf(card), 1);
     this.discard.push(card);
     this.color = isWild(card) ? (color as Color) : (colorOf(card) as Color);
@@ -559,10 +554,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     }
     if (hand.length === 1) {
       if (this.called.has(id)) this.broadcast("uno_fx", { type: "uno", who: id });
-      else {
-        this.unoOpen = id;
-        this.botsCatch();
-      }
+      else this.openCatch(id);
     }
     this.called.delete(id);
     if (kind === "rev") this.direction = -this.direction;
@@ -590,7 +582,6 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
 
   private handleDraw(id: string) {
     if (this.phase !== "playing" || this.turn !== id) return;
-    this.closeCatch(id);
     // A stack waits for him: he takes it all, and his turn is over.
     if (this.pending > 0) {
       this.takePending(id);
@@ -628,7 +619,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   }
 
   private handleCatch(by: string, id: string) {
-    if (this.phase !== "playing" || !this.seat(by) || by === id || this.unoOpen !== id) return;
+    if (this.phase !== "playing" || !this.seat(by) || this.sameSide(by, id) || this.unoOpen !== id) return;
     this.unoOpen = "";
     this.catchTimer?.clear();
     const got = this.take(id, 2);
@@ -642,7 +633,6 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "playing" || !this.hands.get(id)) return;
     if (this.pending > 0) return this.handleDraw(id);
     if (!this.drew) {
-      this.closeCatch(id);
       const got = this.take(id, 1);
       this.broadcast("uno_fx", { type: "draw", who: id, n: got.length });
       this.sendDrawn(id, got);
@@ -792,13 +782,19 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     }, (delayMs + 900 + Math.random() * 900) * UnoRoom.botSpeed);
   }
 
-  /** Someone forgot UNO: a normal or hard bot of the other side catches him after a moment, if nobody did first. */
-  private botsCatch() {
-    const id = this.unoOpen;
+  /** [id] forgot UNO: the other side has CATCH_MS to hit the hammer; a bot of that side does it in time. */
+  private openCatch(id: string) {
+    this.unoOpen = id;
     const catcher = this.seats.find((s) => s.bot && s.bot !== "easy" && !this.sameSide(s.id, id));
-    if (!catcher) return;
     this.catchTimer?.clear();
-    this.catchTimer = this.clock.setTimeout(() => (this.handleCatch(catcher.id, id), this.sync()), (1500 + Math.random() * 1500) * UnoRoom.botSpeed);
+    this.catchTimer = this.clock.setTimeout(
+      () => {
+        if (catcher) this.handleCatch(catcher.id, id);
+        else if (this.unoOpen === id) this.unoOpen = "";
+        this.sync();
+      },
+      catcher ? (900 + Math.random() * 800) * UnoRoom.botSpeed : CATCH_MS,
+    );
   }
 
   // ---- sync ----
