@@ -23,13 +23,16 @@ export const ROLE_CARDS: Record<string, number> = {
   wolfcub: 25, dreamwolf: 25, wolfshaman: 25, fangface: 25, fruitbrute: 15, juniorwerewolf: 25, shadowwolf: 25,
   wolftrickster: 30, wolfsummoner: 25, minion: 15, sorceress: 20,
   // the loners
-  whitewolf: 30, alien: 30, bomber: 30, piper: 30, guitarist: 30, killer: 30,
+  whitewolf: 30, alien: 30, bomber: 30, piper: 30, guitarist: 30, killer: 30, vampire: 30, chupacabra: 30, sectarian: 25,
+  arsonist: 30, necromancer: 25, bandit: 30, cannibal: 30,
   // the village
   seer: 20, witch: 20, protector: 15, hunter: 15, wildhunter: 15, detective: 15, bear: 10, redhood: 10, tripleface: 20,
   cupid: 15, wildchild: 15, dragon: 25, barbe: 20, dictator: 20, judge: 20, trickster: 15, fox: 15, ancient: 15,
   doubler: 20, joker: 20, raven: 15, owl: 15, idiot: 10, knight: 15, brothers: 10, cat: 15, littlegirl: 15, shepherd: 15,
   rabbit: 15, policeman: 20, mirror: 15, priest: 20, alchemist: 25, servant: 15, puppet: 15,
-  cursed: 10, sasquatch: 15,
+  cursed: 10, sasquatch: 15, leprechaun: 15, lookout: 15, spiritseer: 15, insomniac: 10, loudmouth: 15, fortuneteller: 15,
+  medium: 15, bloodymary: 15, beholder: 10, count: 10, toughguy: 10, diseased: 10, drunk: 15, actor: 20, ghost: 10,
+  troublemaker: 15, flowerchild: 15, gunner: 20,
 };
 
 export type StoreWeek = { avatars: number[]; frames: number[]; cards: string[] };
