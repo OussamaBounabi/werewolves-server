@@ -30,11 +30,17 @@ import { StakeTable } from "./stake.js";
  * the other side has 2 s to hit the hammer over him, and caught, he draws 2. Then, as at the domino table: "play
  * again" by everyone, a new match; else the waiting room.
  *
+ * The host's mode: Classic, or All Wilds (the same deck with wild ones of every kind added, four of each: +2,
+ * reverse, skip, skip two, targeted +2, hand swap). Each names a color and does its action: skip two, the next two
+ * lose their turn (fewer others: as many as there are); targeted +2, a player named draws 2 at once, and the turn goes
+ * on; hand swap, the player and the one named swap hands (nobody's UNO is owed for it; as the last card, he's out).
+ * A plain wild left in a hand counts 20 there, the other wilds 50.
+ *
  * No schema: each player gets his own "uno" message (the table, plus his cards and his partner's) after every change,
  * and "uno_fx" for what the apps animate (the deal, plays, draws, UNO, a catch, a round's end).
  */
 type Meta = { host: string; hostAvatar: number; hostFrame: number; hostVip: string; roomName: string; roomStyle: string; roomType: string; chat: boolean; started: boolean; players: number; maxPlayers: number; spectators: number; stake: number };
-type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; roundMinutes?: number; stacking?: boolean; target?: number; teams?: boolean; stake?: number };
+type Settings = { roomType?: string; maxPlayers?: number; turnSeconds?: number; roundMinutes?: number; stacking?: boolean; target?: number; teams?: boolean; stake?: number; allWilds?: boolean };
 type JoinOptions = Settings & { admin?: boolean; name?: string; playerId?: string; idToken?: string; spectator?: boolean };
 type Seat = {
   id: string;
@@ -74,7 +80,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private abandon = new Abandon(this);
   static botSpeed = 1; // tests: bots think faster
   static pace = 1; // tests: the deal and the pause between rounds shorter
-  static deck = () => shuffle(newDeck()); // tests: a deal of their choice (cards are drawn from the end)
+  static deck = (allWilds = false) => shuffle(newDeck(allWilds)); // tests: a deal of their choice (drawn from the end)
   static roundScale = 1; // tests: the round's clock shorter
   maxClients = MAX_SEATS + MAX_SPECTATORS;
 
@@ -85,6 +91,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private turnSeconds = 15;
   private roundMinutes = 5;
   private stacking = false;
+  private allWilds = false; // the All Wilds mode
   private target = 500;
   private teams = false; // 2 vs 2: seats 0 & 2 against 1 & 3 (partners face to face)
   private teamScores = [0, 0];
@@ -152,7 +159,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     on<{ id: string }>("partner", (c, m) => this.handlePartner(c, m.id));
     on("start_game", (c) => this.handleStart(c));
     on("sit", (c) => this.handleSit(c));
-    on<{ card: string; color?: string }>("play", (c, m) => this.handlePlay(this.idOf(c), String(m.card), m.color));
+    on<{ card: string; color?: string; target?: string }>("play", (c, m) => this.handlePlay(this.idOf(c), String(m.card), m.color, m.target));
     on("draw", (c) => this.handleDraw(this.idOf(c)));
     on("pass", (c) => this.handlePass(this.idOf(c)));
     on("challenge", (c) => this.handleChallenge(this.idOf(c)));
@@ -359,6 +366,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     if (ROUND_OPTIONS.includes(Number(s.roundMinutes))) this.roundMinutes = Number(s.roundMinutes);
     if (TARGET_OPTIONS.includes(Number(s.target))) this.target = Number(s.target);
     if (typeof s.stacking === "boolean") this.stacking = s.stacking;
+    if (typeof s.allWilds === "boolean") this.allWilds = s.allWilds;
     if (typeof s.teams === "boolean") this.teams = s.teams && this.seats.length <= 4;
     if (this.teams) this.maxPlayers = 4;
     if (s.stake !== undefined && !(Number(s.stake) > 0 && this.seats.some((x) => x.bot))) this.stake.set(s.stake);
@@ -481,7 +489,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private deal() {
     this.round++;
     this.phase = "playing";
-    this.pile = UnoRoom.deck();
+    this.pile = UnoRoom.deck(this.allWilds);
     this.discard = [];
     this.direction = 1;
     this.pending = 0;
@@ -519,7 +527,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     if (this.phase !== "playing") return;
     const side = (id: string, of: (cards: string[]) => number) =>
       this.seats.filter((s) => this.sameSide(s.id, id)).reduce((n, s) => n + of(this.hands.get(s.id)!), 0);
-    const pts = (id: string) => side(id, (h) => h.reduce((n, c) => n + points(c), 0));
+    const pts = (id: string) => side(id, (h) => h.reduce((n, c) => n + points(c, this.allWilds), 0));
     const cards = (id: string) => side(id, (h) => h.length);
     const order = [this.turn || this.seats[0].id];
     while (order.length < this.seats.length) order.push(this.after(order[order.length - 1]));
@@ -570,7 +578,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     return got;
   }
 
-  private handlePlay(id: string, card: string, color?: string) {
+  private handlePlay(id: string, card: string, color?: string, target?: string) {
     if (this.phase !== "playing" || this.turn !== id) return;
     const hand = this.hands.get(id)!;
     if (!hand.includes(card)) return "bad_card";
@@ -578,26 +586,47 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     if (this.pending > 0 && !this.stacking) return "no_match"; // (a +4 waits: challenge it, or draw)
     if (!canPlay(card, this.top, this.color, this.stacking ? this.pending : 0)) return "no_match";
     if (isWild(card) && !COLORS.includes(color as Color)) return "pick_color";
-    hand.splice(hand.indexOf(card), 1);
     const kind = kindOf(card);
+    // A targeted +2 or a hand swap names another player (only one other: him).
+    const others = this.seats.map((s) => s.id).filter((s) => s !== id);
+    const named = kind === "target2" || kind === "swap";
+    const victim = !named ? "" : others.includes(String(target)) ? String(target) : others.length === 1 ? others[0] : "";
+    if (named && !victim) return "pick_target";
+    hand.splice(hand.indexOf(card), 1);
     this.d4 = kind === "draw4" ? { who: id, bluff: hand.some((c) => colorOf(c) === this.color) } : null;
     this.discard.push(card);
     this.color = isWild(card) ? (color as Color) : (colorOf(card) as Color);
-    this.broadcast("uno_fx", { type: "play", who: id, card, color: this.color });
+    this.broadcast("uno_fx", { type: "play", who: id, card, color: this.color, ...(victim ? { target: victim } : {}) });
     if (kind === "draw2" || kind === "draw4") this.pending += kind === "draw2" ? 2 : 4;
     if (hand.length === 0) {
-      // Out with a +2 or +4: the next player draws them first, and they count.
+      // Out with a +2 or +4: the next player draws them first, and they count. (Out with a swap: nothing swapped.)
       if (this.pending > 0) this.takePending(this.after(id));
       return this.endRound(id);
     }
-    if (hand.length === 1) {
+    if (kind === "swap") {
+      // His hand for the other's: neither owes an UNO for it.
+      this.hands.set(id, this.hands.get(victim)!);
+      this.hands.set(victim, hand);
+      this.called.delete(victim);
+      if (this.unoOpen === id || this.unoOpen === victim) {
+        this.catchTimer?.clear();
+        this.unoOpen = "";
+      }
+      this.broadcast("uno_fx", { type: "swap", who: id, with: victim });
+    } else if (hand.length === 1) {
       if (this.called.has(id)) this.broadcast("uno_fx", { type: "uno", who: id });
       else this.openCatch(id);
     }
     this.called.delete(id);
+    if (kind === "target2") {
+      const got = this.take(victim, 2);
+      this.broadcast("uno_fx", { type: "draw", who: victim, n: got.length, penalty: true });
+      this.sendDrawn(victim, got);
+    }
     if (kind === "rev") this.direction = -this.direction;
-    const skip = kind === "skip" || (kind === "rev" && this.seats.length === 2);
-    const next = this.after(id, skip ? 2 : 1);
+    // How many lose their turn: a skip one (a reverse too, with 2 players), a skip two two (as many as there are).
+    const skips = kind === "skip2" ? Math.min(2, others.length) : kind === "skip" || (kind === "rev" && this.seats.length === 2) ? 1 : 0;
+    const next = this.after(id, 1 + skips);
     // Without stacking a +2 lands at once: the next player draws and loses his turn (a +4 waits: draw, or challenge).
     if (kind === "draw2" && !this.stacking) {
       this.takePending(next);
@@ -704,7 +733,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.turn = "";
     this.unoOpen = "";
     const left: Record<string, number> = {};
-    for (const s of this.seats) left[s.id] = this.hands.get(s.id)!.reduce((n, c) => n + points(c), 0);
+    for (const s of this.seats) left[s.id] = this.hands.get(s.id)!.reduce((n, c) => n + points(c, this.allWilds), 0);
     const won = this.seats.filter((s) => !this.sameSide(s.id, winner)).reduce((n, s) => n + left[s.id], 0);
     if (this.teams) {
       this.teamScores[this.teamOf(winner)] += won;
@@ -821,8 +850,12 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       const seat = this.seat(id)!;
       const level = seat.bot ?? "hard";
       const hand = this.hands.get(id)!;
+      const fewestOther = Math.min(...this.seats.filter((s) => !this.sameSide(s.id, id)).map((s) => this.hands.get(s.id)!.length));
       const move = () =>
-        botMove({ level, hand, top: this.top, color: this.color, pending: this.stacking ? this.pending : 0, nextCards: this.hands.get(this.after(id))?.length ?? 7 });
+        botMove({
+          level, hand, top: this.top, color: this.color, pending: this.stacking ? this.pending : 0,
+          nextCards: this.hands.get(this.after(id))?.length ?? 7, fewestOther,
+        });
       // A +4 waits for it: stack one if it may, else challenge it now and then, or draw.
       if (this.d4 && !(this.stacking && move())) {
         if (botChallenges(level, this.hands.get(this.d4.who)!.length)) this.handleChallenge(id);
@@ -834,13 +867,20 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
         this.handleDraw(id);
         if (this.turn !== id || !this.drew) return this.sync();
         const drawn = this.drew;
-        m = canPlay(drawn, this.top, this.color) ? { card: drawn, color: isWild(drawn) ? bestColor(hand.filter((c) => c !== drawn)) : undefined } : null;
+        const worth = kindOf(drawn) !== "swap" || fewestOther < hand.length - 1; // (a swap only for fewer cards)
+        m = canPlay(drawn, this.top, this.color) && worth ? { card: drawn, color: isWild(drawn) ? bestColor(hand.filter((c) => c !== drawn)) : undefined } : null;
         if (!m) return this.sync(); // (it passes by itself)
       }
       if (hand.length === 2 && (level !== "easy" || Math.random() < 0.7)) this.handleUno(id);
-      this.handlePlay(id, m.card, m.color ?? (isWild(m.card) ? "r" : undefined));
+      this.handlePlay(id, m.card, m.color ?? (isWild(m.card) ? "r" : undefined), this.botTarget(id));
       this.sync();
     }, (delayMs + 900 + Math.random() * 900) * UnoRoom.botSpeed);
+  }
+
+  /** Whom a bot's targeted +2 or hand swap names: of the other side, the one holding the fewest cards. */
+  private botTarget(id: string) {
+    const theirs = this.seats.filter((s) => !this.sameSide(s.id, id));
+    return theirs.sort((a, b) => this.hands.get(a.id)!.length - this.hands.get(b.id)!.length)[0]?.id;
   }
 
   /** [id] forgot UNO: the other side has CATCH_MS to hit the hammer; a bot of that side does it in time. */
@@ -903,6 +943,7 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
       roundMinutes: this.roundMinutes,
       roundEndsAt: this.roundEndsAt,
       stacking: this.stacking,
+      allWilds: this.allWilds,
       target: this.target,
       teams: this.teams,
       round: this.round,

@@ -2,7 +2,7 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { botChallenges, botMove, canPlay, newDeck, points } from "../src/uno.js";
+import { ALL_WILDS, botChallenges, botMove, canPlay, newDeck, points } from "../src/uno.js";
 import { UnoRoom } from "../src/rooms/UnoRoom.js";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -26,6 +26,20 @@ describe("uno cards", () => {
     assert.ok(canPlay("b-draw2", "r-draw2", "r", 2));
     assert.ok(!canPlay("r-5", "r-draw2", "r", 2), "a +2 waiting: not a plain card");
     assert.ok(!canPlay("w-draw4", "r-draw2", "r", 2), "nor a +4 on a +2");
+  });
+
+  it("All Wilds: 132 cards, four of each new wild; a plain wild counts 20; a wild on top goes by its color only", () => {
+    const deck = newDeck(true);
+    assert.strictEqual(deck.length, 132);
+    for (const k of ALL_WILDS) assert.strictEqual(deck.filter((c) => c === `w-${k}`).length, 4, k);
+    assert.deepStrictEqual([points("w-wild", true), points("w-swap", true), points("w-draw4", true), points("r-rev", true)], [20, 50, 50, 20]);
+    assert.ok(!canPlay("r-skip", "w-skip", "g"), "a skip on a wild skip: its color only");
+    assert.ok(canPlay("g-skip", "w-skip", "g"));
+    assert.ok(canPlay("w-draw2", "r-draw2", "r", 2), "a wild +2 stacks on a +2");
+    assert.ok(canPlay("b-draw2", "w-draw2", "y", 2));
+    // A swap only when another holds fewer cards than it would.
+    const swap = (fewestOther: number) => botMove({ level: "normal", hand: ["w-swap", "g-3", "g-4", "g-5"], top: "r-1", color: "r", pending: 0, nextCards: 5, fewestOther });
+    assert.deepStrictEqual([swap(2)?.card, swap(3)], ["w-swap", null]);
   });
 
   it("bots: normal keeps its wild for last; hard hits a player about to win", () => {
@@ -68,14 +82,15 @@ describe("UnoRoom", () => {
   const total = (room: any) => [...room.hands.values()].reduce((n: number, h: string[]) => n + h.length, 0) + room.pile.length + room.discard.length;
 
   for (const stacking of [false, true]) {
-    it(`bots play whole matches${stacking ? " with stacking" : ""} round after round, every card accounted for`, async function () {
+    // (With stacking, in All Wilds: its 132 cards, swaps and all.)
+    it(`bots play whole matches${stacking ? " with stacking, All Wilds" : ""} round after round, every card accounted for`, async function () {
       this.timeout(400_000);
-      const { room, host } = await started(5, { stacking, maxPlayers: 6, target: 500 });
+      const { room, host } = await started(5, { stacking, allWilds: stacking, maxPlayers: 6, target: 500 });
       room.becomeBot(host.sessionId);
       room.abandon.check = () => {}; // (only bots at the table: it would close after a minute, before a long match ends)
       let rounds = 0;
       while (room.phase !== "gameover") {
-        if (room.phase === "playing") assert.strictEqual(total(room), 108);
+        if (room.phase === "playing") assert.strictEqual(total(room), stacking ? 132 : 108);
         rounds = Math.max(rounds, room.round);
         await wait(20);
       }
@@ -234,6 +249,59 @@ describe("UnoRoom", () => {
     } finally {
       UnoRoom.roundScale = 1;
     }
+  });
+
+  it("All Wilds: skip two, a targeted +2 (the turn goes on), a hand swap; a player to name, or none to pick", async () => {
+    const { room, host } = await started(3, { allWilds: true });
+    assert.strictEqual(room.allWilds, true);
+    const [me, a, b, c] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    const fx: any[] = [];
+    host.onMessage("uno_fx", (m: any) => fx.push(m));
+    // Skip two: a and b lose their turn.
+    rig(room, me, ["w-skip2", "r-5", "g-1"], "r-9");
+    host.send("play", { card: "w-skip2", color: "g" });
+    while (room.turn === me) await wait(5);
+    assert.deepStrictEqual([room.turn, room.color], [c, "g"]);
+    // A targeted +2 names b: he draws 2 at once; it's a's turn.
+    rig(room, me, ["w-target2", "r-5", "g-1"], "r-9");
+    const before = room.hands.get(b).length;
+    host.send("play", { card: "w-target2", color: "b" });
+    await wait(80);
+    assert.strictEqual(room.turn, me, "no player named: refused");
+    host.send("play", { card: "w-target2", color: "b", target: b });
+    while (room.turn === me) await wait(5);
+    assert.deepStrictEqual([room.turn, room.hands.get(b).length], [a, before + 2]);
+    // A hand swap with c: my two other cards are his, his mine.
+    rig(room, me, ["w-swap", "r-5", "g-1"], "r-9");
+    room.hands.set(c, ["y-1", "y-2", "y-3", "y-4"]);
+    host.send("play", { card: "w-swap", color: "y", target: c });
+    while (room.turn === me) await wait(5);
+    assert.deepStrictEqual([room.hands.get(me), room.hands.get(c)], [["y-1", "y-2", "y-3", "y-4"], ["r-5", "g-1"]]);
+    assert.ok(fx.some((m) => m.type === "swap" && m.who === me && m.with === c));
+    // The last card a swap: out, nothing swapped.
+    rig(room, me, ["w-swap"], "r-9");
+    host.send("play", { card: "w-swap", color: "r", target: c });
+    while (room.phase === "playing") await wait(5);
+    assert.strictEqual(room.history.at(-1).winner, me);
+    await host.leave();
+  });
+
+  it("All Wilds with 2 players: skip two and a swap need no name; a bot swaps with the one holding fewer", async () => {
+    const { room, host } = await started(1, { allWilds: true });
+    const [me, a] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    rig(room, me, ["w-skip2", "r-5", "g-1"], "r-9");
+    host.send("play", { card: "w-skip2", color: "r" });
+    await wait(80);
+    assert.strictEqual(room.turn, me, "skip two with one other: my turn again");
+    room.hands.set(a, ["w-swap", "b-1", "b-2", "b-3"]);
+    host.send("play", { card: "r-5" }); // (now a's turn: he holds 4, I hold 1 after this… he swaps for my one card)
+    while (room.turn === me) await wait(5);
+    while (room.turn === a) await wait(10);
+    // (my turn's quick test clock may have drawn me a card since)
+    assert.deepStrictEqual([room.hands.get(a), room.hands.get(me).slice(0, 3)], [["g-1"], ["b-1", "b-2", "b-3"]]);
+    await host.leave();
   });
 
   it("2 vs 2: partners face to face, each sees his partner's cards, a round won scores the opponents' hands for both", async () => {
