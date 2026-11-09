@@ -275,6 +275,40 @@ describe("WerewolfRoom", () => {
     assert.strictEqual(r.roleCards.has(vip.sessionId), false); // played: spent for today
   });
 
+  it("the same role picked: a VIP Pro before a VIP; two of the same rank, both random and nothing spent", async () => {
+    const deal = async (picks: [string, boolean, string][]) => { // [name, VIP Pro (else a VIP with his card), role]
+      const room = await colyseus.createRoom<WerewolfState>("werewolf", ONE_OF_EACH);
+      const r = room as any;
+      const clients: any[] = [];
+      for (let i = 0; i < 5; i++) clients.push(await colyseus.connectTo(room));
+      const by = new Map(picks.map(([name], i) => [name, clients[i + 1]])); // (the host, clients[0], picks nothing)
+      for (const [name, pro, role] of picks) {
+        const c = by.get(name);
+        if (pro) r.vipPros.add(c.sessionId);
+        else r.roleCards.add(c.sessionId);
+        c.send("pick_role", { role });
+      }
+      await waitFor(() => r.rolePicks.size === picks.length);
+      const dealt = Promise.all(clients.map((c) => c.waitForMessage("role_assigned", STEP)));
+      clients[0].send("start_game");
+      const roles = (await dealt).map((m: any) => m.role);
+      const roleOf = (name: string) => roles[clients.indexOf(by.get(name))];
+      const cardKept = (name: string) => r.roleCards.has(by.get(name).sessionId);
+      return { roleOf, cardKept };
+    };
+    // Two VIP Pros on the seer: neither; the VIP who picked it too gets it. Two VIPs on the witch: neither, cards kept.
+    const one = await deal([["proA", true, "seer"], ["proB", true, "seer"], ["vip", false, "seer"], ["vipA", false, "protector"]]);
+    assert.deepStrictEqual([one.roleOf("vip"), one.cardKept("vip")], ["seer", false]);
+    assert.notStrictEqual(one.roleOf("proA"), "seer");
+    assert.notStrictEqual(one.roleOf("proB"), "seer");
+    assert.strictEqual(one.roleOf("vipA"), "protector"); // (alone on it)
+    const two = await deal([["vipA", false, "witch"], ["vipB", false, "witch"], ["pro", true, "protector"], ["vip", false, "protector"]]);
+    assert.deepStrictEqual([two.cardKept("vipA"), two.cardKept("vipB")], [true, true]);
+    assert.strictEqual(two.roleOf("pro"), "protector"); // the VIP Pro first…
+    assert.notStrictEqual(two.roleOf("vip"), "protector");
+    assert.strictEqual(two.cardKept("vip"), true); // …and the VIP keeps his card
+  });
+
   it("support's ban mid-game: the player dies on the spot, removed by support, and is put out", async () => {
     const { room, clients } = await startGame();
     const r = room as any;

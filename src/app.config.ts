@@ -38,7 +38,7 @@ import {
   adminAccounts, adminBan, adminBans, adminNotice, adminPlayer, adminReports, adminRole, adminStats, announce, AuthError, BanError, settings,
   type Staff,
   buyAvatar, buyCoins, buyFrame, claimAchievement, pushClanLine, setNotify, claimDaily, claimMission, ClaimError, currentPlans, exchangeToken, grantVip, isAdmin, PRO_KICKS, ProfileError, pushMessage, freeCoins, savePushToken, sendGift, spinWheel,
-  savePlan, StoreError, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
+  savePlan, StoreError, supportMedia, supportReply, supportThread, supportThreads, updateProfile, VIP_DIAMONDS, type ProfileChanges,
 } from "./accounts.js";
 import { AVATARS, FRAMES, FREE_AVATARS } from "./avatars.js";
 import {
@@ -480,7 +480,8 @@ const server = defineServer({
       return { ...list, items: list.items.map((u) => ({ ...u, where: whereIs(u.uid).state })) };
     }),
     // Support: the reported players (most reported first), the reports one by one (?handled=1: those dealt with), a
-    // reported picture, one player (?uid=), who is banned, support's conversations and one of them (?uid=); a message
+    // reported picture, one player (?uid=), who is banned, support's conversations and one of them (?uid=), a picture or
+    // a video a player sent support (?id= of his message: where to download it); a message
     // or a warning to a player (body { uid, kind, text }), a ban (body { uid, days: -1 for good, 0 lifts, reason,
     // phone }), an answer (body { uid, text }), an offensive name or avatar reset (body { uid, what }).
     api_admin_reports: adminEndpoint("/api/admin/reports", "GET", async () => ({ players: await adminReports() })),
@@ -517,6 +518,7 @@ const server = defineServer({
     api_admin_bans: adminEndpoint("/api/admin/bans", "GET", () => adminBans()),
     api_admin_support: adminEndpoint("/api/admin/support", "GET", async () => ({ threads: await supportThreads() })),
     api_admin_thread: adminEndpoint("/api/admin/support/thread", "GET", (ctx) => supportThread(param(ctx, "uid"))),
+    api_admin_support_media: adminEndpoint("/api/admin/support/media", "GET", (ctx) => supportMedia(param(ctx, "id"))),
     api_admin_notice: adminEndpoint("/api/admin/notice", "POST", async (ctx) => {
       const { uid, kind, text } = (ctx.body ?? {}) as { uid?: unknown; kind?: unknown; text?: unknown };
       await adminNotice(String(uid), kind, text);

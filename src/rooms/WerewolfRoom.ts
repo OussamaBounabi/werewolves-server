@@ -994,14 +994,23 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const r of SPECIALS) mix[r] = on.includes(r);
     const deck = buildDeck(mix, ids.length);
 
-    // Players who picked their role get it, if the game has it (one card each: the first to pick it). A VIP's Master
-    // card is spent for the day.
-    for (const [id, role] of this.rolePicks) {
-      if (!ids.includes(id) || !deck.includes(role)) continue;
-      deck.splice(deck.indexOf(role), 1);
-      this.roles.set(id, role);
-      ids.splice(ids.indexOf(id), 1);
-      if (this.roleCards.delete(id)) useRoleCard(this.accounts.get(id) ?? "").catch((e) => console.error("master card", e));
+    // Players who picked their role get it, if the game has it: the VIP Pros first, then the VIPs. More of the same
+    // rank on a role than it has cards: none of them gets it (a random card, nothing spent), and it's still there for
+    // the VIPs after the VIP Pros. A VIP's Master card is spent for the day when he gets his role.
+    for (const pro of [true, false]) {
+      const pickers = new Map<Role, string[]>();
+      for (const [id, role] of this.rolePicks) {
+        if (ids.includes(id) && this.vipPros.has(id) === pro) pickers.set(role, [...(pickers.get(role) ?? []), id]);
+      }
+      for (const [role, who] of pickers) {
+        if (who.length > deck.filter((card) => card === role).length) continue;
+        for (const id of who) {
+          deck.splice(deck.indexOf(role), 1);
+          this.roles.set(id, role);
+          ids.splice(ids.indexOf(id), 1);
+          if (this.roleCards.delete(id)) useRoleCard(this.accounts.get(id) ?? "").catch((e) => console.error("master card", e));
+        }
+      }
     }
 
     shuffle(deck);

@@ -6,12 +6,13 @@ const account = (uid: string, vipPro: boolean, roomLook: unknown = null): Accoun
   ({ uid, name: uid, avatar: 101, frame: 0, vip: vipPro, vipPro, roleCardDay: "", roleCardUsed: 0, roomLook });
 
 describe("who is watching", () => {
-  it("how many is told to all, who to a VIP Pro only, without the players or support", () => {
+  it("how many is told to all, who to a VIP Pro only, without the players or support; each account once", () => {
     const client = (id: string, a: Account | null, sent: unknown[] = []) => ({ id, auth: { account: a }, send: (_: string, m: unknown) => sent.push(m) });
     const pro: unknown[] = [], plain: unknown[] = [];
     const clients = [
       client("pro", account("u1", true), pro), client("plain", account("u2", false), plain),
       client("seen", account("u3", false)), client("support", null),
+      client("seen", account("u3", false)), // (his app changed network: his old connection is still here a while)
     ];
     let ask: (c: unknown) => void = () => {};
     const room = { clients, onMessage: (_: string, fn: (c: unknown) => void) => (ask = fn) } as never;

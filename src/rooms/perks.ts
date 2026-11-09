@@ -13,14 +13,18 @@ type Face = { uid: string; vip?: string }; // vip: "" | "vip" | "pro"
 /**
  * How many are watching a room's game, on anyone's asking ("watchers": { count }), and who, for a VIP Pro only ({ count,
  * list }). Support, in the room unseen, has no account here and isn't counted. [watching]: whether a connection is
- * watching, not playing.
+ * watching, not playing. Each account once: an app that changed network or retried its join has two connections a
+ * while (the old one until the server hears it's gone).
  */
 export function listWatchers(room: Room, watching: (client: Client) => boolean) {
   room.onMessage("watchers", (client) => {
     const me = (client as { auth?: { account?: Account | null } }).auth?.account;
+    const seen = new Set<string>();
     const list = room.clients.flatMap((c) => {
       const a = (c as { auth?: { account?: Account | null } }).auth?.account;
-      return a && watching(c) ? [{ uid: a.uid, name: a.name, avatar: a.avatar, frame: a.frame, vip: a.vipPro ? "pro" : a.vip ? "vip" : "" }] : [];
+      if (!a || !watching(c) || seen.has(a.uid)) return [];
+      seen.add(a.uid);
+      return [{ uid: a.uid, name: a.name, avatar: a.avatar, frame: a.frame, vip: a.vipPro ? "pro" : a.vip ? "vip" : "" }];
     });
     client.send("watchers", me?.vipPro === true ? { count: list.length, list } : { count: list.length });
   });

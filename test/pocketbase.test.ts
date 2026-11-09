@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import PocketBase, { ClientResponseError } from "pocketbase";
+import PocketBase, { ClientResponseError, type RecordModel } from "pocketbase";
 import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
@@ -82,26 +82,29 @@ describe("PocketBase", function () {
    */
   type Player = { id: string; idToken: string; token: string; pb: PocketBase; email: string; username: string };
 
-  /** A new player's first launch: signed up on Firebase, his ID token exchanged. No profile yet. */
+  /**
+   * A new player's first launch: signed up on Firebase (his e-mail checked), his username, name and a free avatar
+   * picked (his account is made then), his ID token exchanged. His welcome gift is still to come.
+   */
   async function newcomer(account: Partial<FirebaseAccount> = {}) {
     const n = ++seq;
     const id = account.uid ?? `Fb${String(n).padStart(26, "0")}`; // 28 characters, like Firebase's uids
     const email = account.email ?? `p${n}@test.local`;
-    const idToken = firebaseToken({ ...account, uid: id, email });
-    const { token, record } = await accounts.exchangeToken(idToken);
+    const idToken = firebaseToken({ emailVerified: true, ...account, uid: id, email });
+    const username = `player_${n}`;
+    await accounts.updateProfile(idToken, { username, name: `Player_${n}`, avatar: 103 });
+    const { token, record } = (await accounts.exchangeToken(idToken)) as { token: string; record: RecordModel };
     const pb = new PocketBase(URL_);
     pb.autoCancellation(false);
     pb.authStore.save(token, record);
-    return { n, id, idToken, token, pb, email };
+    return { n, id, idToken, token, pb, email, username };
   }
 
   /** A player as most are: a username, a name, a free avatar (and his welcome gift already had). */
   async function player(): Promise<Player> {
     const { n, ...p } = await newcomer();
-    const username = `player_${n}`;
-    await accounts.updateProfile(p.idToken, { username, name: `Player_${n}`, avatar: 103 });
     await admin.collection("users").update(p.id, { welcomeGift: true });
-    return { ...p, username };
+    return p;
   }
 
   async function befriend(a: Player, b: Player) {
@@ -121,18 +124,29 @@ describe("PocketBase", function () {
   });
 
   describe("accounts", () => {
-    it("exchanges a Firebase ID token for a PocketBase token of the same player, his account made at the first", async () => {
+    it("exchanges a Firebase ID token for a PocketBase token of the same player, his account made with his name", async () => {
       const uid = "ExchangeFirebaseUid000000001";
       const google = { uid, email: "Ex@Test.local", provider: "google.com", emailVerified: true };
+      const accountsOf = async (id: string) => (await admin.collection("users").getList(1, 1, { filter: `id = "${id}"` })).totalItems;
+      // A new player: no account until he picks his username (an e-mail login: once he has tapped Firebase's link).
+      assert.deepStrictEqual(await accounts.exchangeToken(firebaseToken(google)), { setup: true, verified: true });
+      const mail = { uid: "MailFirebaseUid0000000000001", email: "mail@test.local" };
+      assert.deepStrictEqual(await accounts.exchangeToken(firebaseToken(mail)), { setup: true, verified: false });
+      await assert.rejects(accounts.updateProfile(firebaseToken(mail), { username: "mail_1", name: "Mail" }), /unverified/);
+      await assert.rejects(accounts.updateProfile(firebaseToken(google), { username: "No Spaces", name: "Ex" }), /username/);
+      await assert.rejects(accounts.updateProfile(firebaseToken(google), { username: "ex_1", name: "@" }), /name/);
+      await assert.rejects(accounts.updateProfile(firebaseToken(google), { avatar: 103 }), /username/); // (no username, no account)
+      assert.deepStrictEqual([await accountsOf(uid), await accountsOf(mail.uid)], [0, 0]);
+      await accounts.updateProfile(firebaseToken(google), { username: "Ex_1", name: "Ex_One" });
       const before = Date.now();
-      const first = await accounts.exchangeToken(firebaseToken(google));
+      const first = (await accounts.exchangeToken(firebaseToken(google))) as { token: string; expires: number; record: RecordModel };
       assert.strictEqual(first.record.id, uid);
       // Good for an hour, like his Firebase ID token: the app exchanges again then, and at each launch.
       assert.ok(Math.abs(first.expires - (before + 3600_000)) < 5_000, `${first.expires - before} ms`);
       const me = await user(uid);
       assert.deepStrictEqual(
         [me.email, me.verified, me.emailVisibility, me.username, me.name, me.coins, me.welcomeGift],
-        ["ex@test.local", true, false, "", "", 0, false],
+        ["ex@test.local", true, false, "ex_1", "Ex_One", 0, false],
       );
       const info = await admin.collection("private_info").getOne(uid);
       assert.deepStrictEqual([info.email, info.provider, info.createdAt], ["ex@test.local", "google.com", me.createdAt]);
@@ -143,21 +157,24 @@ describe("PocketBase", function () {
       assert.strictEqual((await pb.collection("users").authRefresh()).token, first.token);
       // His next launch: the same account, a new token. His e-mail follows Firebase's.
       await new Promise((r) => setTimeout(r, 1100)); // (tokens count whole seconds)
-      const next = await accounts.exchangeToken(firebaseToken({ ...google, email: "new@test.local" }));
+      const next = (await accounts.exchangeToken(firebaseToken({ ...google, email: "new@test.local" }))) as typeof first;
       assert.deepStrictEqual([next.record.id, next.expires > first.expires], [uid, true]);
       assert.deepStrictEqual([(await user(uid)).email, (await admin.collection("private_info").getOne(uid)).email], ["new@test.local", "new@test.local"]);
-      // Two launches at once: one account.
-      const twin = { uid: "TwinLaunchFirebaseUid0000001", email: "twin@test.local" };
-      const both = await Promise.all([1, 2].map(() => accounts.exchangeToken(firebaseToken(twin))));
-      assert.deepStrictEqual(both.map((x) => x.record.id), [twin.uid, twin.uid]);
+      // Set up twice at once (a slow network): one account. The username another has: refused, no account made.
+      const twin = { uid: "TwinLaunchFirebaseUid0000001", email: "twin@test.local", emailVerified: true };
+      const both = await Promise.all([1, 2].map(() => accounts.updateProfile(firebaseToken(twin), { username: "twin_1", name: "Twin" })));
+      assert.deepStrictEqual([both.map((x) => x.username), await accountsOf(twin.uid)], [["twin_1", "twin_1"], 1]);
+      const copy = { uid: "CopyFirebaseUid0000000000001", email: "copy@test.local", emailVerified: true };
+      await assert.rejects(accounts.updateProfile(firebaseToken(copy), { username: "twin_1", name: "Copy" }), /username taken/);
+      assert.strictEqual(await accountsOf(copy.uid), 0);
       // Refused: no token, or not a Firebase ID token (a PocketBase one neither); a Firebase account without
       // an e-mail; an e-mail another account has (one deleted from Firebase but not from PocketBase).
       for (const bad of ["", "garbage", first.token]) await assert.rejects(accounts.exchangeToken(bad), accounts.AuthError);
       await assert.rejects(accounts.exchangeToken(firebaseToken({ uid: "PhoneFirebaseUid000000000001", email: "" })), accounts.AuthError);
       const taken = (e: any) => e instanceof accounts.ProfileError && e.status === 409;
-      const stranger = { uid: "TakenFirebaseUid000000000001", email: "new@test.local" };
-      await assert.rejects(accounts.exchangeToken(firebaseToken(stranger)), taken);
-      assert.strictEqual((await admin.collection("users").getList(1, 1, { filter: `id = "${stranger.uid}"` })).totalItems, 0);
+      const stranger = { uid: "TakenFirebaseUid000000000001", email: "new@test.local", emailVerified: true };
+      await assert.rejects(accounts.updateProfile(firebaseToken(stranger), { username: "stranger_1", name: "Stranger" }), taken);
+      assert.strictEqual(await accountsOf(stranger.uid), 0);
       await assert.rejects(accounts.exchangeToken(firebaseToken({ ...google, email: "twin@test.local" })), taken);
       assert.strictEqual((await user(uid)).email, "new@test.local");
     });
@@ -199,9 +216,12 @@ describe("PocketBase", function () {
       await admin.collection("users").update(p.id, { vip: true, frame: 2 });
       assert.deepStrictEqual(await accounts.accountFor(p.idToken), { uid: p.id, name: `Player_${p.username.slice(7)}`, avatar: 103, frame: 2, vip: true, vipPro: false, roleCardDay: "", roleCardUsed: 0, roomLook: null, coins: 0, xp: 0 });
       for (const bad of ["", "garbage", p.token]) await assert.rejects(accounts.accountFor(bad), accounts.AuthError); // (his PocketBase token)
-      // No profile: no username picked yet, or no PocketBase account at all (he never opened this version).
-      const fresh = await newcomer();
+      // No profile: no username picked yet (no account then), or an old account made before its username was.
+      const fresh = { idToken: firebaseToken({ uid: "FreshFirebaseUid000000000001", email: "fresh@test.local" }) };
       await assert.rejects(accounts.accountFor(fresh.idToken), /no profile/);
+      const old = await player();
+      await admin.collection("users").update(old.id, { username: "" });
+      await assert.rejects(accounts.accountFor(old.idToken), /no profile/);
       const boss = firebaseToken({ uid: "NeverLaunchedFirebaseUid0001", email: "boss@test.local" });
       await assert.rejects(accounts.accountFor(boss), /no profile/);
       // Admins: the e-mail in their Firebase ID token, PocketBase account or not.
@@ -233,18 +253,15 @@ describe("PocketBase", function () {
       await assert.rejects(accounts.updateProfile(p.idToken, { username: "other_name" }), /username set/);
       await admin.collection("users").update(p.id, { nameChangedAt: new Date(Date.now() - 25 * 3600_000).toISOString() });
       assert.strictEqual((await accounts.updateProfile(p.idToken, { name: "Third" })).name, "Third");
-      // A new player's first username and name (that name isn't a change).
-      const g = await newcomer({ provider: "google.com", emailVerified: true });
-      await assert.rejects(accounts.updateProfile(g.idToken, { username: p.username }), /taken/);
-      await assert.rejects(accounts.updateProfile(g.idToken, { username: "No Spaces" }), /username/);
-      const set = await accounts.updateProfile(g.idToken, { username: "Gamer_1", name: "Gamer", avatar: 104 });
-      assert.deepStrictEqual([set.username, set.name, set.nameChangedAt], ["gamer_1", "Gamer", ""]);
-      await accounts.updateProfile(g.idToken, { name: "Gamer_Two" }); // his first change
-      await assert.rejects(accounts.updateProfile(g.idToken, { name: "Gamer_Three" }), /too soon/);
-      // Set up before any exchange: his account is made then.
-      const early = firebaseToken({ uid: "ProfileFirstFirebaseUid00001", email: "early@test.local" });
-      assert.strictEqual((await accounts.updateProfile(early, { username: "early_1", name: "Early" })).username, "early_1");
-      assert.strictEqual((await accounts.accountFor(early)).name, "Early");
+      // A new player's first username and name (that name isn't a change): his account is made with them.
+      const g = firebaseToken({ uid: "GamerFirebaseUid000000000001", email: "gamer@test.local", provider: "google.com", emailVerified: true });
+      await assert.rejects(accounts.updateProfile(g, { username: p.username }), /taken/);
+      await assert.rejects(accounts.updateProfile(g, { username: "No Spaces" }), /username/);
+      const set = await accounts.updateProfile(g, { username: "Gamer_1", name: "Gamer", avatar: 104 });
+      assert.deepStrictEqual([set.username, set.name, set.nameChangedAt, set.avatar], ["gamer_1", "Gamer", "", 104]);
+      await accounts.updateProfile(g, { name: "Gamer_Two" }); // his first change
+      await assert.rejects(accounts.updateProfile(g, { name: "Gamer_Three" }), /too soon/);
+      assert.strictEqual((await accounts.accountFor(g)).name, "Gamer_Two");
       for (const bad of ["garbage", p.token]) await assert.rejects(accounts.updateProfile(bad, { name: "Nope" }), accounts.AuthError);
     });
 
@@ -842,6 +859,8 @@ describe("PocketBase", function () {
       await accounts.adminBan(p.id, -1, "cheating", true);
       const q = await player();
       await assert.rejects(exchange(q, "phone-aaa111"), banned(true, (e) => e.until.startsWith("9999") && e.reason === "cheating"));
+      const newOnIt = firebaseToken({ uid: "NewOnBannedPhoneFirebaseUid1", email: "nb@test.local", emailVerified: true });
+      await assert.rejects(accounts.exchangeToken(newOnIt, "1.0.12", "phone-aaa111"), banned(true)); // (no account yet)
       await exchange(q, "phone-bbb222");
       const bans = await accounts.adminBans();
       assert.deepStrictEqual([bans.accounts.some((b) => b.uid === p.id), bans.phones.some((b) => b.uid === p.id)], [true, true]);
@@ -897,6 +916,24 @@ describe("PocketBase", function () {
       assert.deepStrictEqual(mine.map((m) => [m.fromSupport, m.text]), [[false, "My coins are gone"], [true, "Sent them back"]]);
       assert.strictEqual((await other.pb.collection("support_messages").getFullList()).length, 0);
       assert.deepStrictEqual((await accounts.supportThread(p.id)).messages.map((m) => m.text), ["My coins are gone", "Sent them back"]);
+      // A picture with his message: his to download with a file token, and the admin app's; nobody else's.
+      const form = new FormData();
+      form.append("user", p.id);
+      form.append("text", "📷");
+      form.append("media", new Blob([Buffer.from("GIF89a")], { type: "image/gif" }), "shot.gif");
+      const shot = await p.pb.collection("support_messages").create(form);
+      const media = (await accounts.supportThread(p.id)).messages.at(-1)!;
+      assert.deepStrictEqual([media.id, media.text, media.media], [shot.id, "📷", shot.media]);
+      const where = await accounts.supportMedia(shot.id);
+      assert.strictEqual((await fetch(`${URL_}${where.path}?token=${where.token}`)).status, 200);
+      assert.strictEqual((await fetch(p.pb.files.getURL(shot, shot.media, { token: await p.pb.files.getToken() }))).status, 200);
+      assert.ok((await fetch(`${URL_}${where.path}`)).status >= 400); // (no token: protected)
+      await assert.rejects(accounts.supportMedia(mine[0].id), /no media/);
+      const big = new FormData();
+      big.append("user", p.id);
+      big.append("text", "🎬");
+      big.append("media", new Blob([Buffer.alloc(21 * 1024 * 1024)], { type: "video/mp4" }), "long.mp4");
+      await refused(p.pb.collection("support_messages").create(big)); // (over 20 MB)
     });
   });
 
@@ -1117,8 +1154,9 @@ describe("PocketBase", function () {
       for (const body of [{}, { idToken: "" }, { idToken: 42 }]) assert.strictEqual((await post("/api/auth/exchange", body)).status, 400);
       assert.strictEqual((await post("/api/auth/exchange", { idToken: "garbage" })).status, 401);
       assert.strictEqual((await post("/api/auth/exchange", { idToken: token })).status, 401); // a PocketBase token
-      const sameEmail = firebaseToken({ uid: "SameEmailFirebaseUid00000001", email: p.email });
-      assert.strictEqual((await post("/api/auth/exchange", { idToken: sameEmail })).status, 409);
+      const sameEmail = firebaseToken({ uid: "SameEmailFirebaseUid00000001", email: p.email, emailVerified: true });
+      assert.deepStrictEqual(await (await post("/api/auth/exchange", { idToken: sameEmail })).json(), { setup: true, verified: true });
+      assert.strictEqual((await post("/api/profile", { username: "same_1", name: "Same" }, sameEmail)).status, 409); // (his e-mail: another account's)
       const ok = await post("/api/profile", { avatar: 104 }, p.idToken);
       assert.strictEqual(ok.status, 200);
       assert.strictEqual((await ok.json()).avatar, 104);
@@ -1361,9 +1399,9 @@ describe("PocketBase", function () {
       assert.strictEqual((await admin.collection("messages").getFullList({ filter: `from = "${A}" || from = "${G}"` })).length, 3);
     });
 
-    it("lands a copied player on his copied account at his first launch, and makes one for a later sign-up", async () => {
+    it("lands a copied player on his copied account at his first launch; a later sign-up sets up first", async () => {
       const anna = { uid: A, email: "anna@example.com" }; // (Firebase still has her, logins and all)
-      const { token, record } = await accounts.exchangeToken(firebaseToken(anna));
+      const { token, record } = (await accounts.exchangeToken(firebaseToken(anna))) as { token: string; record: RecordModel };
       assert.deepStrictEqual([record.id, record.username, record.coins], [A, "anna", 3400]);
       const pb = new PocketBase(URL_);
       pb.authStore.save(token, record);
@@ -1375,9 +1413,9 @@ describe("PocketBase", function () {
       // Firebase verified her e-mail since the copy: her account follows.
       await accounts.exchangeToken(firebaseToken({ ...anna, emailVerified: true }));
       assert.strictEqual((await user(A)).verified, true);
-      // Signed up on Firebase after the copy: his account is made at his first launch.
+      // Signed up on Firebase after the copy: a new player, set up first (his e-mail, then his username).
       const late = await accounts.exchangeToken(firebaseToken({ uid: "LateFirebaseUid0000000000005", email: "late@example.com" }));
-      assert.deepStrictEqual([late.record.id, late.record.username], ["LateFirebaseUid0000000000005", ""]);
+      assert.deepStrictEqual(late, { setup: true, verified: false });
     });
   });
 });

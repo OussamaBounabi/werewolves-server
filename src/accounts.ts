@@ -210,17 +210,23 @@ export async function adminRole(idToken: string): Promise<Staff | null> {
 /** Whether this Firebase ID token belongs to the owner or a moderator (the admin app may watch any room). */
 export const isAdmin = async (idToken: string) => (await adminRole(idToken)) !== null;
 
+/** An e-mail login whose e-mail isn't checked yet (he hasn't tapped Firebase's link). Google's always is. */
+const unverified = (user: FirebaseUser) => user.provider === "password" && !user.emailVerified;
+
 /**
- * The PocketBase account of a Firebase user: found by his uid, or made for him (his first launch of the
- * app on PocketBase), with his private info. His e-mail follows Firebase's. Nobody logs in to PocketBase
- * with a password, but it wants one: a random one nobody knows.
+ * The PocketBase account of a Firebase user: found by his uid, or made for him with his private info once he has
+ * picked his username and name ([first]: checks them, and throws if they don't do) and, on an e-mail login, checked
+ * his e-mail. Null: none yet. His e-mail follows Firebase's. Nobody logs in to PocketBase with a password, but it wants
+ * one: a random one nobody knows.
  */
-async function ensurePlayer(user: FirebaseUser): Promise<RecordModel> {
+async function ensurePlayer(user: FirebaseUser, first?: () => { username: string; name: string }): Promise<RecordModel | null> {
   if (!user.email) throw new AuthError("no e-mail on this Firebase account");
   return forPlayer(user.uid, async () => {
     const client = await db();
     const found = await maybe(client.collection("users").getOne(user.uid));
     if (found && found.email === user.email && found.verified === user.emailVerified) return found;
+    if (!found && !first) return null;
+    if (!found && unverified(user)) throw new ProfileError("unverified", 409);
     const batch = client.createBatch();
     if (found) {
       batch.collection("users").update(user.uid, { email: user.email, verified: user.emailVerified });
@@ -231,16 +237,17 @@ async function ensurePlayer(user: FirebaseUser): Promise<RecordModel> {
       const provider = ["password", "google.com"].includes(user.provider) ? user.provider : "";
       batch.collection("users").create({
         id: user.uid, email: user.email, emailVisibility: false, verified: user.emailVerified, password, passwordConfirm: password, createdAt,
+        ...first!(),
       });
       batch.collection("private_info").create({ id: user.uid, user: user.uid, email: user.email, provider, createdAt });
     }
     try {
       await batch.send();
     } catch (e) {
+      const answer = JSON.stringify((e as ClientResponseError).response ?? "");
       // Another account has this e-mail: one deleted from Firebase but not from here (README: the exchange).
-      if (/"email":\{"code":"validation_not_unique"/.test(JSON.stringify((e as ClientResponseError).response ?? ""))) {
-        throw new ProfileError("e-mail taken by another account", 409);
-      }
+      if (/"email":\{"code":"validation_not_unique"/.test(answer)) throw new ProfileError("e-mail taken by another account", 409);
+      if (/"username":\{"code":"validation_not_unique"/.test(answer)) throw new ProfileError("username taken", 409);
       throw e;
     }
     return client.collection("users").getOne(user.uid);
@@ -251,15 +258,17 @@ async function ensurePlayer(user: FirebaseUser): Promise<RecordModel> {
 export const EXCHANGE_TOKEN_SECONDS = 60 * 60;
 
 /**
- * POST /api/auth/exchange: an app's Firebase ID token for a PocketBase token of the same player (his
- * account is made at his first exchange), good for an hour and not refreshable: the app exchanges again
- * at each launch and when it expires. [expires] in epoch ms.
+ * POST /api/auth/exchange: an app's Firebase ID token for a PocketBase token of the same player, good for an hour
+ * and not refreshable: the app exchanges again at each launch and when it expires. [expires] in epoch ms. A new
+ * player has no account yet: { setup, verified } (verified false: an e-mail login waiting for its link to be tapped);
+ * his app makes it with his username (POST /api/profile).
  */
 export async function exchangeToken(idToken: string, appVersion?: unknown, device?: unknown, lang?: unknown) {
   const user = await signedIn(idToken);
   const account = await ensurePlayer(user);
   const phone = typeof device === "string" && DEVICE.test(device) ? device : undefined;
   await checkBan(account, phone);
+  if (!account) return { setup: true, verified: !unverified(user) };
   const client = await db();
   // The version of the app he opened, kept on his account: the owner sees who is still on an old one. And his
   // phone, for a ban of the phone.
@@ -377,8 +386,8 @@ const FOREVER = "9999-12-31 00:00:00.000Z";
 const DEVICE = /^[0-9A-Za-z_-]{6,64}$/; // Android's id of the phone, for this app
 
 /** Throws if [user] is banned, or the phone the app runs on ([device]) is. */
-async function checkBan(user: RecordModel, device?: string) {
-  if (parseDate(user.bannedUntil) > Date.now()) throw new BanError(String(user.bannedUntil), String(user.banReason ?? ""), false);
+async function checkBan(user: RecordModel | null, device?: string) {
+  if (user && parseDate(user.bannedUntil) > Date.now()) throw new BanError(String(user.bannedUntil), String(user.banReason ?? ""), false);
   if (!device) return;
   const client = await db();
   const ban = await maybe(client.collection("device_bans").getFirstListItem(client.filter("device = {:device}", { device })));
@@ -518,14 +527,28 @@ export async function supportThreads() {
   return [...threads].map(([uid, t]) => ({ ...brief(users.get(uid), uid), ...t }));
 }
 
-/** One player's conversation with support, oldest first. */
+/** One player's conversation with support, oldest first ([media]: a picture's or a video's file name, or ""). */
 export async function supportThread(uid: string) {
   const client = await db();
   const [user, messages] = await Promise.all([
     maybe(client.collection("users").getOne(uid, { fields: BRIEF })),
-    client.collection("support_messages").getFullList({ filter: client.filter("user = {:uid}", { uid }), sort: "created", fields: "fromSupport,text,created" }),
+    client.collection("support_messages").getFullList({ filter: client.filter("user = {:uid}", { uid }), sort: "created", fields: "id,fromSupport,text,media,created" }),
   ]);
-  return { ...brief(user, uid), messages: messages.map((m) => ({ fromSupport: m.fromSupport === true, text: m.text, created: m.created })) };
+  return {
+    ...brief(user, uid),
+    messages: messages.map((m) => ({ id: m.id, fromSupport: m.fromSupport === true, text: m.text, media: String(m.media ?? ""), created: m.created })),
+  };
+}
+
+/**
+ * Where the admin app downloads a player's picture or video for support: its path on the database and a file token
+ * (a superuser's, good for a few minutes).
+ */
+export async function supportMedia(id: string) {
+  const client = await db();
+  const m = await client.collection("support_messages").getOne(id, { fields: "id,collectionId,media" });
+  if (!m.media) throw new Error("no media");
+  return { path: `/api/files/${m.collectionId}/${m.id}/${m.media}`, token: await client.files.getToken() };
 }
 
 /** Support's answer, into the player's conversation (his app shows it). */
@@ -1416,16 +1439,25 @@ const NAME = /^[A-Za-z0-9_]{3,16}$/; // a display name: the username's character
 const NAME_EVERY_MS = 24 * 60 * 60_000;
 export const parseDate = (d: unknown) => (d ? Date.parse(String(d).replace(" ", "T")) : NaN);
 
+/** A new player's first username and name (none: his username), checked before his account is made with them. */
+function firstProfile(changes: ProfileChanges) {
+  const username = typeof changes.username === "string" ? changes.username.trim().toLowerCase() : "";
+  const name = typeof changes.name === "string" ? changes.name.trim() : username;
+  if (!USERNAME.test(username) || hasBadWord(username, settings().badWords)) throw new ProfileError("username", 400);
+  if (!NAME.test(name) || hasBadWord(name, settings().badWords)) throw new ProfileError("name", 400);
+  return { username, name };
+}
+
 /**
  * What a player changes on his own profile (POST /api/profile): his name (3 to 16 letters, digits or _,
  * once per 24 hours), the avatar and frame he wears (free or owned ones), and his username once, if he has
- * none yet (a new player setting up his account; that first name doesn't count as a change). His account
- * is made first if he has none yet.
+ * none yet (a new player setting up his account; that first name doesn't count as a change). A new player's
+ * account is made here, with his username and name (an e-mail login's once its e-mail is checked).
  */
 export async function updateProfile(idToken: string, changes: ProfileChanges) {
   if (!pb) throw new ProfileError("accounts disabled", 409);
   const firebaseUser = await signedIn(idToken);
-  await ensurePlayer(firebaseUser);
+  await ensurePlayer(firebaseUser, () => firstProfile(changes));
   const { uid } = firebaseUser;
   return forPlayer(uid, async () => {
     const client = await db();
