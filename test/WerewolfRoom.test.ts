@@ -22,7 +22,7 @@ describe("WerewolfRoom", () => {
 
   before(async () => {
     // As boot() does, but not on its 2568: a playground tunnel there would take these connections.
-    await appConfig.listen(2571);
+    await appConfig.listen(Number(process.env.WW_TEST_PORT ?? 2571)); // (another port: two test runs at once)
     colyseus = new ColyseusTestServer(appConfig);
   });
   after(async () => colyseus.shutdown());
@@ -2129,7 +2129,7 @@ describe("WerewolfRoom", () => {
 
   // ---- the rules spec's wolf team (batch 1, 2026-11) ----
 
-  it("the wolf cub's revenge and the summoner's call add hunts; the witch saves either victim; the sleepers wake", async function () {
+  it("the wolf cub's revenge adds a hunt; the witch saves either victim; the sleepers wake", async function () {
     this.timeout(60_000);
     const mix = {
       ...NO_SPECIALS, wolves: 1, villagers: 3, witch: true, wolfcub: true, dreamwolf: true, fangface: true, wolfsummoner: true, mayor: false, maxPlayers: 9,
@@ -2141,13 +2141,11 @@ describe("WerewolfRoom", () => {
     // The dream wolf and Fang Face sleep apart: the pack knows them, they don't hunt or talk with it.
     assert.deepStrictEqual([r.asleep(dream.sessionId), r.asleep(fang.sessionId), r.nightPack(dream.sessionId)], [true, true, false]);
     assert.ok(r.packIds().includes(dream.sessionId));
-    // The cub dies: the dream wolf wakes; the next hunt takes two, and the summoner calls a third.
+    // The cub dies: the dream wolf wakes; the next hunt takes two.
     r.kill(cub.sessionId, "vote");
     assert.deepStrictEqual([r.cubRevenge, r.asleep(dream.sessionId)], [true, false]);
     r.startWolvesStep();
     assert.strictEqual(room.state.nightStep, "wolves");
-    summoner.send("summon");
-    await waitFor(() => r.summoned);
     wolf.send("wolf_target", { targetId: v1.sessionId });
     await waitFor(() => r.wolfVotes.size === 1);
     const more = wolf.waitForMessage("hunt_more");
@@ -2157,19 +2155,16 @@ describe("WerewolfRoom", () => {
     dream.send("wolf_target", { targetId: v2.sessionId });
     await waitFor(() => r.moreHunts[0].votes.size === 1);
     assert.strictEqual(r.moreHunts[0].votes.get(dream.sessionId), v2.sessionId);
-    r.endWolvesStep();
-    wolf.send("wolf_target", { targetId: v3.sessionId });
-    await waitFor(() => r.moreHunts[1]?.votes.size === 1);
     const turn = witch.waitForMessage("witch_turn", STEP);
     r.endWolvesStep();
-    assert.deepStrictEqual(((await turn) as any).victims, [v1.sessionId, v2.sessionId, v3.sessionId]);
-    // She saves the third; the first two die.
+    assert.deepStrictEqual(((await turn) as any).victims, [v1.sessionId, v2.sessionId]);
+    // She saves the second; the first dies.
     const night = v1.waitForMessage("night_result");
-    witch.send("witch_revive", { targetId: v3.sessionId });
+    witch.send("witch_revive", { targetId: v2.sessionId });
     witch.send("witch_pass");
-    assert.deepStrictEqual([...((await night) as any).deaths].sort(), [v1.sessionId, v2.sessionId].sort());
-    assert.ok(r.isAlive(v3.sessionId));
-    assert.deepStrictEqual([r.cubRevenge, r.spent.has(summoner.sessionId)], [false, true]);
+    assert.deepStrictEqual(((await night) as any).deaths, [v1.sessionId]);
+    assert.ok(r.isAlive(v2.sessionId) && r.isAlive(v3.sessionId));
+    assert.strictEqual(r.cubRevenge, false);
     // The last wolf alive: Fang Face wakes and hunts alone.
     for (const w of [wolf, dream, summoner]) r.kill(w.sessionId, "vote");
     assert.deepStrictEqual([r.asleep(fang.sessionId), r.nightPack(fang.sessionId)], [false, true]);
@@ -2301,5 +2296,120 @@ describe("WerewolfRoom", () => {
     assert.deepStrictEqual([res.excluded, res.ballots], [b.sessionId, {}]);
     assert.ok(r.publicLog.some((e: any) => e.type === "shadow_vote"));
     assert.ok(r.spent.has(shadow.sessionId));
+  });
+
+  // ---- the wolf summoner plays a dead wolf's power (his change, 2026-11-09) ----
+
+  it("the summoner plays a dead father wolf's infection, once a game; a dead wolf with nothing left isn't his to call", async function () {
+    this.timeout(60_000);
+    const mix = {
+      ...NO_SPECIALS, maxPlayers: 9, wolves: 2, villagers: 3, wolfsummoner: true, fatherwolf: true, blackwolf: true, shadowwolf: true,
+      mayor: false,
+    };
+    const { room, clients, roles, byRole } = await startGame(mix, 9);
+    const r = room as any;
+    const [summoner, father, black, shadow] = ["wolfsummoner", "fatherwolf", "blackwolf", "shadowwolf"].map(byRole);
+    const [wolf, plain] = clients.filter((_: any, i: number) => roles[i] === "werewolf");
+    const [v1] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    for (const w of [plain, father, black, shadow]) r.kill(w.sessionId, "vote");
+    // A plain werewolf has no power to lend.
+    const callable = [father, black, shadow].map((c) => c.sessionId).sort();
+    assert.deepStrictEqual(r.summonable().sort(), callable);
+    room.state.dayNumber = 2;
+    const turn = summoner.waitForMessage("summon_turn");
+    r.startSummonerStep();
+    assert.strictEqual(room.state.nightStep, "wolf_summoner");
+    assert.deepStrictEqual(Object.keys(((await turn) as any).wolves).sort(), callable);
+    summoner.send("summon", { targetId: father.sessionId });
+    await waitFor(() => room.state.nightStep === "wolves");
+    assert.strictEqual(r.powerOf(summoner.sessionId), "fatherwolf");
+    // He hunts with the pack, then infects its victim as the father would have.
+    wolf.send("wolf_target", { targetId: v1.sessionId });
+    summoner.send("wolf_target", { targetId: v1.sessionId });
+    await waitFor(() => r.wolfVotes.size === 2);
+    const fatherTurn = summoner.waitForMessage("father_turn");
+    r.endWolvesStep();
+    assert.deepStrictEqual(await fatherTurn, { victim: v1.sessionId });
+    assert.strictEqual(r.moreHunts.length, 0); // (no extra hunt any more)
+    const night = v1.waitForMessage("night_result");
+    summoner.send("infect", { infect: true });
+    assert.deepStrictEqual(((await night) as any).deaths, []);
+    assert.ok(r.infected.has(v1.sessionId));
+    // At dawn he's a wolf summoner again, his summoning spent.
+    assert.deepStrictEqual([r.powerOf(summoner.sessionId), r.spent.has(summoner.sessionId)], ["wolfsummoner", true]);
+  });
+
+  it("a summoned green wolf steals for the dead green wolf, and the summoner plays the stolen witch that night", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, witch: true, wolfsummoner: true, greenwolf: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [wolf, summoner, green, witch] = ["werewolf", "wolfsummoner", "greenwolf", "witch"].map(byRole);
+    const [v1, v2] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    r.kill(green.sessionId, "vote");
+    room.state.dayNumber = 2;
+    r.startSummonerStep();
+    const greenTurn = summoner.waitForMessage("green_turn");
+    summoner.send("summon", { targetId: green.sessionId });
+    await greenTurn;
+    assert.strictEqual(room.state.nightStep, "green_wolf");
+    summoner.send("green_guess", { targetId: witch.sessionId, role: "witch" });
+    await waitFor(() => r.powerOf(summoner.sessionId) === "witch");
+    // The power is the dead green wolf's; the witch is a simple villager now.
+    assert.deepStrictEqual([r.powerOf(green.sessionId), r.roles.get(witch.sessionId)], ["witch", "villager"]);
+    await waitFor(() => room.state.nightStep === "wolves");
+    wolf.send("wolf_target", { targetId: v1.sessionId });
+    await waitFor(() => r.wolfVotes.size === 1);
+    const witchTurn = summoner.waitForMessage("witch_turn", STEP);
+    r.endWolvesStep();
+    assert.strictEqual(((await witchTurn) as any).victim, v1.sessionId);
+    const night = v1.waitForMessage("night_result");
+    summoner.send("witch_poison", { targetId: v2.sessionId });
+    summoner.send("witch_pass");
+    assert.deepStrictEqual([...((await night) as any).deaths].sort(), [v1.sessionId, v2.sessionId].sort());
+    assert.deepStrictEqual([r.powerOf(summoner.sessionId), r.spent.has(summoner.sessionId)], ["wolfsummoner", true]);
+  });
+
+  it("a stolen hunter's power can't play tonight: the hunter loses it, the dead green wolf keeps it", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, hunter: true, wolfsummoner: true, greenwolf: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [summoner, green, hunter] = ["wolfsummoner", "greenwolf", "hunter"].map(byRole);
+    r.kill(green.sessionId, "vote");
+    room.state.dayNumber = 2;
+    r.startSummonerStep();
+    const greenTurn = summoner.waitForMessage("green_turn");
+    summoner.send("summon", { targetId: green.sessionId });
+    await greenTurn;
+    const result = summoner.waitForMessage("green_result");
+    summoner.send("green_guess", { targetId: hunter.sessionId, role: "hunter" });
+    assert.strictEqual(((await result) as any).right, true);
+    assert.deepStrictEqual(
+      [r.powerOf(green.sessionId), r.roles.get(hunter.sessionId), r.powerOf(summoner.sessionId), r.spent.has(summoner.sessionId)],
+      ["hunter", "villager", "wolfsummoner", true],
+    );
+  });
+
+  it("a summoned shadow wolf: the next day's vote is secret", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, wolfsummoner: true, shadowwolf: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [summoner, shadow] = ["wolfsummoner", "shadowwolf"].map(byRole);
+    const [a, b] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    r.kill(shadow.sessionId, "vote");
+    room.state.dayNumber = 2;
+    r.startSummonerStep();
+    summoner.send("summon", { targetId: shadow.sessionId });
+    await waitFor(() => r.shadowSummoned);
+    assert.ok(r.spent.has(summoner.sessionId));
+    const mine = a.waitForMessage("secret_vote");
+    r.openDebate();
+    await mine;
+    a.send("day_vote", { targetId: b.sessionId });
+    await waitFor(() => r.hiddenVotes?.size === 1);
+    assert.strictEqual(room.state.players.get(a.sessionId)?.votedFor, "");
+    assert.ok(r.publicLog.some((e: any) => e.type === "shadow_vote"));
   });
 });
