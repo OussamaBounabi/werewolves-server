@@ -336,7 +336,7 @@ describe("WerewolfRoom", () => {
     await waitFor(() => room.state.phaseEndsAt - Date.now() <= 5_000);
     assert.strictEqual(room.state.nightStep, "wolves");
     // Nobody kills on the first night: she can only revive.
-    assert.deepStrictEqual(await witchTurn, { victim: villager.sessionId, canPoison: false });
+    assert.deepStrictEqual(await witchTurn, { victim: villager.sessionId, victims: [villager.sessionId], canPoison: false });
     witch.send("witch_poison", { targetId: seer.sessionId });
     assert.strictEqual(room.state.nightStep, "witch_seer");
     assert.strictEqual(room.state.nightRoles, "witch,seer");
@@ -394,7 +394,7 @@ describe("WerewolfRoom", () => {
       const witchTurn = witch.waitForMessage("witch_turn", STEP);
       await new Promise((r) => setTimeout(r, 50));
       wolf.send("wolf_target", { targetId: villager.sessionId });
-      assert.deepStrictEqual(await witchTurn, { victim: null, canPoison: false });
+      assert.deepStrictEqual(await witchTurn, { victim: null, victims: [], canPoison: false });
 
       byRole("seer").send("seer_peek", { targetId: wolf.sessionId });
       witch.send("witch_pass");
@@ -2125,5 +2125,181 @@ describe("WerewolfRoom", () => {
     await watcher.leave(false);
     await new Promise((done) => setTimeout(done, 300));
     assert.ok((room as any).spectators.has(watcher.sessionId));
+  });
+
+  // ---- the rules spec's wolf team (batch 1, 2026-11) ----
+
+  it("the wolf cub's revenge and the summoner's call add hunts; the witch saves either victim; the sleepers wake", async function () {
+    this.timeout(60_000);
+    const mix = {
+      ...NO_SPECIALS, wolves: 1, villagers: 3, witch: true, wolfcub: true, dreamwolf: true, fangface: true, wolfsummoner: true, mayor: false, maxPlayers: 9,
+    };
+    const { room, clients, roles, byRole } = await startGame(mix, 9);
+    const r = room as any;
+    const [wolf, cub, dream, fang, summoner, witch] = ["werewolf", "wolfcub", "dreamwolf", "fangface", "wolfsummoner", "witch"].map(byRole);
+    const [v1, v2, v3] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    // The dream wolf and Fang Face sleep apart: the pack knows them, they don't hunt or talk with it.
+    assert.deepStrictEqual([r.asleep(dream.sessionId), r.asleep(fang.sessionId), r.nightPack(dream.sessionId)], [true, true, false]);
+    assert.ok(r.packIds().includes(dream.sessionId));
+    // The cub dies: the dream wolf wakes; the next hunt takes two, and the summoner calls a third.
+    r.kill(cub.sessionId, "vote");
+    assert.deepStrictEqual([r.cubRevenge, r.asleep(dream.sessionId)], [true, false]);
+    r.startWolvesStep();
+    assert.strictEqual(room.state.nightStep, "wolves");
+    summoner.send("summon");
+    await waitFor(() => r.summoned);
+    wolf.send("wolf_target", { targetId: v1.sessionId });
+    await waitFor(() => r.wolfVotes.size === 1);
+    const more = wolf.waitForMessage("hunt_more");
+    r.endWolvesStep();
+    assert.deepStrictEqual([room.state.nightStep, ((await more) as any).taken], ["wolves_more", [v1.sessionId]]);
+    dream.send("wolf_target", { targetId: v1.sessionId }); // the pack's already: refused
+    dream.send("wolf_target", { targetId: v2.sessionId });
+    await waitFor(() => r.moreHunts[0].votes.size === 1);
+    assert.strictEqual(r.moreHunts[0].votes.get(dream.sessionId), v2.sessionId);
+    r.endWolvesStep();
+    wolf.send("wolf_target", { targetId: v3.sessionId });
+    await waitFor(() => r.moreHunts[1]?.votes.size === 1);
+    const turn = witch.waitForMessage("witch_turn", STEP);
+    r.endWolvesStep();
+    assert.deepStrictEqual(((await turn) as any).victims, [v1.sessionId, v2.sessionId, v3.sessionId]);
+    // She saves the third; the first two die.
+    const night = v1.waitForMessage("night_result");
+    witch.send("witch_revive", { targetId: v3.sessionId });
+    witch.send("witch_pass");
+    assert.deepStrictEqual([...((await night) as any).deaths].sort(), [v1.sessionId, v2.sessionId].sort());
+    assert.ok(r.isAlive(v3.sessionId));
+    assert.deepStrictEqual([r.cubRevenge, r.spent.has(summoner.sessionId)], [false, true]);
+    // The last wolf alive: Fang Face wakes and hunts alone.
+    for (const w of [wolf, dream, summoner]) r.kill(w.sessionId, "vote");
+    assert.deepStrictEqual([r.asleep(fang.sessionId), r.nightPack(fang.sessionId)], [false, true]);
+  });
+
+  it("a fruit brute alone can't hunt; the minion knows the wolves, wins only with them; the sorceress finds the seer", async function () {
+    this.timeout(60_000);
+    const mix = {
+      ...NO_SPECIALS, wolves: 0, villagers: 2, seer: true, fruitbrute: true, fangface: true, minion: true, sorceress: true, mayor: false,
+    };
+    const { room, byRole } = await startGame(mix, 7);
+    const r = room as any;
+    const [brute, fang, minion, sorc, seer] = ["fruitbrute", "fangface", "minion", "sorceress", "seer"].map(byRole);
+    assert.deepStrictEqual([...r.minionSaw].sort(), [brute.sessionId, fang.sessionId].sort());
+    const told = r.privateLogs.get(minion.sessionId).find((e: any) => e.type === "your_role");
+    assert.strictEqual(told.wolves.length, 2);
+    assert.deepStrictEqual([r.teamOf(minion.sessionId), r.isPack(minion.sessionId), r.teamOf(sorc.sessionId)], ["wolves", false, "wolves"]);
+    // The sorceress asks of a player: is this the seer?
+    r.startWitchSeerStep();
+    assert.ok(r.awake.has(sorc.sessionId));
+    const found = sorc.waitForMessage("sorceress_result");
+    sorc.send("sorceress_peek", { targetId: seer.sessionId });
+    assert.deepStrictEqual(await found, { targetId: seer.sessionId, seer: true });
+    // Fang Face sleeps while the fruit brute lives; the fruit brute alone among the wolves can't kill.
+    assert.ok(r.asleep(fang.sessionId));
+    r.kill(fang.sessionId, "vote");
+    r.startWolvesStep();
+    assert.notStrictEqual(room.state.nightStep, "wolves");
+    // The seer dead: the sorceress's power is spent.
+    const card = sorc.waitForMessage("role_assigned");
+    r.kill(seer.sessionId, "vote");
+    assert.strictEqual(((await card) as any).spent, true);
+    assert.ok(!r.witchSeerActors().others.includes(sorc.sessionId));
+    // The last wolf dies: the minion and the sorceress don't keep the game going, the village wins.
+    r.kill(brute.sessionId, "vote");
+    assert.ok(r.endGameIfOver());
+    assert.strictEqual(room.state.winner, "villagers");
+  });
+
+  it("the cursed bitten joins the pack; the shaman's spell and the trickster's disguise fool the seer; the junior's link; the sasquatch", async function () {
+    this.timeout(90_000);
+    const mix = {
+      ...NO_SPECIALS, maxPlayers: 10, wolves: 1, villagers: 2, seer: true, witch: true, cursed: true, sasquatch: true, wolfshaman: true,
+      juniorwerewolf: true, wolftrickster: true, mayor: false,
+    };
+    const { room, clients, roles, byRole } = await startGame(mix, 10);
+    const r = room as any;
+    const [wolf, shaman, junior, trickster, cursed, sasquatch, seer, witch] = [
+      "werewolf", "wolfshaman", "juniorwerewolf", "wolftrickster", "cursed", "sasquatch", "seer", "witch",
+    ].map(byRole);
+    const [v1, v2] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    // Night 1: the pack bites the cursed; the shaman enchants v1, the junior links v2, the trickster takes the look.
+    r.startWolvesStep();
+    wolf.send("wolf_target", { targetId: cursed.sessionId });
+    await waitFor(() => r.wolfVotes.size === 1);
+    const turns = [shaman, junior, trickster].map((c, i) => c.waitForMessage(["shaman_turn", "junior_turn", "trickster_turn"][i]));
+    r.endWolvesStep();
+    const [, , trick] = (await Promise.all(turns)) as any[];
+    assert.deepStrictEqual([room.state.nightStep, trick.victim], ["wolf_powers", cursed.sessionId]);
+    const turned = cursed.waitForMessage("turned_wolf");
+    const witchTurn = witch.waitForMessage("witch_turn", STEP);
+    shaman.send("enchant", { targetId: v1.sessionId });
+    junior.send("link", { targetId: v2.sessionId });
+    trickster.send("disguise", { take: true });
+    // He doesn't die: he's a wolf now, and the witch has no victim to save.
+    assert.deepStrictEqual(await turned, { how: "cursed" });
+    assert.deepStrictEqual(((await witchTurn) as any).victims, []);
+    assert.deepStrictEqual([r.teamOf(cursed.sessionId), r.seenAs(cursed.sessionId)], ["wolves", "werewolf"]);
+    const peek = seer.waitForMessage("seer_result");
+    seer.send("seer_peek", { targetId: v1.sessionId }); // under the shaman's spell: one of the game's wolf cards
+    const spell = (await peek) as any;
+    assert.ok(["werewolf", "wolfshaman", "juniorwerewolf", "wolftrickster"].includes(spell.role), spell.role);
+    assert.ok(spell.isWerewolf);
+    const night = v1.waitForMessage("night_result");
+    witch.send("witch_pass");
+    assert.deepStrictEqual(((await night) as any).deaths, []);
+    assert.ok(!r.spent.has(trickster.sessionId)); // his victim lived: the disguise is still his
+    assert.strictEqual(r.links.get(junior.sessionId), v2.sessionId);
+
+    // The junior werewolf dies: his linked player goes with him.
+    const linked = v2.waitForMessage("death_reveal");
+    r.kill(junior.sessionId, "vote");
+    assert.ok(!r.isAlive(v2.sessionId));
+    assert.strictEqual(((await linked) as any).cause, "vote"); // (the junior's own reveal first)
+    // A day the vote put nobody out: the sasquatch joins the pack, and the second night falls.
+    const sasq = sasquatch.waitForMessage("turned_wolf");
+    r.completeVote(null, [], "vote");
+    assert.deepStrictEqual(await sasq, { how: "sasquatch" });
+    assert.strictEqual(r.teamOf(sasquatch.sessionId), "wolves");
+
+    // Night 2: the pack kills v1 and the trickster takes his look — v1's card shows the trickster's.
+    await waitFor(() => room.state.nightStep === "wolves", 15_000);
+    wolf.send("wolf_target", { targetId: v1.sessionId });
+    await waitFor(() => r.wolfVotes.size === 1);
+    const trickTurn = trickster.waitForMessage("trickster_turn");
+    r.endWolvesStep();
+    await trickTurn;
+    trickster.send("disguise", { take: true });
+    shaman.send("power_pass");
+    await waitFor(() => room.state.nightStep === "witch_seer");
+    const reveal = witch.waitForMessage("death_reveal");
+    witch.send("witch_pass");
+    seer.send("seer_peek", { targetId: trickster.sessionId });
+    const shown = (await reveal) as any;
+    assert.deepStrictEqual([shown.id, shown.role], [v1.sessionId, "wolftrickster"]);
+    assert.deepStrictEqual([r.seenAs(trickster.sessionId), r.spent.has(trickster.sessionId)], ["villager", true]);
+  });
+
+  it("the shadow wolf's secret vote: from then on nobody sees who votes for whom, only the result", async function () {
+    this.timeout(30_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, shadowwolf: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const shadow = byRole("shadowwolf");
+    const [a, b, c] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    r.openDebate();
+    a.send("day_vote", { targetId: b.sessionId });
+    await waitFor(() => room.state.players.get(a.sessionId)?.votedFor === b.sessionId);
+    const mine = a.waitForMessage("secret_vote");
+    shadow.send("shadow");
+    assert.deepStrictEqual(await mine, { mine: b.sessionId }); // his own vote, to him only
+    assert.ok([...room.state.players.values()].every((p) => !p.votedFor)); // off the table
+    c.send("day_vote", { targetId: b.sessionId });
+    await waitFor(() => r.hiddenVotes.size === 2);
+    assert.strictEqual(room.state.players.get(c.sessionId)?.votedFor, "");
+    const result = a.waitForMessage("vote_result");
+    r.resolveVote();
+    const res = (await result) as any;
+    assert.deepStrictEqual([res.excluded, res.ballots], [b.sessionId, {}]);
+    assert.ok(r.publicLog.some((e: any) => e.type === "shadow_vote"));
+    assert.ok(r.spent.has(shadow.sessionId));
   });
 });

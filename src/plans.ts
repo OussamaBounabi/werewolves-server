@@ -20,6 +20,8 @@ export const ROLE_CARDS: Record<string, number> = {
   // the pack
   werewolf: 25, fatherwolf: 30, blackwolf: 25, bluewolf: 20, greenwolf: 25, redwolf: 25, juniorwolf: 20, seerwolf: 30,
   bigbadwolf: 30, chameleonwolf: 25, wolfdog: 20,
+  wolfcub: 25, dreamwolf: 25, wolfshaman: 25, fangface: 25, fruitbrute: 15, juniorwerewolf: 25, shadowwolf: 25,
+  wolftrickster: 30, wolfsummoner: 25, minion: 15, sorceress: 20,
   // the loners
   whitewolf: 30, alien: 30, bomber: 30, piper: 30, guitarist: 30, killer: 30,
   // the village
@@ -27,6 +29,7 @@ export const ROLE_CARDS: Record<string, number> = {
   cupid: 15, wildchild: 15, dragon: 25, barbe: 20, dictator: 20, judge: 20, trickster: 15, fox: 15, ancient: 15,
   doubler: 20, joker: 20, raven: 15, owl: 15, idiot: 10, knight: 15, brothers: 10, cat: 15, littlegirl: 15, shepherd: 15,
   rabbit: 15, policeman: 20, mirror: 15, priest: 20, alchemist: 25, servant: 15, puppet: 15,
+  cursed: 10, sasquatch: 15,
 };
 
 export type StoreWeek = { avatars: number[]; frames: number[]; cards: string[] };
