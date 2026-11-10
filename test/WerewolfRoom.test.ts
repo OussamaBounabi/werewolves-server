@@ -1209,6 +1209,10 @@ describe("WerewolfRoom", () => {
     const [state, god] = await Promise.all([admin.waitForMessage("state", 2000), admin.waitForMessage("god", 2000)]);
     assert.strictEqual((state as any).phase, room.state.phase);
     assert.strictEqual(Object.keys((god as any).roles).length, 5);
+    // (The night tab has the new roles' moves too.)
+    for (const key of ["lucky", "lookouts", "spirits", "lent", "borrowed", "bite", "chupa", "doused", "bandits", "meals"]) {
+      assert.ok(key in (god as any).night, key);
+    }
     assert.deepStrictEqual([room.state.players.size, room.state.spectators], [5, 0]);
   });
 

@@ -1,3 +1,4 @@
+import { addStaffPhone } from "./staffPush.js";
 import { blockedAmong } from "./accounts.js";
 import { addClanEvent, announce as clanAnnounce, buyClanItem, deleteClanEvent, newPoll, pinSecond, sponsorClan, stopSponsoring, votePoll, wearClanItem, wearClanPack } from "./clanPro.js";
 import {
@@ -419,6 +420,15 @@ const server = defineServer({
     // Who is asking: the owner or a moderator. The owner alone has the economy, the store, the plans, the settings,
     // the staff and the log.
     api_admin_me: adminEndpoint("/api/admin/me", "GET", async (_ctx, staff) => ({ role: staff.role, email: staff.email })),
+    // The admin app's phone, where the staff's notifications go (a plain POST: not one for the action log).
+    api_admin_push_token: createEndpoint("/api/admin/push-token", { method: "POST" }, async (ctx) => {
+      const staff = await adminRole(bearer(ctx));
+      if (!staff) throw ctx.error(403, { error: "admins only" });
+      const token = (ctx.body as { token?: unknown } | undefined)?.token;
+      if (typeof token !== "string" || token.length < 20 || token.length > 400) throw ctx.error(400, { error: "token" });
+      await addStaffPhone(staff.uid, staff.email, token);
+      return { ok: true };
+    }),
     // A message from support to every player, body { ar, en, fr } (at least one).
     api_admin_announce: adminEndpoint("/api/admin/announce", "POST", async (ctx) => {
       const sent = await announce((ctx.body ?? {}) as { ar?: unknown; en?: unknown; fr?: unknown });

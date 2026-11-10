@@ -12,6 +12,7 @@ import { MYSTERY_CATEGORIES, ITEMS } from "./mysteryItems.js";
 import { onlineCount } from "./presence.js";
 import { chatLines } from "./rooms/moderate.js";
 import { eventsOn, type Moderator } from "./plans.js";
+import { notifyNews, notifyStaff } from "./staffPush.js";
 
 /**
  * The admin app's server side, beyond accounts.ts's support tools: the staff and the log of what they did, the
@@ -436,9 +437,13 @@ export async function restartSoon() {
   return { at: new Date(restartAt).toISOString() };
 }
 
-/** The game server calls this once, at start: every minute, the reports' context kept and the announcements due sent. */
+/**
+ * The game server calls this once, at start: every minute, the reports' context kept, the announcements due sent, and
+ * the staff's phones told what's new (staffPush.ts).
+ */
 export function startAdminSchedules() {
-  const run = () => Promise.all([snapReports(), sendScheduled()]).catch((e) => console.error("admin schedules failed", e));
+  const run = () =>
+    Promise.all([snapReports(), sendScheduled(), notifyNews(cheatFlags)]).catch((e) => console.error("admin schedules failed", e));
   setInterval(run, 60_000).unref();
 }
 
@@ -545,7 +550,11 @@ export async function recordCrash(ip: string, body: { message?: unknown; stack?:
   const last = /^[A-Za-z0-9]{1,40}$/.test(String(body.uid ?? "")) ? String(body.uid) : "";
   const found = await maybe(client.collection("crashes").getOne(id, { fields: "id" }));
   if (found) await client.collection("crashes").update(id, { "count+": 1, last });
-  else await client.collection("crashes").create({ id, message, stack, version, count: 1, last });
+  else {
+    await client.collection("crashes").create({ id, message, stack, version, count: 1, last });
+    // A crash not seen before rings the owner's phone (the same one again only counts).
+    notifyStaff("crashes", "crashes", `A new crash (${version || "?"})`, message.split("\n")[0]).catch((e) => console.error("crash push", e));
+  }
 }
 
 export async function crashList(page: number) {

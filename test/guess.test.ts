@@ -322,6 +322,9 @@ describe("GuessRoom", () => {
       Buffer.alloc(90_000),
     ]).toString("base64");
     const { room, a, b } = await mysteryPair({ custom: true });
+    let god: any = null;
+    a.client.onMessage("god", (g: any) => (god = g));
+    (room as any).admins.add(a.client.sessionId); // (as if watched from the admin app: its God Eye)
     a.client.send("start_game");
     await until(() => room.phase === "pick" && a.seen.state.custom === true);
     b.client.send("custom_pick", { name: "Fake", image: Buffer.from("not a picture").toString("base64") });
@@ -333,6 +336,10 @@ describe("GuessRoom", () => {
     b.client.send("custom_pick", { name: "Pyramids", image: png });
     await until(() => room.phase === "playing");
     assert.strictEqual(mine(b).custom.name, "Pyramids");
+    // The God Eye sees both players' pictures and names.
+    await until(() => Object.keys(god?.customs ?? {}).length === 2);
+    assert.deepStrictEqual(Object.values(god.customs).map((c: any) => c.name).sort(), ["DJ Rafik", "Pyramids"]);
+    assert.ok(Object.values(god.customs).every((c: any) => c.image.length > 1000));
     a.client.send("concede"); // B found DJ Rafik
     await until(() => b.seen.state.phase === "round" || b.seen.state.phase === "gameover");
     assert.deepStrictEqual(b.seen.state.sides.map((s: any) => s.custom?.name).sort(), ["DJ Rafik", "Pyramids"], "both shown once it's over");

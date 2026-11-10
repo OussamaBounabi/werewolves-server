@@ -808,7 +808,10 @@ export class GuessRoom extends Room<{ metadata: Meta }> {
       }));
       client.send("guess", { ...table, sides, me });
     }
-    for (const id of this.admins) this.clients.getById(id)?.send("god", { secrets: Object.fromEntries(this.sides.map((s) => [s.id, s.secret])) });
+    // (Mystery Item's own images: each player's name for his thing, and its picture.)
+    const customs = Object.fromEntries(this.sides.filter((s) => s.custom).map((s) => [s.id, s.custom]));
+    const god = { secrets: Object.fromEntries(this.sides.map((s) => [s.id, s.secret])), ...(this.custom ? { customs } : {}) };
+    for (const id of this.admins) this.clients.getById(id)?.send("god", god);
   }
 }
 
