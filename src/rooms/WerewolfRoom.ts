@@ -60,7 +60,7 @@ type DeathCause =
   | "wolves" | "witch" | "trap" | "hunter" | "whitewolf" | "vote" | "quit" | "timeout"
   | "love" | "dragon" | "barbe" | "barbe_fail" | "dictator" | "dictator_fail" | "joker" | "knight"
   | "cat" | "mirror" | "priest" | "priest_fail" | "alchemist" | "alien" | "alien_fail" | "bomb" | "guitarist" | "killer"
-  | "banned" | "junior" | "bloodymary" | "wounds" | "gunner" | "ghost"
+  | "banned" | "junior" | "bloodymary" | "wounds" | "gunner"
   | "chupacabra" | "fire" | "bandit" | "cannibal" | "necromancer";
 /** Loners play for themselves: each kind is a side of its own (two of a kind, after a doubler's copy, share it). */
 type Loner =
@@ -1113,8 +1113,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.broadcast("events", []);
     gameStarted("werewolf"); // (the admin app's numbers)
     this.assignRoles();
-    // The ghost is dead from the start (no reveal to wait for): he only votes, each day.
-    for (const id of this.idsWithRole("ghost")) this.kill(id, "ghost");
     this.dealTime = DEAL_MS;
     // The roles dealt, the village elects its mayor (if it plays with one), then the first night falls.
     if (this.state.mayor) this.startMayorVote();
@@ -3619,7 +3617,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     return ballots;
   }
 
-  /** Living players vote; so does the ghost, dead from the start. */
+  /** Living players vote; so does the ghost, once dead (from the grave). */
   private votes(id: string): boolean {
     return this.isAlive(id) || (this.powerOf(id) === "ghost" && this.state.players.has(id));
   }
@@ -4082,7 +4080,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // (A wolf trickster's victim shows the trickster's card; the trickster, when he dies, his own.)
     player.revealedRole = this.fakeReveals.has(sessionId) ? "wolftrickster" : (this.roles.get(sessionId) ?? "");
     if (this.infected.has(sessionId)) player.infectedShown = true;
-    const inPlay = cause !== "quit" && cause !== "timeout" && cause !== "ghost";
+    const inPlay = cause !== "quit" && cause !== "timeout";
     const shooter = inPlay && this.isHunter(sessionId);
     const marks = this.deathMarks(sessionId);
     this.broadcast("death_reveal", { id: sessionId, name: player.name, role: player.revealedRole, cause, shooter, ...marks, ...more });

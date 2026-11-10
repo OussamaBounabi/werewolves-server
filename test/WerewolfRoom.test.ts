@@ -2399,7 +2399,7 @@ describe("WerewolfRoom", () => {
 
   // ---- the rules spec's village passives and day powers (batch 3, 2026-11) ----
 
-  it("the ghost is dead from the deal; the actor plays a card a night; the tough guy's wound; the diseased; the drunk", async function () {
+  it("the ghost starts alive; the actor plays a card a night; the tough guy's wound; the diseased; the drunk", async function () {
     this.timeout(90_000);
     const mix = {
       ...NO_SPECIALS, wolves: 1, villagers: 1, toughguy: true, diseased: true, drunk: true, actor: true, ghost: true, mayor: false,
@@ -2407,8 +2407,8 @@ describe("WerewolfRoom", () => {
     const { room, byRole } = await startGame(mix, 7);
     const r = room as any;
     const [wolf, tough, sick, drunk, actor, ghost] = ["werewolf", "toughguy", "diseased", "drunk", "actor", "ghost"].map(byRole);
-    // The ghost: dead from the start, his card shown.
-    assert.deepStrictEqual([r.isAlive(ghost.sessionId), room.state.players.get(ghost.sessionId)?.revealedRole], [false, "ghost"]);
+    // The ghost starts alive, a villager like any other.
+    assert.deepStrictEqual([r.isAlive(ghost.sessionId), room.state.players.get(ghost.sessionId)?.revealedRole], [true, ""]);
     // Three cards for the actor, a role for the drunk: none of them dealt, none twice.
     const cards = r.actorCards.get(actor.sessionId);
     const hidden = r.drunkAs.get(drunk.sessionId);
@@ -2461,6 +2461,7 @@ describe("WerewolfRoom", () => {
     const r = room as any;
     const [wolf, gunner, trouble, flower, ghost] = ["werewolf", "gunner", "troublemaker", "flowerchild", "ghost"].map(byRole);
     const [v1, v2] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    r.kill(ghost.sessionId, "vote"); // the ghost is dead: from now on he votes from the grave
     room.state.dayNumber = 2; // (no shot on the first day)
     r.openDebate();
     // The gunner waits a few seconds into the day, then shoots once: everyone sees who he is.
@@ -2472,7 +2473,7 @@ describe("WerewolfRoom", () => {
     await waitFor(() => !r.isAlive(v1.sessionId));
     assert.strictEqual(room.state.players.get(gunner.sessionId)?.revealedRole, "gunner");
     assert.ok(r.publicLog.some((e: any) => e.type === "death" && e.cause === "gunner"));
-    await waitFor(() => room.state.phase === "day", 10_000);
+    await waitFor(() => room.state.phase === "day", 15_000); // (two cards to reveal: the ghost's, v1's)
     gunner.send("shoot", { targetId: v2.sessionId }); // one a day
     // Two votes today; the ghost votes from the grave.
     trouble.send("trouble");
