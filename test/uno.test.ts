@@ -25,7 +25,8 @@ describe("uno cards", () => {
     assert.ok(canPlay("g-3", "w-wild", "g"), "a wild's named color");
     assert.ok(canPlay("b-draw2", "r-draw2", "r", 2));
     assert.ok(!canPlay("r-5", "r-draw2", "r", 2), "a +2 waiting: not a plain card");
-    assert.ok(!canPlay("w-draw4", "r-draw2", "r", 2), "nor a +4 on a +2");
+    assert.ok(canPlay("w-draw4", "r-draw2", "r", 2), "a +4 on a +2");
+    assert.ok(!canPlay("r-draw2", "w-draw4", "r", 4), "never a +2 on a +4");
   });
 
   it("All Wilds: 132 cards, four of each new wild; a plain wild counts 20; a wild on top goes by its color only", () => {
@@ -201,19 +202,38 @@ describe("UnoRoom", () => {
     await host.leave();
   });
 
-  it("a +4 with stacking: stacked, the last one judged: a bluff takes the whole stack", async () => {
+  it("a +4 with stacking: a lone one may be challenged; on a stack it can't; who can't stack draws it at once", async () => {
     const { room, host } = await started(2, { stacking: true });
     const [me, a, b] = room.seats.map((s: any) => s.id);
     while (room.turn === "") await wait(5);
-    rig(room, me, ["w-draw4", "b-1", "b-2"], "r-9");
+    rig(room, me, ["w-draw4", "r-draw2", "b-1", "b-2"], "r-9");
     room.handlePlay(me, "w-draw4", "y");
     room.botTimer?.clear();
-    room.hands.set(a, ["w-draw4", "y-5", "g-1"]); // (a yellow: the color I named; a bluff)
+    assert.strictEqual(room.d4.who, me); // (a lone +4)
+    room.hands.set(a, ["w-draw4", "y-5", "g-1"]);
+    room.hands.set(b, ["r-draw2", "g-2"]); // (a +2: never on a +4)
+    room.handlePlay(a, "w-draw4", "g");
+    assert.deepStrictEqual([room.turn, room.pending, room.d4], [b, 8, null]);
+    room.handleChallenge(b); // (no challenge on a stack)
+    assert.strictEqual(room.handlePlay(b, "r-draw2"), "no_match");
+    assert.deepStrictEqual([room.turn, room.pending], [b, 8]);
+    await wait(1_700); // (nothing to stack: he draws it, his turn shown a moment)
+    assert.deepStrictEqual([room.hands.get(b).length, room.pending, room.turn], [10, 0, me]);
+
+    // A +4 on a +2: the next player stacks a +4 or draws.
+    room.botTimer?.clear();
+    rig(room, me, ["r-draw2", "b-1", "b-2"], "r-9");
+    room.handlePlay(me, "r-draw2");
+    room.botTimer?.clear();
+    room.hands.set(a, ["w-draw4", "y-5"]);
+    room.hands.set(b, ["w-draw4", "g-2"]);
     room.handlePlay(a, "w-draw4", "g");
     room.botTimer?.clear();
-    assert.deepStrictEqual([room.turn, room.pending, room.d4.who], [b, 8, a]);
-    room.handleChallenge(b);
-    assert.deepStrictEqual([room.hands.get(a).length, room.turn, room.pending], [10, b, 0]);
+    assert.deepStrictEqual([room.turn, room.pending, room.d4], [b, 6, null]);
+    await wait(1_700); // (he holds a +4: no drawing for him, it's his call)
+    assert.deepStrictEqual([room.turn, room.pending], [b, 6]);
+    room.handlePlay(b, "w-draw4", "r");
+    assert.deepStrictEqual([room.turn, room.pending], [me, 10]);
     await host.leave();
   });
 

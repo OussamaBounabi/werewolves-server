@@ -47,11 +47,11 @@ export function points(card: string, allWilds = false) {
 
 /**
  * May [card] go on [top], the color asked being [color]? A wild on top goes by the color named only (a skip doesn't
- * go on a wild skip). While a +2 or +4 waits to be drawn ([pending] > 0), only the same draw card stacks on it (the
- * room's stacking rule; a wild +2 on a +2 too).
+ * go on a wild skip). While a +2 or +4 waits to be drawn ([pending] > 0), only a draw card stacks on it (the room's
+ * stacking rule): a +2 on a +2 (a wild +2 too), a +4 on either; never a +2 on a +4.
  */
 export function canPlay(card: string, top: string, color: Color, pending = 0) {
-  if (pending > 0) return kindOf(card) === kindOf(top) && isDraw(card);
+  if (pending > 0) return kindOf(card) === "draw4" || (kindOf(card) === "draw2" && kindOf(top) === "draw2");
   return isWild(card) || colorOf(card) === color || (!isWild(top) && kindOf(card) === kindOf(top));
 }
 

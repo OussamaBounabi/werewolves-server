@@ -20,9 +20,9 @@ import { StakeTable } from "./stake.js";
  * color. Skip, reverse (with 2 players: a skip), +2 and wild +4. A +4 is only allowed without a card of the color
  * asked, but may be played anyway: the next player draws 4 and loses his turn, or challenges it (no one sees the
  * hand): a bluff, its player draws them instead and the challenger plays; honest, the challenger draws 6 and loses his
- * turn. The host's stacking rule: a +2 may answer a +2 (and a +4 a +4), the next player taking the sum (a challenge
- * judges the last +4: a bluff, its player takes the stack; honest, the challenger the stack and 2 more); off, a +2
- * lands at once (the next player draws and loses his turn). A round's last card a +2 or +4: the next player draws
+ * turn. The host's stacking rule: a +2 may answer a +2, a +4 a +2 or a +4, the next player taking the sum; who can't
+ * stack draws it at once; a +4 on a stack can't be challenged (only a lone one); off, a +2 lands at once (the next
+ * player draws and loses his turn). A round's last card a +2 or +4: the next player draws
  * them first (they count), no challenge. Each round has a clock (the host's 3, 5, 7 or 10 minutes): out of time, the
  * lowest hand in points wins (2 vs 2: the lowest pair), scoring the others' hands; even, fewer cards; still even, the
  * one whose turn comes first. On his turn a player may draw one card: if it goes
@@ -67,6 +67,7 @@ const BOT_NAMES = ["Amine", "Yasmine", "Karim", "Lina", "Sofiane", "Nour", "Wali
 const HAND = 7;
 const DEAL_MS = 3_000; // the apps' deal, before the first turn
 const PASS_MS = 1_000; // a drawn card that doesn't go: shown, then the turn moves on
+const AUTO_DRAW_MS = 1_500; // stacking: nothing to put on the stack, his turn shown, then he draws it
 const CATCH_MS = 2_000; // UNO forgotten: the others' time to hit the hammer
 const READY_WAIT_MS = 30_000; // between rounds: who hasn't pressed "ready" by then is ready anyway
 const NEXT_ROUND_MS = 5_000;
@@ -544,6 +545,13 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     this.timer?.clear();
     this.botTimer?.clear();
     this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), extraMs + this.turnSeconds * 1000);
+    // Stacking: a stack waits for him and he has nothing to put on it (nor a lone +4 to challenge): he draws it.
+    const stuck = this.stacking && this.pending > 0 && !this.d4;
+    if (stuck && !this.hands.get(id)!.some((c) => canPlay(c, this.top, this.color, this.pending))) {
+      this.turnEndsAt = Date.now() + extraMs + AUTO_DRAW_MS;
+      this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), extraMs + AUTO_DRAW_MS);
+      return;
+    }
     if (this.seat(id)?.bot) this.botTurn(id, extraMs);
   }
 
@@ -593,7 +601,8 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
     const victim = !named ? "" : others.includes(String(target)) ? String(target) : others.length === 1 ? others[0] : "";
     if (named && !victim) return "pick_target";
     hand.splice(hand.indexOf(card), 1);
-    this.d4 = kind === "draw4" ? { who: id, bluff: hand.some((c) => colorOf(c) === this.color) } : null;
+    // A +4 may be challenged, unless it went on a stack.
+    this.d4 = kind === "draw4" && this.pending === 0 ? { who: id, bluff: hand.some((c) => colorOf(c) === this.color) } : null;
     this.discard.push(card);
     this.color = isWild(card) ? (color as Color) : (colorOf(card) as Color);
     this.broadcast("uno_fx", { type: "play", who: id, card, color: this.color, ...(victim ? { target: victim } : {}) });
