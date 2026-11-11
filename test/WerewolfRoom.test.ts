@@ -2403,6 +2403,41 @@ describe("WerewolfRoom", () => {
 
   // ---- the rules spec's village passives and day powers (batch 3, 2026-11) ----
 
+  it("the room's actorPicks: the actor picks his three cards from the roles nobody was dealt, then plays one; late, three at random", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 2, seer: true, drunk: true, actor: true, actorPicks: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 6);
+    const r = room as any;
+    const [actor, drunk] = ["actor", "drunk"].map(byRole);
+    // No cards yet: his choices, every night power nobody was dealt (the drunk's to come excluded).
+    const choices: string[] = r.actorChoices.get(actor.sessionId);
+    assert.ok(!r.actorCards.has(actor.sessionId));
+    assert.ok(choices.length >= 3 && !choices.includes("seer") && !choices.includes(r.drunkAs.get(drunk.sessionId)));
+    const told = actor.waitForMessage("role_assigned");
+    r.startActorStep();
+    assert.strictEqual(room.state.nightStep, "actor");
+    assert.ok(room.state.phaseEndsAt - Date.now() > room.state.stepSeconds * 1000 + 15_000); // (his 20 seconds more)
+    // Two cards, a dealt role or one twice: refused. Three of his choices: his cards.
+    for (const roles of [choices.slice(0, 2), ["seer", choices[0], choices[1]], [choices[0], choices[0], choices[1]]]) actor.send("actor_pick", { roles });
+    actor.send("actor_pick", { roles: choices.slice(0, 3) });
+    await waitFor(() => r.actorCards.has(actor.sessionId));
+    assert.deepStrictEqual([r.actorCards.get(actor.sessionId), r.actorChoices.has(actor.sessionId)], [choices.slice(0, 3), false]);
+    await told;
+    // He plays one of them tonight, as usual.
+    const card = choices.slice(0, 3).find((c) => r.playableTonight(c));
+    actor.send("act_card", { role: card });
+    await waitFor(() => r.powerOf(actor.sessionId) === card);
+
+    // Another actor who doesn't pick in time: three of his choices, at random, once the step is over.
+    r.powers.set(actor.sessionId, "actor"); // (dawn: an actor again)
+    r.actorCards.delete(actor.sessionId);
+    r.actorChoices.set(actor.sessionId, ["seer", "protector", "lookout", "fox"]);
+    r.startActorStep();
+    r.afterStep();
+    const late: string[] = r.actorCards.get(actor.sessionId);
+    assert.ok(late.length === 3 && late.every((c) => ["seer", "protector", "lookout", "fox"].includes(c)) && !r.actorChoices.size);
+  });
+
   it("the ghost starts alive; the actor plays a card a night; the tough guy's wound; the diseased; the drunk", async function () {
     this.timeout(90_000);
     const mix = {
@@ -2593,6 +2628,37 @@ describe("WerewolfRoom", () => {
     r.kill(wolf.sessionId, "vote");
     assert.ok(r.endGameIfOver());
     assert.strictEqual(room.state.winner, "sectarian"); // before the village's win
+  });
+
+  it("every loner holds the game open; no wolf's power touches them, the priest's holy water does (his rules, 2026-11-11)", async function () {
+    this.timeout(60_000);
+    const mix = {
+      ...NO_SPECIALS, wolves: 0, villagers: 2, juniorwerewolf: true, priest: true, killer: true, sectarian: true, necromancer: true,
+      mayor: false,
+    };
+    const { room, clients, roles, byRole } = await startGame(mix, 7);
+    const r = room as any;
+    const [junior, priest, killer, sect, necro] = ["juniorwerewolf", "priest", "killer", "sectarian", "necromancer"].map(byRole);
+    const [v1, v2] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    const alive = (c: any) => room.state.players.get(c.sessionId)!.alive;
+    // The sectarian and the necromancer: no bite (nor infection) on them any more.
+    assert.deepStrictEqual([r.bites(sect.sessionId), r.bites(necro.sessionId)], [false, false]);
+    // The priest's holy water kills a loner, and the priest lives.
+    r.flasks = [{ by: priest.sessionId, target: killer.sessionId, role: "priest" }];
+    r.resolveNight();
+    assert.deepStrictEqual([alive(killer), alive(priest)], [false, true]);
+    // The junior werewolf's link doesn't take a loner with him.
+    r.sects = new Map(clients.map((c: any) => [c.sessionId, c === v1 ? "moon" : "sun"])); // (v1 keeps the sectarian from winning)
+    r.links.set(junior.sessionId, sect.sessionId);
+    r.kill(junior.sessionId, "vote");
+    assert.ok(alive(sect));
+    // No wolf left, but the sectarian and the necromancer live: the village hasn't won.
+    assert.ok(!r.endGameIfOver());
+    r.kill(sect.sessionId, "vote");
+    assert.ok(!r.endGameIfOver()); // (the necromancer)
+    for (const c of [priest, v1, v2]) r.kill(c.sessionId, "vote");
+    assert.ok(r.endGameIfOver());
+    assert.strictEqual(room.state.winner, "necromancer"); // the last one standing
   });
 
   // ---- the wolf summoner plays a dead wolf's power (his change, 2026-11-09) ----

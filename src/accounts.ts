@@ -1050,7 +1050,7 @@ export async function recordResults(results: GameResult[]) {
   void (await db()).collection("game_log").create({
     game: results[0].game ?? "werewolf",
     minutes: Math.max(...results.map((r) => r.minutes)),
-    players: results.map((r) => ({ uid: r.uid, name: r.name, won: r.won, role: r.role ?? "", side: r.side ?? "" })),
+    players: results.map((r) => ({ uid: r.uid, name: r.name, won: r.won, role: r.role ?? "", side: r.side ?? "", alive: r.survived })),
     uids: results.map((r) => r.uid).join(" "),
   }).catch((e) => console.error("game log failed", e));
   const failed = (await Promise.allSettled(results.map(recordResult))).find((r) => r.status === "rejected");
