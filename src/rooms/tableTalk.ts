@@ -3,6 +3,7 @@ import { vipLevel } from "../accounts.js";
 import { clanEntrances } from "../clanPro.js";
 import { emojisOpen } from "./perks.js";
 import { isChatMuted } from "./moderate.js";
+import { Throws } from "../throws.js";
 
 /** The emojis a player can show over his avatar (the apps have their pictures under these names). */
 export const EMOJIS = [
@@ -35,12 +36,14 @@ type Line = { from: string; name: string; avatar: number; frame: number; vip: st
 export class TableTalk {
   private channels = new Map<string, Line[]>(); // each table's lines ("" the room's own)
   private emojiAt = new Map<string, number>();
+  private throws = new Throws();
 
   constructor(
     private room: Room,
     private seatOf: (client: Client) => Face | undefined,
     private idOf: (client: Client) => string,
     private channelOf: (client: Client) => string = () => "",
+    private seatById?: (id: string) => Face | undefined, // any seat, bots too (else: the players at my table)
   ) {
     clanEntrances(room);
     room.onMessage("chat", (client, msg: { text?: unknown }) => this.chat(client, msg?.text));
@@ -55,6 +58,7 @@ export class TableTalk {
         this.tell(client, "emoji", { from: seat.id, id: emoji });
       }
     });
+    room.onMessage("throw", (client, msg: { to?: unknown; item?: unknown }) => void this.throwAt(client, msg?.to, msg?.item));
   }
 
   /** The room's lines (a room of one table: all of them). */
@@ -83,6 +87,20 @@ export class TableTalk {
   /** The chat so far, for a newcomer (or an app coming back, or one gone to another table). */
   history(client: Client) {
     client.send("chat_history", this.channels.get(this.channelOf(client)) ?? []);
+  }
+
+  /** A player throws [item] at another seat's avatar (paid in coins): everyone at the table sees it fly. */
+  private async throwAt(client: Client, to: unknown, item: unknown) {
+    const seat = this.seatOf(client);
+    if (!seat || typeof to !== "string" || to === seat.id) return; // (players only, at someone else)
+    const channel = this.channelOf(client);
+    const target = this.seatById
+      ? this.seatById(to)
+      : this.room.clients.filter((c) => this.channelOf(c) === channel).map((c) => this.seatOf(c)).find((s) => s?.id === to);
+    if (!target) return;
+    const why = await this.throws.pay(seat.id, client.auth?.account?.uid, item);
+    if (why) return client.send("error", { code: why });
+    this.tell(client, "throw", { from: seat.id, to, item });
   }
 
   /** To everyone at [from]'s table (but him, [except]). */

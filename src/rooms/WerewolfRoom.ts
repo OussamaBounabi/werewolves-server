@@ -12,6 +12,7 @@ import {
 import { enterRoom, leaveRoom } from "../presence.js";
 import { Abandon, holdSeat, holdSpectator } from "./abandoned.js";
 import { emojiAllowed } from "./tableTalk.js";
+import { Throws } from "../throws.js";
 import { isChatMuted } from "./moderate.js";
 import { emojisOpen, Kicks, RoomLooks, listWatchers } from "./perks.js";
 import { gameStarted } from "../metrics.js";
@@ -477,6 +478,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     clanEntrances(this);
     listWatchers(this, (c) => this.spectators.has(c.sessionId));
     this.onMessage("emoji", (client, msg: { id: string }) => this.handleEmoji(client, msg));
+    this.onMessage("throw", (client, msg: { to: string; item: string }) => void this.handleThrow(client, msg));
     this.onMessage("joker_pick", (client, msg: { targetId: string }) => this.handleJokerPick(client, msg));
     this.onMessage("dictator_ready", (client, msg: { use: boolean }) => this.handleDictatorReady(client, msg));
     this.onMessage("judge", (client, msg: { revote: boolean }) => this.handleJudge(client, msg));
@@ -4011,6 +4013,28 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const payload = { from: id, id: emoji };
     if (!graveyard) return this.broadcast("emoji", payload);
     for (const c of this.clients) if (this.inGraveyard(c.sessionId)) c.send("emoji", payload);
+  }
+
+  private throws = new Throws();
+
+  /**
+   * A player throws something at another's avatar (paid in coins), with the emojis' rules: none from the living at
+   * night or from a silenced player; while the game runs, the living at the living, and the dead at the dead (only
+   * the dead and the spectators see that one).
+   */
+  private async handleThrow(client: Client, msg: { to: string; item: string }) {
+    const id = client.sessionId;
+    const to = msg?.to;
+    const player = this.state.players.get(id), target = this.state.players.get(to);
+    if (!player || !target || to === id) return; // (spectators have no seat to throw from)
+    const graveyard = this.inGraveyard(id), running = this.gameRunning();
+    if (!graveyard && running && (this.state.phase === "night" || player.silenced)) return;
+    if (running && player.alive !== target.alive) return;
+    const why = await this.throws.pay(id, this.accounts.get(id), msg?.item);
+    if (why) return client.send("error", { code: why });
+    const payload = { from: id, to, item: msg.item };
+    if (!graveyard) return this.broadcast("throw", payload);
+    for (const c of this.clients) if (this.inGraveyard(c.sessionId)) c.send("throw", payload);
   }
 
   // ---- shared helpers ----

@@ -86,6 +86,7 @@ export function publicConfig() {
     vipRolePicks: s.vipRolePicks,
     badWords: s.badWords,
     bots: s.bots,
+    throws: s.throwPrices,
     events: eventsOn(currentPlans().events).map(({ id, title, kind, factor, end, games }) => ({ id, title, kind, factor, end, games })),
   };
 }

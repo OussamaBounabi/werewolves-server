@@ -154,7 +154,7 @@ export class DominoRoom extends Room<{ metadata: Meta }> {
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     listWatchers(this, (c) => this.spectators.has(this.idOf(c)));
-    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c), undefined, (id) => this.seat(id));
     this.onMessage("invite", (client, msg: { uid: string }) => {
       if (!this.seat(this.idOf(client)) || typeof msg?.uid !== "string") return;
       this.invited.add(msg.uid);

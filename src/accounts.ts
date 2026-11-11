@@ -109,7 +109,7 @@ export async function maybe(record: Promise<RecordModel>): Promise<RecordModel |
 /** Where a player's coins and diamonds came from or went (wallet_log), for the admin app. */
 export type Source =
   | "game" | "mission" | "daily" | "wheel" | "achievement" | "store" | "gift" | "pack" | "free" | "welcome" | "vip" | "ranking"
-  | "stake" | "clan" | "chest" | "admin";
+  | "stake" | "clan" | "chest" | "admin" | "throw";
 
 /** One change of [user]'s coins and diamonds, written in [batch] with the change itself (nothing when both are 0). */
 export function ledger(batch: ReturnType<PocketBase["createBatch"]>, user: string, coins: number, diamonds: number, source: Source, note = "") {

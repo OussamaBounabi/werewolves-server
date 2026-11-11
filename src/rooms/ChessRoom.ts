@@ -144,7 +144,7 @@ export class ChessRoom extends Room<{ metadata: Meta }> {
     on<{ id: string }>("kick", (c, m) => void this.handleKick(c, m.id));
     this.onMessage("voice_join", (client) => this.handleVoiceJoin(client));
     listWatchers(this, (c) => this.spectators.has(this.idOf(c)));
-    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c));
+    this.tableTalk = new TableTalk(this, (c) => this.seat(this.idOf(c)), (c) => this.idOf(c), undefined, (id) => this.seat(id));
     this.onMessage("room_look", (client, msg) => this.handleLook(client, msg));
     // A player opened the analysis board after the game: the table may join it.
     this.onMessage("analysis_open", (client, msg: { roomId?: string }) => {
