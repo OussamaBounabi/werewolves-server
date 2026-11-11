@@ -2,7 +2,8 @@ import assert from "assert";
 import { ColyseusTestServer, boot } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import { cleanSettings } from "../src/plans.js";
+import { cleanSettings, settingsNow } from "../src/plans.js";
+import { throwLocked } from "../src/throws.js";
 
 const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
@@ -16,6 +17,20 @@ describe("throws", () => {
     assert.deepStrictEqual(s.throwPrices, {
       egg: 2, tomato: 5, heart: 5, rose: 10, bomb: 0, knife: 0, slipper: 5, kiss: 5, pie: 10,
     });
+  });
+
+  it("who may throw: everyone, VIPs (VIP Pro too), or VIP Pro only (at first)", () => {
+    assert.strictEqual(settingsNow(cleanSettings({}, null)).throwsFor, "pro"); // (not saved: the usual)
+    assert.deepStrictEqual(["vip", "nope"].map((v) => cleanSettings({ throwsFor: v }, null).throwsFor), ["vip", "pro"]);
+    const [nobody, vip, pro] = [{ vip: false, vipPro: false }, { vip: true, vipPro: false }, { vip: true, vipPro: true }];
+    assert.deepStrictEqual(
+      (["all", "vip", "pro"] as const).map((level) => [nobody, vip, pro, undefined].map((a) => throwLocked(level, a))),
+      [
+        [null, null, null, null],
+        ["throw_vip", null, null, "throw_vip"],
+        ["throw_pro", "throw_pro", null, "throw_pro"],
+      ],
+    );
   });
 
   it("a card table: at another seat, a thing the apps know, one every 3 seconds; everyone at the table sees it", async () => {

@@ -4030,7 +4030,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     const graveyard = this.inGraveyard(id), running = this.gameRunning();
     if (!graveyard && running && (this.state.phase === "night" || player.silenced)) return;
     if (running && player.alive !== target.alive) return;
-    const why = await this.throws.pay(id, this.accounts.get(id), msg?.item);
+    const why = await this.throws.pay(id, client.auth?.account, msg?.item);
     if (why) return client.send("error", { code: why });
     const payload = { from: id, to, item: msg.item };
     if (!graveyard) return this.broadcast("throw", payload);

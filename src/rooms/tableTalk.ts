@@ -98,7 +98,7 @@ export class TableTalk {
       ? this.seatById(to)
       : this.room.clients.filter((c) => this.channelOf(c) === channel).map((c) => this.seatOf(c)).find((s) => s?.id === to);
     if (!target) return;
-    const why = await this.throws.pay(seat.id, client.auth?.account?.uid, item);
+    const why = await this.throws.pay(seat.id, client.auth?.account, item);
     if (why) return client.send("error", { code: why });
     this.tell(client, "throw", { from: seat.id, to, item });
   }

@@ -87,6 +87,7 @@ export function publicConfig() {
     badWords: s.badWords,
     bots: s.bots,
     throws: s.throwPrices,
+    throwsFor: s.throwsFor,
     events: eventsOn(currentPlans().events).map(({ id, title, kind, factor, end, games }) => ({ id, title, kind, factor, end, games })),
   };
 }

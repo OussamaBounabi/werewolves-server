@@ -277,11 +277,14 @@ export type Settings = {
   imposterAdd: ExtraWord[];
   mysteryOff: string[]; // Mystery Item's things taken out
   throwPrices: Record<Throwable, number>; // coins for each thing thrown at a player's avatar (throws.ts)
+  throwsFor: ThrowsFor; // who may throw
 };
 
 /** What a player can throw at another's avatar, in any room (the apps have their pictures under these names). */
 export const THROWS = ["egg", "tomato", "heart", "rose", "bomb", "knife", "slipper", "kiss", "pie"] as const;
 export type Throwable = (typeof THROWS)[number];
+/** Who may throw: everyone, VIPs (VIP Pro too), or VIP Pro only (at first). */
+export type ThrowsFor = "all" | "vip" | "pro";
 const THROW_PRICES: Record<Throwable, number> = { egg: 5, tomato: 5, heart: 5, slipper: 5, kiss: 5, rose: 10, pie: 10, bomb: 15, knife: 15 };
 
 export const SETTINGS: Settings = {
@@ -298,6 +301,7 @@ export const SETTINGS: Settings = {
   imposterAdd: [],
   mysteryOff: [],
   throwPrices: THROW_PRICES,
+  throwsFor: "pro",
 };
 
 /** The settings in force: the owner's, the usual for anything he left out. */
@@ -380,6 +384,7 @@ export function cleanSettings(v: any, saved: Partial<Settings> | null): Partial<
     }),
   );
   set("mysteryOff", (o) => ids(o, /^[a-z0-9-]{1,60}$/));
+  set("throwsFor", (v) => (["all", "vip", "pro"].includes(v) ? v : "pro"));
   set("throwPrices", (p) => Object.fromEntries(THROWS.map((t) => [t, int(p?.[t] ?? THROW_PRICES[t], 0, 100_000)])) as Settings["throwPrices"]);
   return out;
 }

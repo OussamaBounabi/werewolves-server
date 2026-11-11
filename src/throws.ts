@@ -1,10 +1,11 @@
-import { accountsEnabled, db, forPlayer, ledger, maybe, settings } from "./accounts.js";
-import { THROWS, type Throwable } from "./plans.js";
+import { accountsEnabled, db, forPlayer, ledger, maybe, settings, type Account } from "./accounts.js";
+import { THROWS, type Throwable, type ThrowsFor } from "./plans.js";
 
 /**
  * Throwing something at another player's avatar, in any room (an egg, a tomato, a rose, a bomb…): every throw costs
- * coins (the owner's prices, settings.throwPrices), one every 3 seconds at most. The room checks who throws at whom
- * and tells the table; this takes the coins.
+ * coins (the owner's prices, settings.throwPrices), one every 3 seconds at most, by those the owner lets
+ * (settings.throwsFor: everyone, VIPs, or VIP Pro only). The room checks who throws at whom and tells the table; this
+ * takes the coins.
  */
 const GAP_MS = 3_000;
 
@@ -24,16 +25,23 @@ export const throwWallet = {
     }),
 };
 
+/** Why [account] may not throw when [level] may: "throw_vip" | "throw_pro", or null. */
+export const throwLocked = (level: ThrowsFor, account: Pick<Account, "vip" | "vipPro"> | undefined) =>
+  level === "pro" && !account?.vipPro ? "throw_pro" : level === "vip" && !account?.vip && !account?.vipPro ? "throw_vip" : null;
+
 /** One room's throws: when each player last threw. */
 export class Throws {
   private last = new Map<string, number>();
 
-  /** Why [from] (his account [uid]) can't throw [item] now, or null once he has paid for it. */
-  async pay(from: string, uid: string | undefined, item: unknown): Promise<string | null> {
+  /** Why [from] (his [account]) can't throw [item] now, or null once he has paid for it. */
+  async pay(from: string, account: Account | undefined, item: unknown): Promise<string | null> {
     if (typeof item !== "string" || !(THROWS as readonly string[]).includes(item)) return "throw_unknown";
     const now = Date.now();
     if (now - (this.last.get(from) ?? 0) < GAP_MS) return "throw_wait";
+    const uid = account?.uid;
     if (accountsEnabled && !uid) return "throw_guest";
+    const locked = accountsEnabled ? throwLocked(settings().throwsFor, account) : null; // (no accounts: the tests)
+    if (locked) return locked;
     this.last.set(from, now); // (before the wait for his coins: two quick taps don't both go)
     const price = settings().throwPrices[item as Throwable] ?? 0;
     if (!accountsEnabled || price <= 0) return null; // (no accounts: the tests and local servers)
