@@ -541,18 +541,16 @@ export class UnoRoom extends Room<{ metadata: Meta }> {
   private startTurn(id: string, extraMs = 0) {
     this.turn = id;
     this.drew = null;
-    this.turnEndsAt = Date.now() + extraMs + this.turnSeconds * 1000;
     this.timer?.clear();
     this.botTimer?.clear();
-    this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), extraMs + this.turnSeconds * 1000);
-    // Stacking: a stack waits for him and he has nothing to put on it (nor a lone +4 to challenge): he draws it.
-    const stuck = this.stacking && this.pending > 0 && !this.d4;
-    if (stuck && !this.hands.get(id)!.some((c) => canPlay(c, this.top, this.color, this.pending))) {
-      this.turnEndsAt = Date.now() + extraMs + AUTO_DRAW_MS;
-      this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), extraMs + AUTO_DRAW_MS);
-      return;
-    }
-    if (this.seat(id)?.bot) this.botTurn(id, extraMs);
+    // Stacking: a stack waits for him and he has nothing to put on it (nor a lone +4 to challenge): he draws it, his
+    // turn shown a moment. (One timer a turn: a second one, left running, ran out the next player's turn early.)
+    const stuck = this.stacking && this.pending > 0 && !this.d4 &&
+      !this.hands.get(id)!.some((c) => canPlay(c, this.top, this.color, this.pending));
+    const ms = extraMs + (stuck ? AUTO_DRAW_MS : this.turnSeconds * 1000);
+    this.turnEndsAt = Date.now() + ms;
+    this.timer = this.clock.setTimeout(() => (this.timeOut(), this.sync()), ms);
+    if (!stuck && this.seat(id)?.bot) this.botTurn(id, extraMs);
   }
 
   /** [steps] seats on from [id], the way play goes. */

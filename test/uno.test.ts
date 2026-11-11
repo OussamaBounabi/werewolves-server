@@ -388,6 +388,23 @@ describe("UnoRoom", () => {
     await host.leave();
   });
 
+  it("a stack drawn at once leaves the next player his whole turn (no card drawn for him early)", async function () {
+    this.timeout(30_000);
+    const { room, host } = await started(2, { stacking: true, turnSeconds: 10 });
+    const [me, a, b] = room.seats.map((s: any) => s.id);
+    while (room.turn === "") await wait(5);
+    rig(room, me, ["r-draw2", "b-1", "b-2"], "r-9");
+    room.hands.set(a, ["g-1", "y-2"]); // (nothing to stack)
+    room.handlePlay(me, "r-draw2");
+    while (room.turn === a) await wait(10);
+    room.botTimer?.clear(); // (b, a bot, waits)
+    const [turnAt, cards] = [Date.now(), room.hands.get(b).length];
+    assert.strictEqual(room.turn, b);
+    await wait(9_000); // (past a's own 10 s from his turn's start)
+    assert.deepStrictEqual([room.turn, room.hands.get(b).length], [b, cards], `b's turn after ${Date.now() - turnAt} ms`);
+    await host.leave();
+  });
+
   it("a drawn card that goes may be played (only it); one that doesn't ends the turn", async () => {
     const { room, host } = await started(1);
     const [me, bot] = room.seats.map((s: any) => s.id);
