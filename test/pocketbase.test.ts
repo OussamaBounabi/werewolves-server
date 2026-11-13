@@ -16,6 +16,11 @@ import { avatarIds, frameIds } from "../src/avatars.js";
 import { dayKey, weekKey } from "../src/missions.js";
 import { cleanEvents, cleanMissionPlan, cleanSettings, cleanStorePlan, cleanTiers } from "../src/plans.js";
 import { appClosed, appOpened, enterRoom, leaveRoom, presenceSaved } from "../src/presence.js";
+import { vanishChats } from "../src/chat.js";
+import * as groups from "../src/groups.js";
+import * as flames from "../src/flames.js";
+import * as stories from "../src/stories.js";
+import * as calls from "../src/calls.js";
 import { kickFromApp } from "../src/rooms/PresenceRoom.js";
 import { importFirebase, type FirebaseExport } from "../scripts/firebaseImport.js";
 
@@ -71,8 +76,13 @@ describe("PocketBase", function () {
     accounts.connectAccounts(URL_, SUPERUSER.email, SUPERUSER.password, firebase);
   });
 
-  after(() => {
-    server?.kill();
+  after(async () => {
+    // Gone before its folder is: on Windows a running PocketBase keeps its files.
+    if (server && server.exitCode === null) {
+      const gone = new Promise((done) => server!.once("exit", done));
+      server.kill();
+      await gone;
+    }
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -775,7 +785,8 @@ describe("PocketBase", function () {
       // The conversation list: one request.
       const list = async (p: Player) => (await p.pb.collection("conversations").getFullList({ filter: 'updatedAt != ""', sort: "-updatedAt" }));
       let [forB] = await list(b);
-      assert.deepStrictEqual([forB.friend, forB.lastFrom, forB.lastType, forB.lastMessage, forB.unread, forB.seen], [a.id, a.id, "voice", "🎤 Voice message (0:03)", 3, false]);
+      // (The invite is left out: the app shows invitations in its requests box.)
+      assert.deepStrictEqual([forB.friend, forB.lastFrom, forB.lastType, forB.lastMessage, forB.unread, forB.seen], [a.id, a.id, "voice", "🎤 Voice message (0:03)", 2, false]);
       assert.deepStrictEqual((await list(a)).map((r) => [r.friend, r.unread, r.seen]), [[b.id, 2, false]]);
       assert.strictEqual((await list(c)).length, 0);
       // B reads: his unread count drops, A sees "seen". Readable by the friend, not by anyone else.
@@ -823,6 +834,381 @@ describe("PocketBase", function () {
       assert.deepStrictEqual([reacted.fromReaction, reacted.toReaction, reacted.text], ["😆", "", "hi again"]);
       // A reply names the message it answers.
       assert.strictEqual((await send(b, a, { text: "hey", replyTo: hi.id })).replyTo, hi.id);
+    });
+
+    it("pins and mutes a conversation for oneself only; invitations stay out of its last line and unread count", async () => {
+      const a = await player();
+      const b = await player();
+      await befriend(a, b);
+      await a.pb.collection("messages").create({ from: a.id, to: b.id, text: "hi" });
+      await a.pb.collection("messages").create({ from: a.id, to: b.id, type: "invite", text: "join me", roomId: "R", roomHost: "A" });
+      const row = async (p: Player) => (await p.pb.collection("conversations").getFullList())[0];
+      let forB = await row(b);
+      assert.deepStrictEqual([forB.lastMessage, forB.lastType, forB.unread, forB.pinned, forB.muted], ["hi", "", 1, false, false]);
+      const prefs = await b.pb.collection("chat_prefs").create({ user: b.id, friend: a.id, pinned: true, muted: true });
+      forB = await row(b);
+      assert.deepStrictEqual([forB.pinned, forB.muted, (await row(a)).pinned], [true, true, false]);
+      // His own: his friend can't read, change or make them for him.
+      await refused(a.pb.collection("chat_prefs").getOne(prefs.id));
+      await refused(a.pb.collection("chat_prefs").update(prefs.id, { muted: false }));
+      await refused(a.pb.collection("chat_prefs").create({ user: b.id, friend: a.id }));
+      await refused(b.pb.collection("chat_prefs").update(prefs.id, { friend: b.id }));
+      await refused(b.pb.collection("chat_prefs").create({ user: b.id, friend: a.id })); // one per conversation
+      await b.pb.collection("chat_prefs").update(prefs.id, { muted: false });
+      assert.strictEqual((await row(b)).muted, false);
+    });
+
+    it("message requests: a VIP Pro writes to a non-friend; accepted, they chat (not friends); deleted or blocked, no more", async () => {
+      const [pro, b, c, d] = [await player(), await player(), await player(), await player()];
+      await accounts.grantVip(pro.id, "pro", 30);
+      const ask = (from: Player, to: Player, fields: Record<string, unknown> = {}) =>
+        from.pb.collection("message_requests").create({ from: from.id, to: to.id, text: "salut!", ...fields });
+      const send = (from: Player, to: Player) => from.pb.collection("messages").create({ from: from.id, to: to.id, text: "hi" });
+      const rows = async (p: Player) => (await p.pb.collection("conversations").getFullList()).map((r) => [r.friend, r.request]);
+      await refused(ask(b, c)); // not VIP Pro
+      await refused(send(b, c));
+      await refused(ask(pro, b, { state: "accepted" })); // only b answers it
+      await refused(ask(pro, b, { from: c.id }));
+      await refused(send(pro, b)); // the request first
+      const q = await ask(pro, b);
+      await refused(ask(pro, b)); // one a pair
+      await send(pro, b);
+      await send(pro, b);
+      assert.deepStrictEqual([await rows(pro), await rows(b)], [[[b.id, "sent"]], []]); // b: in his requests box only
+      assert.strictEqual((await b.pb.collection("message_requests").getFullList({ filter: 'state = ""' }))[0].text, "salut!");
+      await refused(send(b, pro)); // not before accepting
+      await refused(pro.pb.collection("message_requests").update(q.id, { state: "accepted" })); // not his to answer
+      await refused(c.pb.collection("message_requests").getOne(q.id));
+      await b.pb.collection("message_requests").update(q.id, { state: "accepted" });
+      await refused(b.pb.collection("message_requests").update(q.id, { state: "deleted" })); // once
+      await send(b, pro);
+      await b.pb.collection("chat_reads").create({ user: b.id, friend: pro.id });
+      assert.deepStrictEqual([await rows(pro), await rows(b)], [[[b.id, "accepted"]], [[pro.id, "accepted"]]]);
+      assert.strictEqual((await b.pb.collection("conversations").getFullList())[0].unread, 0);
+      // Accepted: not friends (a friend request is still needed).
+      assert.strictEqual((await b.pb.collection("friends").getFullList()).length, 0);
+      // Deleted: nothing more from him. Blocked: nothing either way.
+      const q2 = await ask(pro, c);
+      await c.pb.collection("message_requests").update(q2.id, { state: "deleted" });
+      await refused(send(pro, c));
+      await b.pb.collection("blocks").create({ user: b.id, blocked: pro.id });
+      await refused(send(pro, b));
+      await refused(send(b, pro));
+      await ask(pro, d);
+      await d.pb.collection("blocks").create({ user: d.id, blocked: pro.id }); // blocked while waiting
+      await refused(send(pro, d));
+      // Friends later: one conversation, the friends' one.
+      await befriend(pro, c);
+      assert.deepStrictEqual((await rows(c)).map((r) => r[1]), [""]);
+    });
+
+    it("disappearing chats: seen ones go 24 h later unless saved or kept; either player switches it, with a line", async () => {
+      const [a, b] = [await player(), await player()];
+      await befriend(a, b);
+      const send = (fields: Record<string, unknown> = {}) => a.pb.collection("messages").create({ from: a.id, to: b.id, text: "hi", ...fields });
+      const [seen, saved] = [await send(), await send(), await send()];
+      await refused(send({ saved: true })); // saved by holding it, afterwards
+      await refused(send({ seenAt: new Date().toISOString() }));
+      await b.pb.collection("messages").update(saved.id, { saved: true }); // either player
+      await refused(b.pb.collection("messages").update(saved.id, { saved: false, text: "edited" }));
+      await refused(b.pb.collection("messages").update(saved.id, { seenAt: "" }));
+      const read = await b.pb.collection("chat_reads").create({ user: b.id, friend: a.id });
+      const unseenLater = await send(); // after b's read
+      const t0 = Date.now();
+      await vanishChats(t0); // marks what b has read as seen now
+      const seenAt = (await admin.collection("messages").getOne(seen.id)).seenAt;
+      assert.ok(seenAt, "seen");
+      assert.strictEqual((await admin.collection("messages").getOne(unseenLater.id)).seenAt, "");
+      await vanishChats(t0 + 23 * 3_600_000); // not a day yet
+      assert.strictEqual((await a.pb.collection("messages").getFullList()).length, 4);
+      await vanishChats(t0 + 25 * 3_600_000);
+      assert.deepStrictEqual((await a.pb.collection("messages").getFullList({ sort: "created" })).map((m) => m.id), [saved.id, unseenLater.id]);
+      // Keep: one row a pair (the smaller id first), either player switches it; a line says so (not unread, not last).
+      const [one, two] = [a.id, b.id].sort();
+      await refused(a.pb.collection("chat_modes").create({ user1: two, user2: one, keep: true }));
+      const mode = await a.pb.collection("chat_modes").create({ user1: one, user2: two, keep: true });
+      await refused(a.pb.collection("chat_modes").create({ user1: one, user2: two, keep: false }));
+      await a.pb.collection("messages").create({ from: a.id, to: b.id, type: "vanish_off", text: "Chats are kept" });
+      const forB = (await b.pb.collection("conversations").getFullList())[0];
+      assert.deepStrictEqual([forB.keep, forB.lastType, forB.unread], [true, "", 1]);
+      const later = await send();
+      await b.pb.collection("chat_reads").update(read.id, {});
+      await vanishChats(Date.now());
+      await vanishChats(Date.now() + 25 * 3_600_000);
+      assert.ok((await a.pb.collection("messages").getFullList()).some((m) => m.id === later.id), "kept");
+      await b.pb.collection("chat_modes").update(mode.id, { keep: false });
+      await refused(b.pb.collection("chat_modes").update(mode.id, { user1: b.id }));
+      await vanishChats(Date.now() + 25 * 3_600_000);
+      assert.ok(!(await a.pb.collection("messages").getFullList()).some((m) => m.id === later.id), "gone once switched");
+    });
+
+    it("groups: made with friends (invited, they answer), chatted in, run by admins; the last admin out hands over", async () => {
+      const [a, b, c, d, e] = [await player(), await player(), await player(), await player(), await player()];
+      await befriend(a, b);
+      await befriend(a, c);
+      await befriend(b, e);
+      await assert.rejects(groups.createGroup(a.idToken, { name: "Squad", members: [b.id, d.id] }), /not a friend/);
+      await assert.rejects(groups.createGroup(a.idToken, { name: " ", members: [b.id] }), /invalid/);
+      const { id } = await groups.createGroup(a.idToken, { name: "Squad", emoji: "🐺", color: 3, members: [b.id, c.id] });
+      const row = async (p: Player) => (await p.pb.collection("group_chats").getFullList())[0];
+      assert.deepStrictEqual([(await row(b)).name, (await row(b)).invited, (await row(a)).admin], ["Squad", true, true]);
+      const say = (p: Player, text = "hi") => p.pb.collection("group_messages").create({ group: id, from: p.id, type: "text", text });
+      await refused(say(b)); // invited: not yet
+      await refused(say(d)); // not in it
+      assert.strictEqual((await b.pb.collection("group_messages").getFullList()).length, 0);
+      const mineOf = async (p: Player) => (await p.pb.collection("group_members").getFullList({ filter: `user = "${p.id}"` }))[0];
+      await refused(b.pb.collection("group_members").update((await mineOf(b)).id, { admin: true }));
+      await refused(b.pb.collection("group_members").update((await mineOf(c)).id, { invited: false })); // not his
+      await b.pb.collection("group_members").update((await mineOf(b)).id, { invited: false }); // yes
+      await c.pb.collection("group_members").delete((await mineOf(c)).id); // no
+      await refused(a.pb.collection("group_members").delete((await mineOf(a)).id)); // leaving goes through the server
+      const hi = await say(a);
+      await say(b, "yo");
+      await refused(b.pb.collection("group_messages").create({ group: id, from: b.id, type: "system", text: "x" }));
+      await refused(b.pb.collection("group_messages").update(hi.id, { text: "edited" }));
+      assert.deepStrictEqual([(await row(b)).unread, (await row(b)).lastMessage, (await row(b)).members], [1, "yo", 2]);
+      await b.pb.collection("group_members").update((await mineOf(b)).id, { readAt: new Date().toISOString(), muted: true });
+      assert.deepStrictEqual([(await row(b)).unread, (await row(b)).muted], [0, true]);
+      await groups.reactGroupLine(b.idToken, hi.id, "❤️");
+      await groups.saveGroupLine(b.idToken, hi.id, true);
+      const got = await a.pb.collection("group_messages").getOne(hi.id);
+      assert.deepStrictEqual([got.reactions, got.saved], [{ [b.id]: "❤️" }, true]);
+      // A member adds his friends (invited); only an admin removes, renames, switches keep, names admins.
+      await assert.rejects(groups.addToGroup(b.idToken, id, [c.id]), /not a friend/); // a's friend, not b's
+      await groups.addToGroup(b.idToken, id, [e.id]);
+      await assert.rejects(groups.removeFromGroup(b.idToken, id, e.id), /not allowed/);
+      await assert.rejects(groups.editGroup(b.idToken, id, { name: "Mine" }), /not allowed/);
+      await groups.removeFromGroup(a.idToken, id, e.id);
+      await groups.editGroup(a.idToken, id, { name: "Night owls", emoji: "🦉", color: 5 });
+      // Vanishing: 24 h after sent unless saved; a group that keeps them keeps them.
+      const old = await say(a, "old");
+      await vanishChats(Date.now() + 25 * 3_600_000);
+      let left = (await a.pb.collection("group_messages").getFullList()).map((m) => m.id);
+      assert.ok(left.includes(hi.id) && !left.includes(old.id), "saved stays, the rest goes");
+      await groups.keepGroup(a.idToken, id, true);
+      const kept = await say(a, "kept");
+      await vanishChats(Date.now() + 25 * 3_600_000);
+      left = (await a.pb.collection("group_messages").getFullList()).map((m) => m.id);
+      assert.ok(left.includes(kept.id), "kept");
+      // The last admin out: the member there the longest becomes admin; the last one out ends the group.
+      await groups.leaveGroup(a.idToken, id);
+      assert.strictEqual((await mineOf(b)).admin, true);
+      await groups.leaveGroup(b.idToken, id);
+      await assert.rejects(admin.collection("groups").getOne(id));
+    });
+
+    it("flames: to friends and a group, seen twice then gone; unopened, gone in a day; streaks, lost and restored", async () => {
+      const [a, b, c, d] = [await player(), await player(), await player(), await player()];
+      await befriend(a, b);
+      await befriend(a, c);
+      await befriend(b, c);
+      const { id: group } = await groups.createGroup(a.idToken, { name: "Squad", members: [b.id, c.id] });
+      for (const p of [b, c]) {
+        const row = (await p.pb.collection("group_members").getFullList({ filter: `user = "${p.id}"` }))[0];
+        await p.pb.collection("group_members").update(row.id, { invited: false });
+      }
+      const jpeg = () => new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(500).fill(0)])], "f.jpg", { type: "image/jpeg" });
+      const upload = (p: Player) => p.pb.collection("flame_media").create({ from: p.id, media: jpeg(), kind: "photo", overlay: { caption: "hi" } });
+      await refused(b.pb.collection("flame_media").create({ from: a.id, media: jpeg(), kind: "photo" })); // as someone else
+      const media = await upload(a);
+      await refused(a.pb.collection("messages").create({ from: a.id, to: b.id, type: "flame", text: "🔥", flame: media.id }));
+      await assert.rejects(flames.sendFlame(b.idToken, { media: media.id, to: [a.id] }), /invalid/); // not his
+      await flames.sendFlame(a.idToken, { media: media.id, to: [b.id, d.id], groups: [group], text: "Flame" });
+      const toB = (await b.pb.collection("messages").getFullList({ filter: 'type = "flame"' }))[0];
+      assert.deepStrictEqual([toB.text, toB.views, toB.flame], ["🔥 Flame", 0, media.id]);
+      assert.strictEqual((await d.pb.collection("messages").getFullList()).length, 0); // not his friend: nothing sent
+      await b.pb.collection("flame_media").getOne(media.id); // his to see
+      await refused(d.pb.collection("flame_media").getOne(media.id));
+      await refused(b.pb.collection("messages").update(toB.id, { views: 0 })); // only through the server
+      assert.deepStrictEqual([(await flames.viewFlame(b.idToken, { message: toB.id })).views, (await flames.viewFlame(b.idToken, { message: toB.id })).views], [1, 2]);
+      await assert.rejects(flames.viewFlame(b.idToken, { message: toB.id }), /gone/);
+      await assert.rejects(flames.viewFlame(c.idToken, { message: toB.id }), /invalid/); // not his
+      // The group's copy: each member twice; then the media is gone for everyone.
+      const line = (await c.pb.collection("group_messages").getFullList({ filter: 'type = "flame"' }))[0];
+      for (const p of [b, b, c]) await flames.viewFlame(p.idToken, { line: line.id });
+      await admin.collection("flame_media").getOne(media.id); // c's replay still to come
+      await flames.viewFlame(c.idToken, { line: line.id });
+      await assert.rejects(admin.collection("flame_media").getOne(media.id));
+      assert.strictEqual((await b.pb.collection("messages").getOne(toB.id)).flame, ""); // its message: gone
+      // A screenshot tried: a line to its sender (and in a group).
+      await b.pb.collection("messages").create({ from: b.id, to: a.id, type: "screenshot", text: "📵" });
+      await c.pb.collection("group_messages").create({ group, from: c.id, type: "screenshot", text: "📵" });
+      // Unopened in a day: gone.
+      const unopened = await upload(a);
+      await flames.sendFlame(a.idToken, { media: unopened.id, to: [c.id] });
+      await flames.dropOldFlames(Date.now() + 25 * 3_600_000);
+      await assert.rejects(admin.collection("flame_media").getOne(unopened.id));
+      // Streaks: a day both sent one adds a day; the next day too; a day missed: lost, then restored for diamonds.
+      const [u1, u2] = [a.id, b.id].sort();
+      const streak = async () => (await a.pb.collection("streaks").getFullList({ filter: `user1 = "${u1}" && user2 = "${u2}"` }))[0];
+      assert.strictEqual((await streak()).count, 0); // a sent, b not yet
+      const client = admin;
+      await flames.flameSent(client, b.id, a.id);
+      assert.strictEqual((await streak()).count, 1);
+      const tomorrow = Date.now() + 86_400_000;
+      await flames.flameSent(client, a.id, b.id, tomorrow);
+      await flames.flameSent(client, b.id, a.id, tomorrow);
+      assert.strictEqual((await streak()).count, 2);
+      await refused(a.pb.collection("streaks").update((await streak()).id, { count: 99 }));
+      const twoDaysAgo = new Date(Date.now() + 3_600_000 - 2 * 86_400_000).toISOString().slice(0, 10);
+      await admin.collection("streaks").update((await streak()).id, { lastDay: twoDaysAgo }); // yesterday missed
+      await assert.rejects(flames.restoreStreak(b.idToken, a.id), /funds|invalid/);
+      await admin.collection("users").update(b.id, { diamonds: 60 });
+      const back = await flames.restoreStreak(b.idToken, a.id);
+      assert.deepStrictEqual([back.count, back.free, (await user(b.id)).diamonds], [2, false, 10]);
+      await assert.rejects(flames.restoreStreak(b.idToken, a.id), /invalid/); // nothing lost now
+    });
+
+    it("stories: friends see them but the hidden; seen by and reactions for their owner; notes; game moments; a day", async () => {
+      const [a, b, c, d] = [await player(), await player(), await player(), await player()];
+      await befriend(a, b);
+      await befriend(a, c);
+      const jpeg = () => new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(500).fill(0)])], "s.jpg", { type: "image/jpeg" });
+      await refused(a.pb.collection("stories").create({ user: a.id, kind: "game", data: { won: true } })); // the server's
+      await refused(a.pb.collection("stories").create({ user: a.id, kind: "photo" })); // no picture
+      await refused(a.pb.collection("stories").create({ user: a.id, kind: "text", text: "" }));
+      await refused(b.pb.collection("stories").create({ user: a.id, kind: "text", text: "hi" })); // as someone else
+      await a.pb.collection("story_hides").create({ user: a.id, hidden: c.id });
+      assert.strictEqual((await c.pb.collection("story_hides").getFullList()).length, 0); // a's list is his own
+      const s1 = await a.pb.collection("stories").create({ user: a.id, kind: "photo", media: jpeg(), overlay: { caption: "gg" }, hidden: [c.id] });
+      const s2 = await a.pb.collection("stories").create({ user: a.id, kind: "text", text: "UNO tonight?", color: 2 });
+      const seen = async (p: Player) => (await p.pb.collection("stories").getFullList({ filter: `user = "${a.id}"` })).map((s) => s.id).sort();
+      assert.deepStrictEqual(await seen(b), [s1.id, s2.id].sort());
+      assert.deepStrictEqual(await seen(c), [s2.id]); // hidden from the first
+      assert.deepStrictEqual(await seen(d), []); // not a friend
+      await refused(c.pb.collection("story_views").create({ story: s1.id, user: c.id }));
+      await refused(d.pb.collection("story_views").create({ story: s2.id, user: d.id }));
+      await refused(a.pb.collection("story_views").create({ story: s2.id, user: a.id })); // my own
+      const view = await b.pb.collection("story_views").create({ story: s1.id, user: b.id });
+      await b.pb.collection("story_views").update(view.id, { reaction: "❤️" });
+      await refused(b.pb.collection("story_views").update(view.id, { story: s2.id }));
+      const views = await a.pb.collection("story_views").getFullList({ filter: `story = "${s1.id}"` });
+      assert.deepStrictEqual(views.map((v) => [v.user, v.reaction]), [[b.id, "❤️"]]);
+      assert.strictEqual((await c.pb.collection("story_views").getFullList()).length, 0);
+      await refused(b.pb.collection("stories").update(s1.id, { hidden: [] })); // not his
+      await refused(a.pb.collection("stories").update(s1.id, { text: "x" })); // only who it's hidden from changes
+      await a.pb.collection("stories").update(s1.id, { hidden: [] }); // shown to c after all
+      assert.deepStrictEqual(await seen(c), [s1.id, s2.id].sort());
+      await b.pb.collection("messages").create({ from: b.id, to: a.id, type: "story", text: "nice!" }); // a reply
+      // Notes: friends read them.
+      await a.pb.collection("notes").create({ user: a.id, text: "Werewolf at 9? 🐺" });
+      await refused(b.pb.collection("notes").create({ user: a.id, text: "x" }));
+      assert.deepStrictEqual((await b.pb.collection("notes").getFullList()).map((n) => n.text), ["Werewolf at 9? 🐺"]);
+      assert.strictEqual((await d.pb.collection("notes").getFullList()).length, 0);
+      // A game moment: from the game's log only, hidden as the rest.
+      const log = await admin.collection("game_log").create({
+        game: "uno", minutes: 12, players: [{ uid: a.id, name: "A", won: true }, { uid: b.id, name: "B", won: false }], uids: `${a.id} ${b.id}`,
+      });
+      const { games } = await stories.myMoments(a.idToken);
+      assert.deepStrictEqual(games.map((g) => [g.id, g.game, g.won, g.players]), [[log.id, "uno", true, 2]]);
+      await assert.rejects(stories.shareMoment(d.idToken, log.id), /invalid/);
+      const { id } = await stories.shareMoment(a.idToken, log.id);
+      assert.deepStrictEqual((await b.pb.collection("stories").getOne(id)).data, { game: "uno", won: true, role: "", minutes: 12, players: 2 });
+      await assert.rejects(c.pb.collection("stories").getOne(id));
+      // A day later: gone.
+      await stories.dropOldStories(Date.now() + 25 * 3_600_000);
+      assert.strictEqual((await admin.collection("stories").getFullList({ filter: `user = "${a.id}"` })).length, 0);
+      assert.strictEqual((await admin.collection("notes").getFullList({ filter: `user = "${a.id}"` })).length, 0);
+    });
+
+    it("calls: ring a friend, answer, hang up (a line in our chat); declined, cancelled, missed, busy; throws", async () => {
+      const [a, b, c, d] = [await player(), await player(), await player(), await player()];
+      await befriend(a, b);
+      await befriend(a, c);
+      const callLines = async (p: Player, other: Player) =>
+        (await p.pb.collection("messages").getFullList({ filter: `type = "call" && (from = "${other.id}" || to = "${other.id}")`, sort: "created" }))
+          .map((m) => m.text);
+      await assert.rejects(calls.startCall(a.idToken, { to: d.id }), /invalid/); // not a friend
+      const { id } = await calls.startCall(a.idToken, { to: b.id, video: true });
+      assert.deepStrictEqual([(await b.pb.collection("calls").getOne(id)).state, (await b.pb.collection("calls").getOne(id)).video], ["ringing", true]);
+      await refused(c.pb.collection("calls").getOne(id)); // not his
+      await refused(b.pb.collection("calls").update(id, { state: "active" })); // the server's
+      await assert.rejects(calls.startCall(a.idToken, { to: c.id }), /busy_me/); // one call at a time
+      assert.deepStrictEqual(await calls.startCall(c.idToken, { to: a.id }).then((r) => r.busy), true); // a is busy
+      assert.deepStrictEqual(await callLines(a, c), ["📞"]); // c's call: missed
+      await assert.rejects(calls.answerCall(a.idToken, id), /invalid/); // not the caller's to answer
+      await calls.answerCall(b.idToken, id);
+      await assert.rejects(calls.answerCall(b.idToken, id), /gone/);
+      assert.strictEqual((await a.pb.collection("calls").getOne(id)).state, "active");
+      await refused(a.pb.collection("messages").create({ from: a.id, to: b.id, type: "call", text: "📞 99 min" }));
+      // A throw: VIP Pro (the owner's default), and its coins.
+      await assert.rejects(calls.throwInCall(a.idToken, { id, item: "egg" }), /throw_pro/);
+      await admin.collection("users").update(a.id, { vipPro: true, coins: 500 });
+      await calls.throwInCall(a.idToken, { id, item: "egg" });
+      assert.ok((await user(a.id)).coins < 500);
+      await calls.endCall(b.idToken, id);
+      const done = await a.pb.collection("calls").getOne(id);
+      assert.deepStrictEqual([done.state, done.outcome], ["ended", "answered"]);
+      await assert.rejects(calls.throwInCall(a.idToken, { id, item: "egg" }), /invalid/); // over
+      // Declined, cancelled, missed: the icon alone.
+      const declined = await calls.startCall(a.idToken, { to: b.id });
+      await calls.endCall(b.idToken, declined.id);
+      const cancelled = await calls.startCall(a.idToken, { to: b.id });
+      await calls.endCall(a.idToken, cancelled.id);
+      const missed = await calls.startCall(a.idToken, { to: b.id });
+      await calls.endStaleCalls(Date.now() + calls.RING_MS + 20_000);
+      const outcomes = await Promise.all([declined.id, cancelled.id, missed.id].map((x) => b.pb.collection("calls").getOne(x)));
+      assert.deepStrictEqual(outcomes.map((o) => o.outcome), ["declined", "cancelled", "missed"]);
+      assert.deepStrictEqual(await callLines(b, a), ["📹 1 min", "📞", "📞", "📞"]);
+    });
+
+    it("calls with more people: a group's rings its members; people added; a clan's stage and hands", async () => {
+      const [a, b, c, d, e] = [await player(), await player(), await player(), await player(), await player()];
+      for (const [x, y] of [[a, b], [a, c], [b, c], [a, e]] as [Player, Player][]) await befriend(x, y);
+      const { id: group } = await groups.createGroup(a.idToken, { name: "Squad", members: [b.id, c.id] });
+      for (const p of [b, c]) {
+        const row = (await p.pb.collection("group_members").getFullList({ filter: `user = "${p.id}"` }))[0];
+        await p.pb.collection("group_members").update(row.id, { invited: false });
+      }
+      const states = async (p: Player, call: string) =>
+        Object.fromEntries((await p.pb.collection("call_people").getFullList({ filter: `call = "${call}"` })).map((r) => [r.user, r.state]));
+      // A group's call: it rings b and c; b joins; c starting one joins the same.
+      const { id } = await calls.startGroupCall(a.idToken, { group });
+      assert.deepStrictEqual(await states(b, id), { [a.id]: "in", [b.id]: "ringing", [c.id]: "ringing" });
+      await refused(d.pb.collection("calls").getOne(id)); // not his group
+      await assert.rejects(calls.joinCall(d.idToken, id), /invalid/);
+      await calls.joinCall(b.idToken, id);
+      assert.strictEqual((await calls.startGroupCall(c.idToken, { group })).id, id);
+      await calls.endCall(a.idToken, id); // a leaves: b and c talk on
+      assert.strictEqual((await b.pb.collection("calls").getOne(id)).state, "active");
+      await calls.endCall(b.idToken, id);
+      await calls.endCall(c.idToken, id); // the last one out
+      assert.strictEqual((await b.pb.collection("calls").getOne(id)).state, "ended");
+      const lines = await c.pb.collection("group_messages").getFullList({ filter: `group = "${group}" && type = "system"` });
+      assert.strictEqual(lines.some((l) => l.data?.kind === "call"), true);
+      // Two friends, then a third added: one hanging up leaves the other two talking.
+      const duo = await calls.startCall(a.idToken, { to: e.id });
+      await calls.answerCall(e.idToken, duo.id);
+      await assert.rejects(calls.addToCall(a.idToken, { id: duo.id, users: [d.id] }), /invalid/); // not his friend
+      await calls.addToCall(a.idToken, { id: duo.id, users: [b.id] });
+      await calls.joinCall(b.idToken, duo.id);
+      await calls.endCall(e.idToken, duo.id);
+      assert.strictEqual((await a.pb.collection("calls").getOne(duo.id)).state, "active");
+      await calls.endCall(a.idToken, duo.id); // b alone: over
+      assert.strictEqual((await b.pb.collection("calls").getOne(duo.id)).state, "ended");
+      // A clan's call: an elder or above starts it; members join to listen once 8 talk; hands; the stage.
+      await admin.collection("users").update(a.id, { xp: 1_000_000, diamonds: 500 });
+      for (const p of [b, c]) await admin.collection("users").update(p.id, { xp: 1_000_000 });
+      const look = { name: `Call ${a.id.slice(-6)}`, tag: `C${a.id.slice(-3)}`, motto: "", shape: "shield", color: 0, join: "open", minLevel: 1 };
+      const { id: clan } = await clans.createClan(a.idToken, look);
+      await clans.joinClan(b.idToken, clan);
+      await clans.joinClan(c.idToken, clan);
+      await assert.rejects(calls.startClanCall(b.idToken, {}), /rank/); // a member
+      const clanCall = await calls.startClanCall(a.idToken, {});
+      assert.strictEqual(clanCall.talk, true);
+      assert.strictEqual((await b.pb.collection("calls").getOne(clanCall.id)).clan, clan); // every member sees it
+      await refused(d.pb.collection("calls").getOne(clanCall.id));
+      const joined = await calls.joinCall(b.idToken, clanCall.id);
+      assert.strictEqual(joined.talk, true); // (room on the stage)
+      await calls.setStage(a.idToken, { id: clanCall.id, user: b.id, talk: false }); // down to listen
+      await calls.raiseHand(b.idToken, { id: clanCall.id, up: true });
+      const bRow = async () => (await c.pb.collection("call_people").getFullList({ filter: `call = "${clanCall.id}" && user = "${b.id}"` }))[0];
+      assert.deepStrictEqual([(await bRow()).talk, (await bRow()).hand], [false, true]);
+      await assert.rejects(calls.setStage(b.idToken, { id: clanCall.id, user: b.id, talk: true }), /invalid/); // not his to do
+      await calls.setStage(a.idToken, { id: clanCall.id, user: b.id, talk: true });
+      assert.deepStrictEqual([(await bRow()).talk, (await bRow()).hand], [true, false]);
+      for (const p of [a, b]) await calls.endCall(p.idToken, clanCall.id);
+      assert.strictEqual((await c.pb.collection("calls").getOne(clanCall.id)).state, "ended");
     });
 
     it("takes one report per reporter and target, never about oneself, and lets no player read them", async () => {
@@ -1104,6 +1490,26 @@ describe("PocketBase", function () {
       await until(async () => (await state(p)) === "offline");
     });
 
+    it("passes chat signals (typing, the chat open) to that player's apps only, from whoever sent them", async () => {
+      const [a, b, c] = [await player(), await player(), await player()];
+      const join = async (p: Player) => {
+        const app = await colyseus.sdk.joinOrCreate("presence", { idToken: p.idToken });
+        const got: any[] = [];
+        app.onMessage("chat", (m) => got.push(m));
+        return { app, got };
+      };
+      const [appA, appB, appC] = [await join(a), await join(b), await join(c)];
+      appA.app.send("chat", { to: b.id, typing: true, here: true, from: c.id }); // (its own "from" is ignored)
+      appA.app.send("chat", { to: 42 });
+      await until(async () => appB.got.length === 1);
+      assert.deepStrictEqual(appB.got[0], { from: a.id, typing: true, here: true });
+      for (let i = 0; i < 10; i++) appA.app.send("chat", { to: b.id, here: true }); // more than 4 a second: dropped
+      await new Promise((r) => setTimeout(r, 300));
+      assert.ok(appB.got.length <= 5);
+      assert.deepStrictEqual([appA.got.length, appC.got.length], [0, 0]);
+      for (const x of [appA, appB, appC]) await x.app.leave();
+    });
+
     it("refuses a banned player at the exchange (until when, why) and in the presence room, which puts him out", async () => {
       const p = await player();
       const app = await colyseus.sdk.joinOrCreate("presence", { idToken: p.idToken });
@@ -1381,9 +1787,10 @@ describe("PocketBase", function () {
       assert.deepStrictEqual(messages.map((m) => m.id), ["msg1aaaaaaaaaaaaaaaa", "msg2aaaaaaaaaaaaaaaa", "msg3aaaaaaaaaaaaaaaa"]);
       assert.ok(messages[1].voice);
       assert.deepStrictEqual([messages[2].type, messages[2].roomId, messages[2].firebaseAt], ["invite", "ROOM1", t(15).toISOString().replace("T", " ")]);
-      // Gus read up to minute 12: Anna's invite (15) is unread; Anna read everything; Gus hasn't seen her invite.
+      // Gus read up to minute 12; Anna's invite (15) isn't in the list (the app's requests box shows invitations): her
+      // voice message (11) is the last, read. Anna read everything; Gus hasn't seen her voice message's answer.
       const conv = async (who: string) => (await admin.collection("conversations").getFirstListItem(`user = "${who}"`));
-      assert.deepStrictEqual([(await conv(G)).unread, (await conv(G)).lastMessage, (await conv(G)).updatedAt], [1, "join me", t(15).toISOString().replace("T", " ")]);
+      assert.deepStrictEqual([(await conv(G)).unread, (await conv(G)).lastMessage, (await conv(G)).updatedAt], [0, "🎤 Voice message (0:07)", t(11).toISOString().replace("T", " ")]);
       assert.deepStrictEqual([(await conv(A)).unread, (await conv(A)).seen], [0, false]);
       for (const expected of [
         "OrphanProfile", `users/${G}: name "Gus, whose name is far too long" isn't 3 to 16 letters, digits or _: his username "gus" instead`,

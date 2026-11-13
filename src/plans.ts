@@ -271,6 +271,7 @@ export type Settings = {
   clanStore: { hidden: string[]; prices: Record<string, ClanPrice> }; // what the clan store hides, and the prices changed
   minBuild: number; // apps of an older build must update (0: any)
   vipRolePicks: number; // the Werewolf roles a VIP may choose a day (a VIP Pro: every game)
+  streakRestore: number; // diamonds to bring a lost flame streak back (the Chat tab)
   badWords: string[]; // starred out of chats; refused in names
   bots: Record<string, boolean>; // the games whose host may add bots
   imposterOff: string[]; // Imposter's words taken out
@@ -295,6 +296,7 @@ export const SETTINGS: Settings = {
   clanStore: { hidden: [], prices: {} },
   minBuild: 0,
   vipRolePicks: 3,
+  streakRestore: 50,
   badWords: [],
   bots: Object.fromEntries(BOT_GAMES.map((g) => [g, true])),
   imposterOff: [],
@@ -372,6 +374,7 @@ export function cleanSettings(v: any, saved: Partial<Settings> | null): Partial<
   }));
   set("minBuild", (b) => int(b, 0, 100_000));
   set("vipRolePicks", (n) => int(n, 0, 100));
+  set("streakRestore", (n) => int(n, 0, 100_000));
   set("badWords", (w) =>
     [...new Set((Array.isArray(w) ? w : []).map((x) => text(x, 40).toLowerCase()).filter((x) => x.length >= 2))].slice(0, 2000),
   );

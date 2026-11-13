@@ -1,4 +1,4 @@
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, DataPacket_Kind, RoomServiceClient } from "livekit-server-sdk";
 
 /**
  * In-room voice on LiveKit (LiveKit Cloud while developing, our own LiveKit server later: only the
@@ -118,6 +118,30 @@ export async function voiceParticipants(roomId: string, grave = false) {
 export async function grantVoice(roomId: string, identity: string, rights: VoiceRights, { grave = false, hidden = false } = {}) {
   const permission = { canPublish: mic(roomId, identity, rights.talk), canSubscribe: rights.hear, canPublishData: false, hidden };
   await rooms?.updateParticipant(voiceRoom(roomId, grave), identity, { permission });
+}
+
+/** A one-to-one call's voice room (src/calls.ts): its two players talk, hear, show their camera, send reactions. */
+export async function callToken(call: string, identity: string, name: string, talk = true) {
+  if (!voiceEnabled) return { url, token: "" };
+  const token = new AccessToken(key, secret, { identity, name, ttl: "6h" });
+  token.addGrant({ room: `call-${call}`, roomJoin: true, canPublish: talk, canSubscribe: true, canPublishData: true });
+  return { url, token: await token.toJwt() };
+}
+
+/** A clan call's listener brought up to talk, or a talker down to listen. */
+export async function setCallTalk(call: string, identity: string, talk: boolean) {
+  const permission = { canPublish: talk, canSubscribe: true, canPublishData: true };
+  await insist(() => rooms!.updateParticipant(`call-${call}`, identity, { permission }), () => !!rooms);
+}
+
+/** The call is over: its voice room closed (anyone still in it is put out). */
+export async function closeCall(call: string) {
+  await rooms?.deleteRoom(`call-${call}`).catch(() => {});
+}
+
+/** To both players of a call, from the game server (a throw they paid for). */
+export async function tellCall(call: string, data: unknown) {
+  await rooms?.sendData(`call-${call}`, new TextEncoder().encode(JSON.stringify(data)), DataPacket_Kind.RELIABLE, {}).catch(() => {});
 }
 
 export async function closeVoice(roomId: string, { graveOnly = false } = {}) {

@@ -33,7 +33,9 @@ export type Role = "leader" | "coLeader" | "elder" | "member";
 const RANK: Record<Role, number> = { leader: 0, coLeader: 1, elder: 2, member: 3 };
 
 /** The lowest role that may do each thing (and every role above it). */
-export const RIGHTS = { accept: "elder", kick: "coLeader", promote: "coLeader", pin: "coLeader", edit: "leader" } as const;
+export const RIGHTS = {
+  accept: "elder", kick: "coLeader", promote: "coLeader", pin: "coLeader", edit: "leader", call: "elder", stage: "coLeader",
+} as const;
 export const may = (role: Role, right: keyof typeof RIGHTS) => RANK[role] <= RANK[RIGHTS[right]];
 
 export class ClanError extends Error {}

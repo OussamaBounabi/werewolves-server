@@ -84,6 +84,7 @@ export function publicConfig() {
     },
     minBuild: s.minBuild,
     vipRolePicks: s.vipRolePicks,
+    streakRestore: s.streakRestore,
     badWords: s.badWords,
     bots: s.bots,
     throws: s.throwPrices,

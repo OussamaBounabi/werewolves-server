@@ -3,6 +3,10 @@ import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import PocketBase, { BaseAuthStore, ClientResponseError, getTokenPayload, isTokenExpired, type RecordModel } from "pocketbase";
 import { pushTo } from "./push.js";
+import { vanishChats } from "./chat.js";
+import { dropOldFlames } from "./flames.js";
+import { dropOldStories } from "./stories.js";
+import { endStaleCalls } from "./calls.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { atNight, reached } from "./achievements.js";
@@ -753,7 +757,11 @@ export async function deleteMessagesBefore(cutoff: number) {
   const client = await db();
   const filter = client.filter("created < {:cutoff}", { cutoff: pbDate(cutoff) });
   // (A clan's voice messages and room lines too; its written lines stay.)
-  for (const [name, which] of [["messages", filter], ["clan_messages", `${filter} && (kind = "voice" || kind = "room")`]]) {
+  for (const [name, which] of [
+    ["messages", filter],
+    ["group_messages", filter],
+    ["clan_messages", `${filter} && (kind = "voice" || kind = "room")`],
+  ]) {
     for (;;) {
       const { items } = await client.collection(name).getList(1, 200, { filter: which, fields: "id", skipTotal: true });
       if (items.length === 0) break;
@@ -783,7 +791,16 @@ export async function runSchedules() {
   await clanWeek(done).catch((e) => console.error("clan week failed", e));
   await clanProTick().catch((e) => console.error("clan pro failed", e));
   await oldChat(done);
+  if (Date.now() - vanishedAt >= 10 * 60_000) {
+    vanishedAt = Date.now();
+    await vanishChats().catch((e) => console.error("vanishing chats failed", e));
+    await dropOldFlames().catch((e) => console.error("old flames failed", e));
+    await dropOldStories().catch((e) => console.error("old stories failed", e));
+    await endStaleCalls().catch((e) => console.error("stale calls failed", e));
+  }
 }
+
+let vanishedAt = 0; // the last round of disappearing chats (every 10 minutes)
 
 /** The game server calls this once, at start: a round of schedules now, then every minute. */
 export function startSchedules() {
@@ -898,7 +915,7 @@ export async function pushClanLine(idToken: string, id: string) {
  * [data] pushed to these players' phones (the app shows its title and body; a tap opens what its sender says).
  * [kind]: a notification each may turn off (users.notify), skipped for those who did.
  */
-export async function pushToUsers(uids: string[], data: Record<string, string>, kind?: NotifyKind) {
+export async function pushToUsers(uids: string[], data: Record<string, string>, kind?: NotifyKind, ttl?: number) {
   if (!pb || uids.length === 0) return;
   const client = await db();
   const rows: RecordModel[] = [];
@@ -912,7 +929,7 @@ export async function pushToUsers(uids: string[], data: Record<string, string>, 
   for (const u of rows) {
     if (kind && u.notify?.[kind] === false) continue;
     const tokens: string[] = Array.isArray(u.pushTokens) ? u.pushTokens : [];
-    const dead = await pushTo(tokens, data).catch(() => [] as string[]);
+    const dead = await pushTo(tokens, data, ttl).catch(() => [] as string[]);
     if (dead.length === 0) continue;
     await forPlayer(u.id, async () => {
       const now = await client.collection("users").getOne(u.id, { fields: "pushTokens" });
@@ -928,13 +945,31 @@ export async function pushMessage(idToken: string, id: string) {
   const client = await db();
   const m = await client.collection("messages").getOne(id);
   if (m.from !== uid || Date.now() - Date.parse(String(m.created).replace(" ", "T")) > 60_000) return;
+  if (String(m.type).startsWith("vanish")) return; // (a line saying the chat's setting changed: nothing to ring)
   pushed.add(id);
   if (pushed.size > 10_000) pushed.clear();
+  // He muted our conversation: nothing rings.
+  const muted = client.filter("user = {:to} && friend = {:from} && muted = true", { to: m.to, from: uid });
+  if (await maybe(client.collection("chat_prefs").getFirstListItem(muted))) return;
+  // Not friends: it rings along an accepted message request; a waiting one, for its first line only (its tap opens
+  // the requests box).
+  let type = String(m.type || "message");
+  const pair = client.filter("user = {:to} && friend = {:from}", { to: m.to, from: uid });
+  if (!(await maybe(client.collection("friends").getFirstListItem(pair)))) {
+    const between = client.filter("(from = {:a} && to = {:b}) || (from = {:b} && to = {:a})", { a: uid, b: m.to });
+    const requests = await client.collection("message_requests").getFullList({ filter: between });
+    if (!requests.some((q) => q.state === "accepted")) {
+      const mine = requests.find((q) => q.from === uid && q.state === "");
+      const sent = client.filter("from = {:a} && to = {:b}", { a: uid, b: m.to });
+      if (!mine || (await client.collection("messages").getList(1, 1, { filter: sent })).totalItems > 1) return;
+      type = "request";
+    }
+  }
   const users = client.collection("users");
   const [me, him] = await Promise.all([users.getOne(uid, { fields: "name,username" }), users.getOne(m.to, { fields: "pushTokens" })]);
   const tokens: string[] = Array.isArray(him.pushTokens) ? him.pushTokens : [];
   const dead = await pushTo(tokens, {
-    type: String(m.type || "message"),
+    type,
     sender: uid,
     title: String(me.name || me.username),
     body: String(m.text ?? "").slice(0, 300),

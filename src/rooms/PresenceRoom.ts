@@ -14,10 +14,15 @@ export function kickFromApp(uid: string) {
 
 /**
  * The app stays in this room while it's open — joinOrCreate("presence", { idToken }) — which is how the
- * server knows its player is online (presence.ts). No state, no messages. Signed-in players only.
+ * server knows its player is online (presence.ts). No state. Signed-in players only.
+ *
+ * "chat" { to, typing, here }: passed on to that player's apps as { from, typing, here } — he's writing to him, he
+ * has their conversation open (the Chat tab's "typing…" and the avatar peeking in). Nothing kept, nothing checked
+ * but its shape: an app shows it only for a friend's open conversation.
  */
 export class PresenceRoom extends Room {
   maxClients = 5000;
+  private sent = new Map<string, number[]>(); // each app's last chat signals: at most 4 a second
 
   async onAuth(_client: Client, options: { idToken?: string } = {}): Promise<{ uid: string }> {
     if (!accountsEnabled || !options.idToken) throw new ServerError(4401, "auth");
@@ -30,6 +35,16 @@ export class PresenceRoom extends Room {
 
   onCreate() {
     presence = this;
+    this.onMessage("chat", (client, data: { to?: unknown; typing?: unknown; here?: unknown }) => {
+      const to = data?.to;
+      if (typeof to !== "string" || !to || to.length > 40) return;
+      const now = Date.now(), recent = (this.sent.get(client.sessionId) ?? []).filter((t) => now - t < 1000);
+      if (recent.length >= 4) return;
+      this.sent.set(client.sessionId, [...recent, now]);
+      const signal = { from: client.auth.uid, typing: data.typing === true, here: data.here === true };
+      // ponytail: one pass over every app in the room per signal; an index by uid if the room grows to thousands
+      for (const other of this.clients) if (other.auth?.uid === to) other.send("chat", signal);
+    });
   }
 
   onDispose() {
@@ -46,6 +61,7 @@ export class PresenceRoom extends Room {
   }
 
   onLeave(client: Client) {
+    this.sent.delete(client.sessionId);
     appClosed(client.auth.uid);
   }
 }

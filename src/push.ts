@@ -24,9 +24,9 @@ const GONE = ["messaging/registration-token-not-registered", "messaging/invalid-
  * Sends [data] to these phones (a data message: the app shows it). Answers the tokens that are dead (app removed…).
  * (FCM refuses some keys in data, "from" among them.)
  */
-export async function pushTo(tokens: string[], data: Record<string, string>): Promise<string[]> {
+export async function pushTo(tokens: string[], data: Record<string, string>, ttl = 3_600_000): Promise<string[]> {
   const m = fcm();
   if (!m || tokens.length === 0) return [];
-  const sent = await m.sendEachForMulticast({ tokens, data, android: { priority: "high", ttl: 3_600_000 } });
+  const sent = await m.sendEachForMulticast({ tokens, data, android: { priority: "high", ttl } });
   return sent.responses.flatMap((r, i) => (!r.success && GONE.includes(r.error?.code ?? "") ? [tokens[i]] : []));
 }

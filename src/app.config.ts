@@ -1,3 +1,19 @@
+import { FlameError, reportFlame, restoreStreak, sendFlame, viewFlame } from "./flames.js";
+import { myMoments, shareMoment, StoryError } from "./stories.js";
+import { addToCall, answerCall, CallError, endCall, joinCall, raiseHand, setStage, startCall, startClanCall, startGroupCall, throwInCall } from "./calls.js";
+import {
+  GroupError,
+  addToGroup,
+  createGroup,
+  editGroup,
+  keepGroup,
+  leaveGroup,
+  pushGroupLine,
+  reactGroupLine,
+  removeFromGroup,
+  saveGroupLine,
+  setGroupAdmin,
+} from "./groups.js";
 import { addStaffPhone } from "./staffPush.js";
 import { blockedAmong } from "./accounts.js";
 import { addClanEvent, announce as clanAnnounce, buyClanItem, deleteClanEvent, newPoll, pinSecond, sponsorClan, stopSponsoring, votePoll, wearClanItem, wearClanPack } from "./clanPro.js";
@@ -123,7 +139,7 @@ const bearer = (ctx: { request?: Request }) => ctx.request?.headers.get("authori
 /** The HTTP status for what went wrong with an account request: a bad token, a refusal, or our fault. */
 function statusFor(e: unknown) {
   if (e instanceof AuthError) return 401;
-  if (e instanceof ClanError) return 409;
+  if (e instanceof ClanError || e instanceof GroupError || e instanceof FlameError || e instanceof StoryError || e instanceof CallError) return 409;
   if (e instanceof ProfileError) return e.status;
   if (e instanceof StoreError || e instanceof ClaimError) return 409;
   console.error("account request failed", e);
@@ -261,6 +277,69 @@ const server = defineServer({
       ).map(([name, run]) => [
         `api_clan_${name}`,
         createEndpoint(`/api/clans/${name}`, { method: "POST" }, async (ctx) => {
+          const token = bearer(ctx);
+          if (!token) throw ctx.error(400, { error: "missing token" });
+          try {
+            return (await run(token, (ctx.body ?? {}) as Record<string, unknown>)) as Record<string, unknown>;
+          } catch (e) {
+            throw ctx.error(statusFor(e), { error: (e as Error).message });
+          }
+        }),
+      ]),
+    ),
+    // Groups (Authorization: Bearer <ID token>; src/groups.ts says what each one does and refuses).
+    ...Object.fromEntries(
+      (
+        [
+          ["create", (t, b) => createGroup(t, b)],
+          ["add", (t, b) => addToGroup(t, String(b.group ?? ""), b.users)],
+          ["remove", (t, b) => removeFromGroup(t, String(b.group ?? ""), String(b.user ?? ""))],
+          ["leave", (t, b) => leaveGroup(t, String(b.group ?? ""))],
+          ["admin", (t, b) => setGroupAdmin(t, String(b.group ?? ""), String(b.user ?? ""), b.on === true)],
+          ["edit", (t, b) => editGroup(t, String(b.group ?? ""), b)],
+          ["keep", (t, b) => keepGroup(t, String(b.group ?? ""), b.keep === true)],
+          ["react", (t, b) => reactGroupLine(t, String(b.id ?? ""), String(b.emoji ?? ""))],
+          ["save", (t, b) => saveGroupLine(t, String(b.id ?? ""), b.on === true)],
+          ["push", (t, b) => pushGroupLine(t, String(b.id ?? ""))], // a line just written: to the others' phones
+        ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]
+      ).map(([name, run]) => [
+        `api_group_${name}`,
+        createEndpoint(`/api/groups/${name}`, { method: "POST" }, async (ctx) => {
+          const token = bearer(ctx);
+          if (!token) throw ctx.error(400, { error: "missing token" });
+          try {
+            return (await run(token, (ctx.body ?? {}) as Record<string, unknown>)) as Record<string, unknown>;
+          } catch (e) {
+            throw ctx.error(statusFor(e), { error: (e as Error).message });
+          }
+        }),
+      ]),
+    ),
+    // Flames, streaks, stories' game moments and calls (Authorization: Bearer <ID token>; src/flames.ts, src/stories.ts,
+    // src/calls.ts).
+    ...Object.fromEntries(
+      (
+        [
+          ["flames/send", (t, b) => sendFlame(t, b)],
+          ["flames/view", (t, b) => viewFlame(t, b)],
+          ["flames/report", (t, b) => reportFlame(t, b)],
+          ["flames/restore", (t, b) => restoreStreak(t, String(b.friend ?? ""))],
+          ["flames/moments", (t) => myMoments(t)],
+          ["flames/moment", (t, b) => shareMoment(t, String(b.log ?? ""))],
+          ["calls/start", (t, b) => startCall(t, b)],
+          ["calls/answer", (t, b) => answerCall(t, String(b.id ?? ""))],
+          ["calls/end", (t, b) => endCall(t, String(b.id ?? ""))],
+          ["calls/throw", (t, b) => throwInCall(t, b)],
+          ["calls/group", (t, b) => startGroupCall(t, b)],
+          ["calls/clan", (t, b) => startClanCall(t, b)],
+          ["calls/join", (t, b) => joinCall(t, String(b.id ?? ""))],
+          ["calls/add", (t, b) => addToCall(t, b)],
+          ["calls/hand", (t, b) => raiseHand(t, b)],
+          ["calls/stage", (t, b) => setStage(t, b)],
+        ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]
+      ).map(([name, run]) => [
+        `api_${name.replace("/", "_")}`,
+        createEndpoint(`/api/${name}`, { method: "POST" }, async (ctx) => {
           const token = bearer(ctx);
           if (!token) throw ctx.error(400, { error: "missing token" });
           try {
