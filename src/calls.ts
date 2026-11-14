@@ -13,6 +13,8 @@ import { callToken, closeCall, dropFromCall, setCallTalk, tellCall } from "./voi
  * - Two friends: voice or video; a push rings the phone of the one called even when PlayRoom is closed (PushService:
  *   full screen, like a phone call); 45 seconds without an answer: missed. Each call leaves a line in their chat; a
  *   missed one rings as a notification. One hangs up: it's over, unless others were added to it.
+ * - Calling a friend already in a call: it rings all the same, as a call waiting (his app: add me to his call, or end
+ *   his and answer, or decline); I see he's in another call. A friend whose phone already rings: busy.
  * - Anyone in a call adds friends (8 people at most in it): it rings for them.
  * - A group's call rings its members (but those who muted the group); it lasts while someone is in it.
  * - A clan's call, started by an elder or above: every member may join and listen; 8 talk (the stage, the first in);
@@ -48,8 +50,8 @@ const together = (a: string, b: string) => roomsOf(a).some((room) => roomsOf(b).
 const peopleOf = (client: PocketBase, call: string) =>
   client.collection("call_people").getFullList({ filter: client.filter("call = {:call}", { call }) });
 
-/** Whether [uid] is in a call now (or one rings for him from a friend). */
-async function busy(client: PocketBase, uid: string) {
+/** Whether [uid] is in a call now ("in") or one rings for him or from him (two friends: "ringing"); "" if neither. */
+async function busy(client: PocketBase, uid: string): Promise<"" | "in" | "ringing"> {
   const since = pbDate(Date.now() - STALE_MS);
   const inOne = await client.collection("call_people").getList(1, 1, {
     filter: client.filter("user = {:uid} && state = 'in' && call.state != 'ended' && call.created > {:since}", { uid, since }),
@@ -57,7 +59,7 @@ async function busy(client: PocketBase, uid: string) {
   const rings = await client.collection("calls").getList(1, 1, {
     filter: client.filter("state = 'ringing' && created > {:since} && (caller = {:uid} || callee = {:uid})", { uid, since }),
   });
-  return inOne.totalItems + rings.totalItems > 0;
+  return rings.totalItems > 0 ? "ringing" : inOne.totalItems > 0 ? "in" : "";
 }
 
 const upsertPerson = async (client: PocketBase, call: string, user: string, fields: Record<string, unknown>) => {
@@ -76,8 +78,9 @@ export async function startCall(idToken: string, body: Record<string, unknown>) 
   return forPlayer(`call:${[uid, to].sort().join(":")}`, async () => {
     if (await busy(client, uid)) throw new CallError("busy_me");
     const name = await nameOf(client, uid);
-    if (await busy(client, to)) {
-      // He's on another call: it never rings; he sees that I called.
+    const his = await busy(client, to);
+    if (his === "ringing") {
+      // His phone rings already (or he's calling): it never rings; he sees that I called.
       const call = await client.collection("calls").create({ caller: uid, callee: to, video, state: "ended", outcome: "busy", ended: new Date() });
       await finish(client, call, name);
       return { id: call.id, busy: true };
@@ -86,8 +89,11 @@ export async function startCall(idToken: string, body: Record<string, unknown>) 
     await client.collection("call_people").create({ call: call.id, user: uid, state: "in", talk: true });
     await client.collection("call_people").create({ call: call.id, user: to, state: "ringing", talk: true });
     ringing.set(call.id, setTimeout(() => void endCall("", call.id, "missed").catch(() => {}), RING_MS));
-    await pushToUsers([to], { type: "call", sender: uid, call: call.id, title: name, video: video ? "1" : "0" }, undefined, RING_MS);
-    return { id: call.id, ...(await callToken(call.id, uid, name)) };
+    const waiting = his === "in"; // (in another call: it rings as a call waiting)
+    await pushToUsers([to], {
+      type: "call", sender: uid, call: call.id, title: name, video: video ? "1" : "0", ...(waiting ? { waiting: "1" } : {}),
+    }, undefined, RING_MS);
+    return { id: call.id, waiting, ...(await callToken(call.id, uid, name)) };
   });
 }
 
@@ -297,6 +303,45 @@ export async function leaveCallsIn(uid: string, roomId: string) {
     await leaveCall(uid, row.call);
     await dropFromCall(row.call, uid);
   }
+}
+
+/**
+ * A friend's call rings for me ([id]) while I'm in another: he's added to mine instead (it rings for him there; his app
+ * moves to it on its own), and his call to me is over, without a line in our chat.
+ */
+export async function mergeCall(idToken: string, id: string) {
+  const { uid } = await signedIn(idToken);
+  const client = await db();
+  const waiting = await maybe(client.collection("calls").getOne(id));
+  if (!waiting || waiting.callee !== uid || waiting.state !== "ringing") throw new CallError("gone");
+  const [mine] = await client.collection("call_people").getFullList({
+    filter: client.filter("user = {:uid} && state = 'in' && call.state = 'active' && call != {:id}", { uid, id }),
+  });
+  if (!mine) throw new CallError("invalid");
+  const into = await client.collection("calls").getOne(mine.call);
+  if (into.clan) throw new CallError("invalid");
+  const caller = String(waiting.caller);
+  await forPlayer(`call:${into.id}`, async () => {
+    const people = await peopleOf(client, into.id);
+    const taken = people.filter((p) => (p.state === "in" || p.state === "ringing") && p.user !== caller);
+    if (taken.length + 1 > CALL_MAX) throw new CallError("full");
+    if (taken.some((p) => together(caller, p.user))) throw new CallError("same_room");
+    await upsertPerson(client, into.id, caller, { state: "ringing", talk: true, hand: false });
+    ringOut(into.id, [caller]);
+  });
+  return forPlayer(`call:${id}`, async () => {
+    clearTimeout(ringing.get(id));
+    ringing.delete(id);
+    await tellCall(id, { type: "moved", call: into.id });
+    await new Promise((done) => setTimeout(done, 1000)); // (the word on its way before the call closes)
+    for (const p of await peopleOf(client, id)) {
+      if (p.state === "in" || p.state === "ringing") await client.collection("call_people").update(p.id, { state: "left" });
+    }
+    await client.collection("calls").update(id, { state: "ended", outcome: "answered", ended: new Date() });
+    await closeCall(id);
+    await pushToUsers([uid], { type: "call_end", sender: caller, call: id }, undefined, RING_MS);
+    return { ok: true, into: into.id };
+  });
 }
 
 /** A clan call's listener raises his hand ([up]) or lowers it. */

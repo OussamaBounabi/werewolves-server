@@ -1,6 +1,6 @@
 import { FlameError, reportFlame, restoreStreak, sendFlame, viewFlame } from "./flames.js";
 import { myMoments, shareMoment, StoryError } from "./stories.js";
-import { addToCall, answerCall, CallError, endCall, joinCall, raiseHand, setStage, startCall, startClanCall, startGroupCall, throwInCall } from "./calls.js";
+import { addToCall, answerCall, CallError, endCall, joinCall, mergeCall, raiseHand, setStage, startCall, startClanCall, startGroupCall, throwInCall } from "./calls.js";
 import {
   GroupError,
   addToGroup,
@@ -334,6 +334,7 @@ const server = defineServer({
           ["calls/clan", (t, b) => startClanCall(t, b)],
           ["calls/join", (t, b) => joinCall(t, String(b.id ?? ""))],
           ["calls/add", (t, b) => addToCall(t, b)],
+          ["calls/merge", (t, b) => mergeCall(t, String(b.id ?? ""))],
           ["calls/hand", (t, b) => raiseHand(t, b)],
           ["calls/stage", (t, b) => setStage(t, b)],
         ] as [string, (token: string, body: Record<string, unknown>) => Promise<unknown>][]

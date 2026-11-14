@@ -1211,6 +1211,24 @@ describe("PocketBase", function () {
       assert.strictEqual((await c.pb.collection("calls").getOne(clanCall.id)).state, "ended");
     });
 
+    it("calls: a friend already in a call gets a call waiting; he adds the caller to his call", async () => {
+      const [a, b, c] = [await player(), await player(), await player()];
+      for (const [x, y] of [[a, b], [a, c]] as [Player, Player][]) await befriend(x, y);
+      const { id } = await calls.startCall(a.idToken, { to: b.id });
+      await calls.answerCall(b.idToken, id);
+      const waiting = await calls.startCall(c.idToken, { to: a.id });
+      assert.deepStrictEqual(["waiting" in waiting && waiting.waiting, (await a.pb.collection("calls").getOne(waiting.id)).state], [true, "ringing"]);
+      await assert.rejects(calls.mergeCall(b.idToken, waiting.id), /gone/); // not his
+      await calls.mergeCall(a.idToken, waiting.id);
+      assert.strictEqual((await c.pb.collection("calls").getOne(waiting.id)).state, "ended");
+      assert.strictEqual((await c.pb.collection("messages").getFullList({ filter: `type = "call" && from = "${c.id}"` })).length, 0);
+      const cRow = (await c.pb.collection("call_people").getFullList({ filter: `call = "${id}" && user = "${c.id}"` }))[0];
+      assert.strictEqual(cRow.state, "ringing"); // (his app moves there)
+      await calls.joinCall(c.idToken, id);
+      for (const p of [c, b, a]) await calls.endCall(p.idToken, id);
+      assert.strictEqual((await a.pb.collection("calls").getOne(id)).state, "ended");
+    });
+
     it("calls: never two players of the same game room in one call (anti-cheat)", async () => {
       const [a, b, c] = [await player(), await player(), await player()];
       for (const [x, y] of [[a, b], [a, c]] as [Player, Player][]) await befriend(x, y);
