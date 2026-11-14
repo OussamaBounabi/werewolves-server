@@ -1,4 +1,5 @@
 import { savePresence, type Where } from "./accounts.js";
+import { leaveCallsIn } from "./calls.js";
 
 /**
  * Who is online, and where: the game server knows, since the apps stay connected to it — to the presence
@@ -24,13 +25,17 @@ export function appClosed(uid: string) {
   changed(uid);
 }
 
-/** He joined a game room ([game] = its name: werewolf, rummy…), as a player or a spectator. */
+/**
+ * He joined a game room ([game] = its name: werewolf, rummy…), as a player or a spectator: out of a call with someone
+ * in it (anti-cheat).
+ */
 export function enterRoom(uid: string, game: string, roomId: string) {
   const inRooms = rooms.get(uid) ?? new Map<string, string>();
-  inRooms.delete(roomId);
+  const already = inRooms.delete(roomId);
   inRooms.set(roomId, game);
   rooms.set(uid, inRooms);
   changed(uid);
+  if (!already) void leaveCallsIn(uid, roomId).catch((e) => console.error("leaving calls failed", e));
 }
 
 /** He left that room for good (he may already be in another). */

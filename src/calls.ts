@@ -1,10 +1,11 @@
 import type PocketBase from "pocketbase";
 import type { RecordModel } from "pocketbase";
 
-import { db, forPlayer, maybe, pbDate, pushToUsers, signedIn, type Account } from "./accounts.js";
+import { accountsEnabled, db, forPlayer, maybe, pbDate, pushToUsers, signedIn, type Account } from "./accounts.js";
 import { may, memberOf, type Role } from "./clans.js";
+import { roomsOf } from "./presence.js";
 import { Throws } from "./throws.js";
-import { callToken, closeCall, setCallTalk, tellCall } from "./voice.js";
+import { callToken, closeCall, dropFromCall, setCallTalk, tellCall } from "./voice.js";
 
 /**
  * Calls (the Chat tab, 2026-11-13), on the voice server (a LiveKit room `call-<id>`). The calls row and its people
@@ -16,6 +17,9 @@ import { callToken, closeCall, setCallTalk, tellCall } from "./voice.js";
  * - A group's call rings its members (but those who muted the group); it lasts while someone is in it.
  * - A clan's call, started by an elder or above: every member may join and listen; 8 talk (the stage, the first in);
  *   a listener raises his hand; the leader and co-leaders bring people up or down.
+ * - Never two players of the same game room (playing or watching) in one call, as no chat between them (anti-cheat):
+ *   such a call can't start, be answered or joined, nor someone be added; going into a room with someone of my call
+ *   puts me out of it.
  */
 export class CallError extends Error {}
 
@@ -37,6 +41,9 @@ function line(call: RecordModel, now: number) {
   const icon = call.video ? "📹" : "📞";
   return call.started ? `${icon} ${minutesOf(call, now)} min` : icon;
 }
+
+/** [a] and [b] are in the same game room (playing or watching). */
+const together = (a: string, b: string) => roomsOf(a).some((room) => roomsOf(b).includes(room));
 
 const peopleOf = (client: PocketBase, call: string) =>
   client.collection("call_people").getFullList({ filter: client.filter("call = {:call}", { call }) });
@@ -65,6 +72,7 @@ export async function startCall(idToken: string, body: Record<string, unknown>) 
   const client = await db();
   const friends = await maybe(client.collection("friends").getFirstListItem(client.filter("user = {:a} && friend = {:b}", { a: uid, b: to })));
   if (!friends) throw new CallError("invalid");
+  if (together(uid, to)) throw new CallError("same_room");
   return forPlayer(`call:${[uid, to].sort().join(":")}`, async () => {
     if (await busy(client, uid)) throw new CallError("busy_me");
     const name = await nameOf(client, uid);
@@ -148,6 +156,7 @@ export async function answerCall(idToken: string, id: string) {
     const call = await maybe(client.collection("calls").getOne(id));
     if (!call || call.callee !== uid) throw new CallError("invalid");
     if (call.state !== "ringing") throw new CallError("gone");
+    if (together(uid, call.caller)) throw new CallError("same_room");
     clearTimeout(ringing.get(id));
     ringing.delete(id);
     await client.collection("calls").update(id, { state: "active", started: new Date() });
@@ -169,6 +178,7 @@ export async function joinCall(idToken: string, id: string) {
     if (call.clan) clanMember = (await memberOf(client, uid))?.clan === call.clan;
     if (!mine && !clanMember && call.caller !== uid) throw new CallError("invalid");
     if (mine?.state !== "in" && (await busy(client, uid))) throw new CallError("busy_me");
+    if (people.some((p) => p.user !== uid && p.state === "in" && together(uid, p.user))) throw new CallError("same_room");
     const talking = people.filter((p) => p.state === "in" && p.user !== uid && (p.talk || !call.clan)).length;
     if (!call.clan && talking >= CALL_MAX) throw new CallError("full");
     const talk = !call.clan || talking < CALL_MAX;
@@ -182,7 +192,10 @@ export async function joinCall(idToken: string, id: string) {
  * of them, with its line in their chat and the ringing stopped. With more people: I leave it; the last one out ends it.
  */
 export async function endCall(idToken: string, id: string, reason?: string) {
-  const uid = idToken ? (await signedIn(idToken)).uid : "";
+  return leaveCall(idToken ? (await signedIn(idToken)).uid : "", id, reason);
+}
+
+async function leaveCall(uid: string, id: string, reason?: string) {
   const client = await db();
   return forPlayer(`call:${id}`, async () => {
     const call = await maybe(client.collection("calls").getOne(id));
@@ -251,6 +264,7 @@ export async function addToCall(idToken: string, body: Record<string, unknown>) 
     const taken = people.filter((p) => p.state === "in" || p.state === "ringing").map((p) => p.user);
     const adding = users.filter((u) => !taken.includes(u));
     if (taken.length + adding.length > CALL_MAX) throw new CallError("full");
+    if (adding.some((u) => [...taken, ...adding].some((o) => o !== u && together(u, o)))) throw new CallError("same_room");
     for (const u of adding) {
       if (!(await maybe(client.collection("friends").getFirstListItem(client.filter("user = {:a} && friend = {:b}", { a: uid, b: u }))))) throw new CallError("invalid");
     }
@@ -263,6 +277,26 @@ export async function addToCall(idToken: string, body: Record<string, unknown>) 
     await pushToUsers(adding, { type: "call", sender: uid, call: id, title: await nameOf(client, uid), video: call.video ? "1" : "0" }, undefined, RING_MS);
     return { ok: true };
   });
+}
+
+/**
+ * [uid] went into game room [roomId]: out of any call he's in with someone in that room (two of us: it's over). His
+ * app is told why first (then put out of the voice room: it hangs up).
+ */
+export async function leaveCallsIn(uid: string, roomId: string) {
+  if (!accountsEnabled) return;
+  const client = await db();
+  const mine = await client.collection("call_people").getFullList({
+    filter: client.filter("user = {:uid} && state = 'in' && call.state != 'ended'", { uid }),
+  });
+  for (const row of mine) {
+    const people = await peopleOf(client, row.call);
+    if (!people.some((p) => p.user !== uid && p.state === "in" && roomsOf(p.user).includes(roomId))) continue;
+    await tellCall(row.call, { type: "same_room", user: uid });
+    await new Promise((done) => setTimeout(done, 1000)); // (the word on its way before the call closes)
+    await leaveCall(uid, row.call);
+    await dropFromCall(row.call, uid);
+  }
 }
 
 /** A clan call's listener raises his hand ([up]) or lowers it. */

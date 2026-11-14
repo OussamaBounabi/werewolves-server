@@ -134,6 +134,11 @@ export async function setCallTalk(call: string, identity: string, talk: boolean)
   await insist(() => rooms!.updateParticipant(`call-${call}`, identity, { permission }), () => !!rooms);
 }
 
+/** [identity] put out of a call's voice room (the others talk on). */
+export async function dropFromCall(call: string, identity: string) {
+  await rooms?.removeParticipant(`call-${call}`, identity).catch(() => {});
+}
+
 /** The call is over: its voice room closed (anyone still in it is put out). */
 export async function closeCall(call: string) {
   await rooms?.deleteRoom(`call-${call}`).catch(() => {});

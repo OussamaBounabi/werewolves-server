@@ -1211,6 +1211,44 @@ describe("PocketBase", function () {
       assert.strictEqual((await c.pb.collection("calls").getOne(clanCall.id)).state, "ended");
     });
 
+    it("calls: never two players of the same game room in one call (anti-cheat)", async () => {
+      const [a, b, c] = [await player(), await player(), await player()];
+      for (const [x, y] of [[a, b], [a, c]] as [Player, Player][]) await befriend(x, y);
+      const room = `same-${a.id}`;
+      const state = async (id: string) => (await a.pb.collection("calls").getOne(id)).state;
+      const mine = async (p: Player, id: string) =>
+        (await p.pb.collection("call_people").getFullList({ filter: `call = "${id}" && user = "${p.id}"` }))[0]?.state;
+      const soon = async (cond: () => Promise<boolean>) => {
+        for (let i = 0; i < 50 && !(await cond()); i++) await new Promise((r) => setTimeout(r, 100));
+        assert.ok(await cond());
+      };
+      enterRoom(a.id, "werewolf", room);
+      enterRoom(b.id, "werewolf", room);
+      await assert.rejects(calls.startCall(a.idToken, { to: b.id }), /same_room/);
+      leaveRoom(b.id, room);
+      const { id } = await calls.startCall(a.idToken, { to: b.id });
+      enterRoom(b.id, "werewolf", room); // (while it rings)
+      await assert.rejects(calls.answerCall(b.idToken, id), /same_room/);
+      leaveRoom(b.id, room);
+      await calls.answerCall(b.idToken, id);
+      enterRoom(c.id, "werewolf", room);
+      await assert.rejects(calls.addToCall(a.idToken, { id, users: [c.id] }), /same_room/);
+      leaveRoom(c.id, room);
+      await calls.addToCall(a.idToken, { id, users: [c.id] });
+      enterRoom(c.id, "werewolf", room);
+      await assert.rejects(calls.joinCall(c.idToken, id), /same_room/);
+      leaveRoom(c.id, room);
+      await calls.joinCall(c.idToken, id);
+      // In it, then into a room with someone of the call: out of it (the others talk on; two of us: over).
+      enterRoom(c.id, "werewolf", room);
+      await soon(async () => (await mine(c, id)) === "left");
+      assert.strictEqual(await state(id), "active");
+      enterRoom(b.id, "werewolf", room);
+      await soon(async () => (await state(id)) === "ended");
+      for (const p of [a, b, c]) leaveRoom(p.id, room);
+      await presenceSaved();
+    });
+
     it("takes one report per reporter and target, never about oneself, and lets no player read them", async () => {
       const a = await player();
       const b = await player();
