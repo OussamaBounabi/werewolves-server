@@ -40,7 +40,7 @@ const EXTRA = [
   "vampire", "chupacabra", "sectarian", "arsonist", "necromancer", "bandit", "cannibal",
 ] as const;
 /** Room settings added since the state filled up: they share one field too (state.extraOptions). */
-const OPTIONS = ["talkingShepherd", "talkingRabbit", "noLivingChat", "actorPicks"] as const;
+const OPTIONS = ["talkingShepherd", "talkingRabbit", "noLivingChat", "actorPicks", "catHouseHidden"] as const;
 const SPECIALS = [...CLASSIC, ...EXTRA] as const;
 type Special = (typeof SPECIALS)[number];
 type Role = "werewolf" | "villager" | Special;
@@ -132,6 +132,8 @@ const STEALABLE: readonly Role[] = [
   "dragon", "barbe", "dictator", "judge", "trickster", "fox", "ancient", "joker", "raven", "owl",
   "cupid", "wildchild", "idiot", "knight", "cat", "littlegirl", "shepherd", "rabbit", "policeman", "mirror", "priest",
   "alchemist", "servant", "puppet",
+  "leprechaun", "lookout", "spiritseer", "insomniac", "loudmouth", "fortuneteller", "medium", "bloodymary", "beholder", "count",
+  "actor", "troublemaker", "flowerchild", "gunner",
 ];
 /**
  * What a dead wolf can lend the wolf summoner for a night: a wolf's own night power, the shadow wolf's secret vote, or
@@ -296,7 +298,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private maryPicks = new Map<string, string>(); // a dead bloody mary → her pick: a wolf dies of it
   private mediumAsks = new Map<string, { dead: string; text: string }>(); // medium → his question, until answered
   private borrowed = new Map<string, Role>(); // actor, necromancer → his own role: tonight he plays a borrowed one
-  private bite: string | null = null; // the vampires' pick tonight
+  private biteVotes = new Map<string, string>(); // vampire → his vote tonight: the most voted is bitten (a tie: nobody)
+  private fangsGone = false; // the vampires bit a wolf or a loner: no more bites this game
   private chupaPicks = new Map<string, string>(); // chupacabra → his pick
   private ignites = new Set<string>(); // arsonists who set fire tonight
   private banditPicks = new Map<string, { target: string; recruit: boolean }>(); // bandit → his kill, or his recruit
@@ -361,7 +364,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private troubleDay = 0; // the troublemaker's day: two votes
   private secondVote = false; // …and its second one has begun
   private dayOut = false; // a vote put someone out today (else the sasquatch turns)
-  private bitten = new Set<string>(); // bitten by the vampires: one of them from the next night
   private doused = new Set<string>(); // the arsonists' doused players (they burn when he sets fire)
   private accomplices = new Map<string, string>(); // accomplice → his bandit (on the bandit's side, no power of his own)
   private hunger = new Map<string, number>(); // cannibal → nights waited (0 to 3): he eats 1 + that many
@@ -740,8 +742,8 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
         disguises: Object.fromEntries(this.disguises),
         lent: Object.fromEntries(this.lent),
         borrowed: Object.fromEntries([...this.borrowed.keys()].map((id) => [id, this.powerOf(id)])),
-        bite: this.bite,
-        bitten: [...this.bitten],
+        bite: topVoted(this.biteVotes.values()),
+        biteVotes: Object.fromEntries(this.biteVotes),
         chupa: Object.fromEntries(this.chupaPicks),
         doused: [...this.doused],
         ignites: [...this.ignites],
@@ -1266,10 +1268,10 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       : this.actorChoices.has(sessionId) ? { actorChoices: this.actorChoices.get(sessionId) } : {};
     const wounded = this.wounded.has(sessionId) ? { wounded: true } : {};
     const gun = role === "gunner" ? { bullets: 2 - (this.shots.get(sessionId) ?? 0) } : {};
-    // The solos: the vampires know each other and their bitten, the arsonist his doused, the bandit and his accomplice
+    // The solos: the vampires know each other (and whether their bite is gone), the arsonist his doused, the bandit and his accomplice
     // each other, the cannibal his hunger; everyone his sect, the sectarian everyone's.
     const team = this.teamOf(sessionId);
-    const vampires = team === "vampire" ? { vampires: this.idsWithRole("vampire"), bitten: [...this.bitten] } : {};
+    const vampires = team === "vampire" ? { vampires: this.idsWithRole("vampire"), fangsGone: this.fangsGone } : {};
     const doused = role === "arsonist" ? { doused: [...this.doused] } : {};
     const band = team === "bandit" ? { bandits: this.banditTeam(sessionId) } : {};
     const hunger = role === "cannibal" ? { hunger: this.hunger.get(sessionId) ?? 0 } : {};
@@ -1335,7 +1337,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.mediumAsks.clear();
     this.dayOut = false;
     this.secondVote = false;
-    this.bite = null;
+    this.biteVotes.clear();
     this.chupaPicks.clear();
     this.ignites.clear();
     this.banditPicks.clear();
@@ -1358,8 +1360,6 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const id of this.roles.keys()) if (this.isAlive(id) && this.sleeper(id)) this.sendRole(id);
     this.logEvent("night", { day: this.state.dayNumber });
     if (this.state.dayNumber === 3) for (const id of this.idsWithRole("drunk")) this.soberUp(id);
-    for (const id of this.bitten) this.turnVampire(id);
-    this.bitten.clear();
     this.startDoublerStep();
   }
 
@@ -1483,7 +1483,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.acted(id);
   }
 
-  /** Bitten last night: a vampire now (his card and power gone), who knows his new kin. */
+  /** Bitten tonight: a vampire from this dawn (his card and power gone), who knows his new kin. */
   private turnVampire(id: string) {
     if (!this.isAlive(id)) return;
     this.roles.set(id, "vampire");
@@ -2188,6 +2188,16 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     if (this.spent.has(target)) this.spent.add(thief); // a one-shot power already used stays used
     else this.spent.delete(thief);
+    // What the power carries goes with it: the leprechaun's last mark, the loudmouth's pick, the fortune teller's cards
+    // given, the count's halves, the actor's cards, the gunner's bullets.
+    const carried: Map<string, unknown>[] = [
+      this.lastLucky, this.shouts, this.cardsGiven, this.countSaw, this.actorCards, this.actorChoices, this.shots, this.shotOn,
+    ];
+    for (const m of carried) {
+      if (!m.has(target)) continue;
+      m.set(thief, m.get(target));
+      m.delete(target);
+    }
   }
 
   /** Skipping a night power: he's done, and his step ends once its other holders are too. */
@@ -2346,7 +2356,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       ...(this.graveListeners().length ? this.holders("medium") : []), // a dead player in the room to ask
       ...this.bloodyMaries(),
       // The solos: the vampires bite from night 1, the arsonist douses, a bandit alone recruits; the killers from night 2.
-      ...this.holders("vampire"),
+      ...(this.fangsGone ? [] : this.holders("vampire")),
       ...this.holders("arsonist"),
       ...this.holders("bandit").filter((id) => day > 1 || !this.banditTeam(id)[1]),
       ...(day > 1 ? [...this.holders("chupacabra"), ...this.holders("cannibal")] : []),
@@ -2557,19 +2567,20 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     this.rested(id);
   }
 
-  /** The vampires' bite (the first of them to pick chooses for all): a vampire from the next night. */
+  /**
+   * A vampire's vote for tonight's bite (each vampire votes, as the pack does; the most voted is bitten, a tie bites
+   * nobody): a vampire from this dawn. His kin see each vote.
+   */
   private handleBite(client: Client, msg: { targetId: string }) {
     const pick = this.picks(client, "vampire", msg?.targetId);
-    if (!pick || this.teamOf(pick[1]) === "vampire") return;
+    if (!pick || this.teamOf(pick[1]) === "vampire" || this.fangsGone) return;
     const [id, target] = pick;
-    this.bite = target;
+    this.biteVotes.set(id, target);
     this.visit(id, target);
     for (const v of this.idsWithRole("vampire")) {
-      if (!this.isAlive(v)) continue;
-      this.logEvent("bite_chose", { name: this.nameOf(target) }, v);
-      this.awake.delete(v);
+      if (this.isAlive(v)) this.logEvent("bite_vote", { voter: this.nameOf(id), name: this.nameOf(target) }, v);
     }
-    this.maybeEndWitchSeer();
+    this.rested(id);
   }
 
   /** The chupacabra's pick: a wolf of the pack dies — or anyone, once no wolf is left. */
@@ -3095,8 +3106,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       if (hit) for (const t of targets) if (this.isAlive(t) && !this.isCaged(t)) dies(t, "guitarist", [by]);
       this.logEvent("guitar_result", { hit, role }, by);
     }
-    // The cat who went to sleep at a wolf's house.
-    for (const [cat, house] of this.catVisits) if (this.isAlive(cat) && this.isPack(house)) dies(cat, "cat");
+    // The cat who went to sleep at a wolf's house, or at a house the pack attacked: he dies with its owner, and a
+    // witch's potion saves only the owner (a protector's ward over the house keeps both alive: no attack landed).
+    const attacked = new Set([this.wolfVictim, ...this.extraVictims, ...this.bigBadVictims].filter((h): h is string => !!h && !trapped(h)));
+    for (const [cat, house] of this.catVisits) {
+      if (this.isAlive(cat) && (this.isPack(house) || attacked.has(house))) dies(cat, "cat");
+    }
     // A dead bloody mary's pick dies if he's a wolf of the pack (no disguise fools her); the cage and a ward stop her.
     for (const [mary, target] of this.maryPicks) {
       if (this.isAlive(target) && this.isPack(target) && !this.isCaged(target) && !this.isProtected(target)) dies(target, "bloodymary", [mary]);
@@ -3178,8 +3193,9 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.sendRole(trickster);
       this.logEvent("disguise_done", { name: this.nameOf(victim), role: this.roles.get(victim) }, trickster);
     }
-    // (Everyone learns whose house the cat died in.)
-    for (const [id, cause] of deaths) this.kill(id, cause, cause === "cat" ? { house: this.nameOf(this.catVisits.get(id)) } : {});
+    // (Everyone learns whose house the cat died in, unless the room hides it.)
+    const house = (id: string) => (this.option("catHouseHidden") ? {} : { house: this.nameOf(this.catVisits.get(id)) });
+    for (const [id, cause] of deaths) this.kill(id, cause, cause === "cat" ? house(id) : {});
     // The borrowed powers are played: actors and necromancers again (with nothing of the night left).
     for (const [id, own] of this.borrowed) {
       this.powers.set(id, own);
@@ -3252,13 +3268,18 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
    */
   private settleSolos(deaths: Map<string, DeathCause>) {
     const lives = (id: string) => this.isAlive(id) && !deaths.has(id);
-    const target = this.bite;
+    const target = topVoted([...this.biteVotes].filter(([v]) => this.isAlive(v)).map(([, t]) => t));
     if (target && lives(target) && !this.isCaged(target) && !this.isProtected(target)) {
-      if (this.isPack(target)) {
-        for (const w of this.packIds()) if (lives(w)) this.logEvent("vampire_tried", { name: this.nameOf(target) }, w);
-      } else if (!LONERS.has(this.roles.get(target)!)) {
-        this.bitten.add(target);
-        for (const v of this.idsWithRole("vampire")) if (lives(v)) this.sendRole(v);
+      if (this.isPack(target) || LONERS.has(this.roles.get(target)!)) {
+        // A wolf or a loner: the bite fails, and the vampires' bite is gone for good (he isn't told).
+        this.fangsGone = true;
+        for (const v of this.idsWithRole("vampire")) {
+          if (!lives(v)) continue;
+          this.logEvent("fangs_gone", { name: this.nameOf(target) }, v);
+          this.sendRole(v);
+        }
+      } else {
+        this.turnVampire(target); // a vampire from this dawn
       }
     }
     for (const [bandit, { target: t, recruit }] of this.banditPicks) {

@@ -1715,6 +1715,46 @@ describe("WerewolfRoom", () => {
     assert.ok(!r.awake.has(rabbit.sessionId));
   });
 
+  it("the cat at the house the pack attacks: a ward keeps both alive, a witch's potion only the owner, else both die (house hidden)", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, cat: true, mayor: false, catHouseHidden: true };
+    const { room, clients, roles, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const cat = byRole("cat").sessionId;
+    const [v1, v2, v3] = clients.filter((_: any, i: number) => roles[i] === "villager").map((c: any) => c.sessionId);
+    const alive = (id: string) => room.state.players.get(id)!.alive;
+    const night = (house: string, victim: string | null, set: () => void = () => {}) => {
+      r.catVisits.clear();
+      r.catVisits.set(cat, house);
+      r.wolfVictim = victim;
+      r.revived = null;
+      r.protects.clear();
+      set();
+      r.resolveNight();
+    };
+    // A protector's ward over the house: the pack's attack came to nothing (no victim), both live.
+    night(v1, null, () => r.protects.set("ward", v1));
+    assert.deepStrictEqual([alive(cat), alive(v1)], [true, true]);
+    // A witch's potion: the owner lives, the cat dies.
+    night(v2, v2, () => (r.revived = v2));
+    assert.deepStrictEqual([alive(cat), alive(v2)], [false, true]);
+    // (The cat back, for the last case.) The pack's attack: both die; the room hides whose house it was.
+    room.state.players.get(cat)!.alive = true;
+    night(v3, v3);
+    assert.deepStrictEqual([alive(cat), alive(v3)], [false, false]);
+    const deaths = (r.publicLog as any[]).filter((e) => e.type === "death" && e.cause === "cat");
+    assert.ok(deaths.length === 2 && deaths.every((e) => e.house === undefined));
+  });
+
+  it("the green wolf steals a newer power and what it carries (the gunner's bullets)", async () => {
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 1, greenwolf: true, gunner: true, mayor: false };
+    const { room, byRole } = await startGame(mix, 4);
+    const r = room as any;
+    const [green, gunner] = ["greenwolf", "gunner"].map((x) => byRole(x).sessionId);
+    r.shots.set(gunner, 1); // one bullet fired already
+    r.rob(green, gunner);
+    assert.deepStrictEqual([r.powerOf(green), r.powerOf(gunner), r.shots.get(green), r.shots.has(gunner)], ["gunner", "villager", 1, false]);
+  });
+
   it("the priest's holy water kills a wolf or the priest; the alchemist's poison; the mirror sends a villager's attack back", async () => {
     const mix = { ...NO_SPECIALS, wolves: 2, villagers: 1, priest: true, alchemist: true, mirror: true, whitewolf: true, mayor: false };
     const { room, byRole } = await startGame(mix, 7);
@@ -2559,34 +2599,37 @@ describe("WerewolfRoom", () => {
     arson.send("douse", { targets: [v2.sessionId, v3.sessionId] });
     bandit.send("bandit_pick", { targetId: wolf.sessionId, recruit: true }); // a wolf: refused
     assert.deepStrictEqual(((await night1) as any).deaths, []);
-    assert.deepStrictEqual([[...r.bitten], [...r.doused].sort()], [[v1.sessionId], [v2.sessionId, v3.sessionId].sort()]);
+    // v1 is a vampire from this dawn.
+    assert.deepStrictEqual([r.roles.get(v1.sessionId), r.teamOf(v1.sessionId)], ["vampire", "vampire"]);
+    assert.deepStrictEqual([...r.doused].sort(), [v2.sessionId, v3.sessionId].sort());
     assert.ok(r.privateLogs.get(bandit.sessionId).some((e: any) => e.type === "recruit_refused"));
 
-    // Night 2: v1 is a vampire now. The pack's bite can't touch the cannibal; the vampires' bite fails on the wolf.
-    const turned = v1.waitForMessage("vampire_turned", 15_000);
+    // Night 2: the two vampires vote. The pack's bite can't touch the cannibal; the vampires' bite fails on the wolf,
+    // and their bite is gone for good (the wolf isn't told).
     r.completeVote(null, [], "vote");
-    await turned;
-    assert.deepStrictEqual([r.roles.get(v1.sessionId), r.teamOf(v1.sessionId)], ["vampire", "vampire"]);
     await waitFor(() => room.state.nightStep === "wolves", 15_000);
     wolf.send("wolf_target", { targetId: cannibal.sessionId });
     await waitFor(() => r.wolfVotes.size === 1);
     r.endWolvesStep();
     await waitFor(() => room.state.nightStep === "witch_seer", 15_000);
     const night2 = wolf.waitForMessage("night_result");
+    vamp.send("bite", { targetId: wolf.sessionId });
     v1.send("bite", { targetId: wolf.sessionId });
     chupa.send("chupa_pick", { targetId: v2.sessionId }); // not a wolf, and a wolf lives: nothing
     arson.send("ignite");
     bandit.send("bandit_pick", { targetId: chupa.sessionId, recruit: false });
     cannibal.send("power_pass"); // he waits: hungrier
     assert.deepStrictEqual([...((await night2) as any).deaths].sort(), [v2.sessionId, v3.sessionId, chupa.sessionId].sort());
-    assert.ok(r.privateLogs.get(wolf.sessionId).some((e: any) => e.type === "vampire_tried"));
+    assert.ok(!r.privateLogs.get(wolf.sessionId).some((e: any) => e.type === "vampire_tried"));
+    assert.ok(r.fangsGone && r.privateLogs.get(vamp.sessionId).some((e: any) => e.type === "fangs_gone"));
     assert.strictEqual(r.hunger.get(cannibal.sessionId), 1);
 
-    // Night 3: the cannibal eats two at once.
+    // Night 3: the vampires sleep now; the cannibal eats two at once.
     r.completeVote(null, [], "vote");
     await waitFor(() => room.state.nightStep === "wolves", 15_000);
     r.endWolvesStep();
     await waitFor(() => room.state.nightStep === "witch_seer", 15_000);
+    assert.ok(!r.awake.has(vamp.sessionId) && !r.awake.has(v1.sessionId));
     const night3 = wolf.waitForMessage("night_result");
     cannibal.send("eat", { targets: [wolf.sessionId, bandit.sessionId] });
     for (const c of [vamp, v1, arson, bandit]) c.send("power_pass");
