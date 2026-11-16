@@ -10,6 +10,18 @@ const apps = new Map<string, number>(); // uid → his open connections to the p
 const rooms = new Map<string, Map<string, string>>(); // uid → the rooms he's in (roomId → game), latest last
 const saved = new Map<string, string>(); // uid → what PocketBase has
 const writes = new Map<string, Promise<void>>();
+const hidden = new Set<string>(); // those who look offline to their friends (users.notify.online off)
+
+/** He looks offline to his friends ([on]) or not: his presence row says so (users.room stays: the chat's rule). */
+export function setHidden(uid: string, on: boolean) {
+  if (on === hidden.has(uid)) return;
+  if (on) hidden.add(uid);
+  else hidden.delete(uid);
+  changed(uid);
+}
+
+/** Whether he looks offline to his friends (his "typing" and "in the chat" aren't passed on either). */
+export const isHidden = (uid: string) => hidden.has(uid);
 
 /** His app connected to the presence room. */
 export function appOpened(uid: string) {
@@ -67,7 +79,8 @@ export function whereIs(uid: string): Where {
 function changed(uid: string) {
   const write = (writes.get(uid) ?? Promise.resolve())
     .then(async () => {
-      const where = whereIs(uid); // (by now: several changes make one write)
+      const real = whereIs(uid); // (by now: several changes make one write)
+      const where: Where = hidden.has(uid) ? { state: "offline", game: "", room: real.room } : real;
       const key = JSON.stringify(where);
       if (saved.get(uid) === key) return;
       await savePresence(uid, where);

@@ -394,12 +394,37 @@ export async function shareRoom(idToken: string, roomId: unknown, game: unknown,
   return { ok: true };
 }
 
-/** Which of these rooms ([ids], from the Rooms tab) are still there. */
+/** Which of these rooms ([ids], from the Rooms tab) are still there; the lines of those gone are deleted. */
 export async function openRooms(idToken: string, ids: unknown) {
-  await signedIn(idToken);
+  const { uid } = await signedIn(idToken);
   const wanted = new Set((Array.isArray(ids) ? ids : []).slice(0, 50).map(String));
   const { matchMaker } = await import("colyseus");
-  return { open: (await matchMaker.query({})).map((r) => r.roomId).filter((id) => wanted.has(id)) };
+  const open = (await matchMaker.query({})).map((r) => r.roomId).filter((id) => wanted.has(id));
+  const gone = [...wanted].filter((id) => !open.includes(id));
+  if (gone.length) {
+    const client = await db();
+    const me = await memberOf(client, uid);
+    if (me) await dropRoomLines(client, me.clan, gone).catch(() => {});
+  }
+  return { open };
+}
+
+/** The Rooms tab's lines of rooms that are over ([rooms]; all of them: those not open now), in [clan] (all: ''). */
+async function dropRoomLines(client: PocketBase, clan: string, rooms?: string[]) {
+  const { matchMaker } = await import("colyseus");
+  const open = new Set((await matchMaker.query({})).map((r) => r.roomId));
+  const filter = clan ? client.filter('kind = "room" && clan = {:clan}', { clan }) : 'kind = "room"';
+  for (const line of await client.collection("clan_messages").getFullList({ filter, fields: "id,data,created" })) {
+    const room = String((line.data as { roomId?: string } | null)?.roomId ?? "");
+    const fresh = Date.now() - Date.parse(String(line.created).replace(" ", "T")) < 60_000; // (its room may be opening)
+    if (open.has(room) || fresh || (rooms && !rooms.includes(room))) continue;
+    await client.collection("clan_messages").delete(line.id).catch(() => {});
+  }
+}
+
+/** Every clan's Rooms tab: the lines of rooms that are over, deleted (the schedules', every 10 minutes). */
+export async function dropClosedRoomLines() {
+  await dropRoomLines(await db(), "");
 }
 
 export const CLAN_REACTIONS = ["❤️", "😆", "😮", "😢", "😠", "👍"]; // (a friend chat's six)

@@ -673,7 +673,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     }
     if (!this.privateLogs.has(onlyFor)) this.privateLogs.set(onlyFor, []);
     this.privateLogs.get(onlyFor)!.push(event);
-    this.clients.getById(onlyFor)?.send("event", event);
+    this.clients.getById(onlyFor)?.send("event", { ...event, mine: true }); // (his app marks it: only he sees it)
     for (const admin of this.admins) this.clients.getById(admin)?.send("event", { ...event, for: this.nameOf(onlyFor) });
   }
 
@@ -762,7 +762,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
   private sendHistory(client: Client) {
     const id = client.sessionId;
     const mine = this.privateLogs.get(id) ?? [];
-    client.send("events", [...this.publicLog, ...mine].sort((a, b) => a.seq - b.seq));
+    client.send("events", [...this.publicLog, ...mine.map((e) => ({ ...e, mine: true }))].sort((a, b) => a.seq - b.seq));
     client.send("chat_history", this.chatFor(id));
     client.send("vote_history", this.voteHistory);
     if (this.mayorVote) client.send("mayor_votes", this.mayorVote);

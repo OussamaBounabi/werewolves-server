@@ -11,7 +11,7 @@ import { callToken, closeCall, dropFromCall, setCallTalk, tellCall } from "./voi
  * Calls (the Chat tab, 2026-11-13), on the voice server (a LiveKit room `call-<id>`). The calls row and its people
  * (call_people) are what the apps follow live.
  * - Two friends: voice or video; a push rings the phone of the one called even when PlayRoom is closed (PushService:
- *   full screen, like a phone call); 45 seconds without an answer: missed. Each call leaves a line in their chat; a
+ *   full screen, like a phone call); 30 seconds without an answer: missed. Each call leaves a line in their chat; a
  *   missed one rings as a notification. One hangs up: it's over, unless others were added to it.
  * - Calling a friend already in a call: it rings all the same, as a call waiting (his app: add me to his call, or end
  *   his and answer, or decline); I see he's in another call. A friend whose phone already rings: busy.
@@ -25,7 +25,7 @@ import { callToken, closeCall, dropFromCall, setCallTalk, tellCall } from "./voi
  */
 export class CallError extends Error {}
 
-export const RING_MS = 45_000;
+export const RING_MS = 30_000; // a call rings this long, then it's missed (his word: like other apps)
 export const CALL_MAX = 8; // in a call (a clan's: on its stage)
 const STALE_MS = 6 * 3_600_000; // a call still "active" after this: an app that died
 
@@ -92,7 +92,7 @@ export async function startCall(idToken: string, body: Record<string, unknown>) 
     const waiting = his === "in"; // (in another call: it rings as a call waiting)
     await pushToUsers([to], {
       type: "call", sender: uid, call: call.id, title: name, video: video ? "1" : "0", ...(waiting ? { waiting: "1" } : {}),
-    }, undefined, RING_MS);
+    }, "calls", RING_MS);
     return { id: call.id, waiting, ...(await callToken(call.id, uid, name)) };
   });
 }
@@ -116,7 +116,7 @@ export async function startGroupCall(idToken: string, body: Record<string, unkno
     const title = `${g.emoji ? `${g.emoji} ` : ""}${g.name}`;
     await pushToUsers(others.filter((m) => !m.muted).map((m) => m.user), {
       type: "call", sender: `group:${group}`, call: call.id, title, video: video ? "1" : "0", body: await nameOf(client, uid),
-    }, undefined, RING_MS);
+    }, "calls", RING_MS);
     return call.id;
   });
   return joinCall(idToken, id);
@@ -138,7 +138,7 @@ export async function startClanCall(idToken: string, body: Record<string, unknow
     const members = await client.collection("clan_members").getFullList({ filter: client.filter("clan = {:c}", { c: me.clan }), fields: "user" });
     await pushToUsers(members.map((m) => m.user).filter((u) => u !== uid), {
       type: "clan_call", sender: "clan", call: call.id, title: `[${clan.tag}] ${clan.name}`, body: await nameOf(client, uid),
-    }, "clanRooms", 30 * 60_000);
+    }, "calls", 30 * 60_000);
     return call.id;
   });
   return joinCall(idToken, id);
@@ -253,7 +253,7 @@ async function finish(client: PocketBase, call: RecordModel, callerName: string)
   await client.collection("messages").create({ from: call.caller, to: call.callee, type: "call", text: line(call, Date.now()) });
   await pushToUsers([call.callee], { type: "call_end", sender: call.caller, call: call.id }, undefined, RING_MS);
   if (call.outcome !== "answered" && call.outcome !== "declined") {
-    await pushToUsers([call.callee], { type: "missed_call", sender: call.caller, title: callerName, video: call.video ? "1" : "0" });
+    await pushToUsers([call.callee], { type: "missed_call", sender: call.caller, title: callerName, video: call.video ? "1" : "0" }, "calls");
   }
 }
 
@@ -280,7 +280,7 @@ export async function addToCall(idToken: string, body: Record<string, unknown>) 
     }
     for (const u of adding) await upsertPerson(client, id, u, { state: "ringing", talk: true, hand: false });
     ringOut(id, adding);
-    await pushToUsers(adding, { type: "call", sender: uid, call: id, title: await nameOf(client, uid), video: call.video ? "1" : "0" }, undefined, RING_MS);
+    await pushToUsers(adding, { type: "call", sender: uid, call: id, title: await nameOf(client, uid), video: call.video ? "1" : "0" }, "calls", RING_MS);
     return { ok: true };
   });
 }

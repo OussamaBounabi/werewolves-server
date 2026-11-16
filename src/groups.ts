@@ -208,6 +208,6 @@ export async function pushGroupLine(idToken: string, id: string) {
     sender: `group:${m.group}`,
     title: `${g.emoji ? `${g.emoji} ` : ""}${g.name}`,
     body: `${await nameOf(client, uid)}: ${String(m.text ?? "").slice(0, 280)}`,
-  });
+  }, "messages");
   return { ok: true };
 }

@@ -1,6 +1,6 @@
 import { Room, Client, ServerError } from "colyseus";
-import { accountFor, accountsEnabled, BanError } from "../accounts.js";
-import { appClosed, appOpened } from "../presence.js";
+import { accountFor, accountsEnabled, appearsOffline, BanError } from "../accounts.js";
+import { appClosed, appOpened, isHidden, setHidden } from "../presence.js";
 import { seen } from "../metrics.js";
 import { holdSeat } from "./abandoned.js";
 
@@ -24,10 +24,11 @@ export class PresenceRoom extends Room {
   maxClients = 5000;
   private sent = new Map<string, number[]>(); // each app's last chat signals: at most 4 a second
 
-  async onAuth(_client: Client, options: { idToken?: string } = {}): Promise<{ uid: string }> {
+  async onAuth(_client: Client, options: { idToken?: string } = {}): Promise<{ uid: string; hidden: boolean }> {
     if (!accountsEnabled || !options.idToken) throw new ServerError(4401, "auth");
     try {
-      return { uid: (await accountFor(String(options.idToken))).uid };
+      const { uid } = await accountFor(String(options.idToken));
+      return { uid, hidden: await appearsOffline(uid).catch(() => false) };
     } catch (e) {
       throw e instanceof BanError ? new ServerError(4403, "banned") : new ServerError(4401, "auth");
     }
@@ -37,7 +38,7 @@ export class PresenceRoom extends Room {
     presence = this;
     this.onMessage("chat", (client, data: { to?: unknown; typing?: unknown; here?: unknown }) => {
       const to = data?.to;
-      if (typeof to !== "string" || !to || to.length > 40) return;
+      if (typeof to !== "string" || !to || to.length > 40 || isHidden(client.auth.uid)) return; // (looking offline: nothing)
       const now = Date.now(), recent = (this.sent.get(client.sessionId) ?? []).filter((t) => now - t < 1000);
       if (recent.length >= 4) return;
       this.sent.set(client.sessionId, [...recent, now]);
@@ -52,6 +53,7 @@ export class PresenceRoom extends Room {
   }
 
   onJoin(client: Client) {
+    setHidden(client.auth.uid, client.auth.hidden === true); // (looking offline: before he's shown online)
     appOpened(client.auth.uid);
     seen(client.auth.uid); // one of today's active players
   }

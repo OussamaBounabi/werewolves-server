@@ -7,11 +7,12 @@ import { vanishChats } from "./chat.js";
 import { dropOldFlames } from "./flames.js";
 import { dropOldStories } from "./stories.js";
 import { endStaleCalls } from "./calls.js";
+import { setHidden } from "./presence.js";
 import { AVATARS, avatarIds, FRAMES, frameIds, FREE_AVATARS } from "./avatars.js";
 import { claimable, DAILY_BONUS, dayKey, weekKey, type Counters } from "./missions.js";
 import { atNight, reached } from "./achievements.js";
 import { clanProTick, refreshAllPro, refreshProOf } from "./clanPro.js";
-import { clanWeek } from "./clans.js";
+import { clanWeek, dropClosedRoomLines } from "./clans.js";
 import { BOOST_MS, dailyNext, dailyTaken, freeSpins, spin } from "./daily.js";
 import {
   eventFactor, hasBadWord, missionsNow, prizeFor, settingsNow, storeNow, type ChestPlan, type GameEvent, type MissionPlan, type Moderator, type RewardTier,
@@ -797,6 +798,7 @@ export async function runSchedules() {
     await dropOldFlames().catch((e) => console.error("old flames failed", e));
     await dropOldStories().catch((e) => console.error("old stories failed", e));
     await endStaleCalls().catch((e) => console.error("stale calls failed", e));
+    await dropClosedRoomLines().catch((e) => console.error("closed rooms' lines failed", e));
   }
 }
 
@@ -868,8 +870,11 @@ export async function savePushToken(idToken: string, token: string) {
 
 const pushed = new Set<string>(); // messages already pushed (each once)
 
-/** The notifications a player may turn off: a clanmate opened a room, a line in the clan's chat. */
-export const NOTIFY_KINDS = ["clanRooms", "clanChat"] as const;
+/**
+ * The notifications a player may turn off: a clanmate opened a room, a line in the clan's chat, a friend's (or a group's)
+ * message, a room invite, a call (it doesn't ring at all: a missed call); and "online": off, his friends see him offline.
+ */
+export const NOTIFY_KINDS = ["clanRooms", "clanChat", "messages", "invites", "calls", "online"] as const;
 export type NotifyKind = (typeof NOTIFY_KINDS)[number];
 
 /** Turns his notifications on or off ({ clanRooms?: boolean, clanChat?: boolean }): what he has now. */
@@ -881,8 +886,16 @@ export async function setNotify(idToken: string, body: Record<string, unknown>) 
     const notify: Record<string, boolean> = { ...(u.notify ?? {}) };
     for (const k of NOTIFY_KINDS) if (typeof body[k] === "boolean") notify[k] = body[k] as boolean;
     await users.update(uid, { notify });
+    if (typeof body.online === "boolean") setHidden(uid, body.online === false); // (his friends see it at once)
     return { notify };
   });
+}
+
+/** He chose to look offline to his friends (users.notify.online off). */
+export async function appearsOffline(uid: string) {
+  if (!pb) return false;
+  const u = await maybe((await db()).collection("users").getOne(uid, { fields: "notify" }));
+  return u?.notify?.online === false;
 }
 
 /** A line he just wrote in his clan's chat, to his clanmates' phones (those who didn't turn it off): once, within a minute. */
@@ -966,7 +979,8 @@ export async function pushMessage(idToken: string, id: string) {
     }
   }
   const users = client.collection("users");
-  const [me, him] = await Promise.all([users.getOne(uid, { fields: "name,username" }), users.getOne(m.to, { fields: "pushTokens" })]);
+  const [me, him] = await Promise.all([users.getOne(uid, { fields: "name,username" }), users.getOne(m.to, { fields: "pushTokens,notify" })]);
+  if (him.notify?.[type === "invite" ? "invites" : "messages"] === false) return; // (he turned them off)
   const tokens: string[] = Array.isArray(him.pushTokens) ? him.pushTokens : [];
   const dead = await pushTo(tokens, {
     type,

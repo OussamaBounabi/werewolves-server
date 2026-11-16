@@ -1211,6 +1211,26 @@ describe("PocketBase", function () {
       assert.strictEqual((await c.pb.collection("calls").getOne(clanCall.id)).state, "ended");
     });
 
+    it("looking offline: his friends see him offline (in a room too); back on: online", async () => {
+      const a = await player();
+      const row = async () => {
+        await presenceSaved();
+        return (await admin.collection("presence").getOne(a.id).catch((): null => null))?.state ?? "none";
+      };
+      appOpened(a.id);
+      assert.strictEqual(await row(), "online");
+      await accounts.setNotify(a.idToken, { online: false });
+      assert.strictEqual(await row(), "offline");
+      enterRoom(a.id, "uno", `hide-${a.id}`);
+      assert.strictEqual(await row(), "offline");
+      assert.strictEqual((await user(a.id)).room, `hide-${a.id}`); // (the chat's rule still knows)
+      await accounts.setNotify(a.idToken, { online: true });
+      assert.strictEqual(await row(), "in_game");
+      leaveRoom(a.id, `hide-${a.id}`);
+      appClosed(a.id);
+      await presenceSaved();
+    });
+
     it("calls: a friend already in a call gets a call waiting; he adds the caller to his call", async () => {
       const [a, b, c] = [await player(), await player(), await player()];
       for (const [x, y] of [[a, b], [a, c]] as [Player, Player][]) await befriend(x, y);
