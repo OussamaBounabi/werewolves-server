@@ -626,6 +626,12 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     for (const set of [this.infected, this.spent, this.turned, this.charmed]) if (set.delete(old)) set.add(id);
     if (this.lovers) this.lovers = this.lovers.map((l) => (l === old ? id : l)) as [string, string];
     for (const [child, model] of this.wildModel) if (model === old) this.wildModel.set(child, id);
+    // What he still had to do as he died — his shot, naming the next mayor — waits for him under his new id (else his
+    // app can't do it, and he'd stay standing for good: looking alive, heard by the living, yet out of every vote).
+    this.pendingShooters = this.pendingShooters.map((s) => (s === old ? id : s));
+    if (this.pendingSuccession === old) this.pendingSuccession = id;
+    if (this.state.shooterId === old) this.state.shooterId = id;
+    if (this.state.successionFrom === old) this.state.successionFrom = id;
     // Rebuild the seats in the same order, his under the new id.
     const seats = [...this.state.players.entries()];
     this.state.players.clear();
@@ -637,6 +643,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
       this.state.players.set(id, new PlayerState({ ...p.toJSON(), sessionId: id, connected: true }));
     }
     if (this.state.hostId === old) this.state.hostId = id; // the host is back: still the host
+    this.stand(id); // (standing only while that's still to do)
     this.dropped.delete(old);
     this.heldSeats.delete(old);
     this.graveSent.delete(old);
@@ -934,13 +941,33 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     kicked?.leave(4000);
   }
 
+  /** A dead player put out with something left to do: it's dropped — no hunter's shot, no mayor after him. */
+  private dropPending(id: string) {
+    this.pendingShooters = this.pendingShooters.filter((s) => s !== id);
+    if (this.pendingSuccession === id) {
+      this.pendingSuccession = null;
+      this.broadcast("mayor_result", { mayorId: null, successor: true });
+      this.logEvent("mayor", { name: null, successor: true });
+    }
+    this.stand(id);
+    if (this.state.phase === "hunter" && this.state.shooterId === id) {
+      this.state.shooterAim = ""; // (his shot: nobody)
+      this.endHunterShot();
+    } else if (this.state.phase === "succession" && this.state.successionFrom === id) {
+      this.endSuccession(null);
+    }
+  }
+
   /** Support banned this player: out at once, everyone told "removed by support"; in a game he dies on the spot. */
   removeBanned(uid: string) {
     for (const [id, member] of [...this.members]) {
       if (member !== uid) continue;
       if (this.state.players.has(id)) {
         if (this.state.phase === "lobby" || this.state.phase === "starting") this.removeFromLobby(id, "removed");
-        else if (this.gameRunning()) this.removeFromGame(id, "banned");
+        else if (this.gameRunning()) {
+          if (this.isAlive(id)) this.removeFromGame(id, "banned");
+          else this.dropPending(id); // (dead, but still to shoot or to name a mayor: not any more)
+        }
         this.updateListing();
       }
       this.clients.getById(id)?.leave(4000); // (4000: a leave, not a drop — no seat held for him)
@@ -4171,7 +4198,7 @@ export class WerewolfRoom extends Room<{ state: WerewolfState; metadata: Meta }>
     // (A wolf trickster's victim shows the trickster's card; the trickster, when he dies, his own.)
     player.revealedRole = this.fakeReveals.has(sessionId) ? "wolftrickster" : (this.roles.get(sessionId) ?? "");
     if (this.infected.has(sessionId)) player.infectedShown = true;
-    const inPlay = cause !== "quit" && cause !== "timeout";
+    const inPlay = cause !== "quit" && cause !== "timeout" && cause !== "banned"; // (put out: no card show, no shot)
     const shooter = inPlay && this.isHunter(sessionId);
     const marks = this.deathMarks(sessionId);
     this.broadcast("death_reveal", { id: sessionId, name: player.name, role: player.revealedRole, cause, shooter, ...marks, ...more });

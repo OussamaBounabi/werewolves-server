@@ -930,6 +930,58 @@ describe("WerewolfRoom", () => {
     assert.ok(!r.spent.has(dragon.sessionId));
   });
 
+  it("a dead mayor or hunter whose app comes back while it's his turn still names the mayor, shoots, then lies down", async function () {
+    this.timeout(60_000);
+    const mix = { ...NO_SPECIALS, wolves: 1, villagers: 3, hunter: true, mayor: false };
+    const { room, clients, roles, byRole } = await startGame(mix, 5);
+    const r = room as any;
+    const [hunter, wolf] = [byRole("hunter"), byRole("werewolf")];
+    const [mayor, v2] = clients.filter((_: any, i: number) => roles[i] === "villager");
+    const seat = (id: string) => room.state.players.get(id)!;
+    /** [c]'s app closes and opens again: a new seat id for the same player. */
+    const comeBack = async (c: any) => {
+      const playerId = r.playerIds.get(c.sessionId);
+      await c.leave(true);
+      await waitFor(() => !r.clients.getById(c.sessionId));
+      const back = await colyseus.connectTo(room, { playerId });
+      await waitFor(() => r.playerIds.get(back.sessionId) === playerId);
+      return back;
+    };
+
+    // The mayor dies; his app comes back while he's to name his successor: he still names him, then lies down.
+    room.state.mayorId = mayor.sessionId;
+    r.kill(mayor.sessionId, "vote");
+    r.revealsPending = 0;
+    r.afterDeaths(() => {});
+    assert.strictEqual(room.state.phase, "succession");
+    const mayorBack = await comeBack(mayor);
+    assert.strictEqual(room.state.successionFrom, mayorBack.sessionId);
+    mayorBack.send("mayor_successor", { targetId: wolf.sessionId });
+    await waitFor(() => room.state.mayorId === wolf.sessionId);
+    assert.deepStrictEqual([seat(mayorBack.sessionId).alive, seat(mayorBack.sessionId).aiming], [false, false]);
+
+    // The hunter dies; his app comes back during his shot: he still shoots, then lies down.
+    r.kill(hunter.sessionId, "wolves");
+    r.revealsPending = 0;
+    r.afterDeaths(() => {});
+    assert.strictEqual(room.state.phase, "hunter");
+    const hunterBack = await comeBack(hunter);
+    assert.strictEqual(room.state.shooterId, hunterBack.sessionId);
+    hunterBack.send("hunter_shoot", { targetId: v2.sessionId });
+    await waitFor(() => !seat(v2.sessionId).alive);
+    assert.deepStrictEqual([seat(hunterBack.sessionId).alive, seat(hunterBack.sessionId).aiming], [false, false]);
+  });
+
+  it("a hunter put out of the room (the admin app, support): out at once, no shot", async () => {
+    const { room, byRole } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 3, hunter: true, mayor: false }, 5);
+    const r = room as any;
+    const hunter = byRole("hunter");
+    r.members.set(hunter.sessionId, "uid-hunter"); // (an account's: test clients have none)
+    r.removeBanned("uid-hunter");
+    assert.strictEqual(room.state.players.get(hunter.sessionId)?.alive, false);
+    assert.deepStrictEqual([r.pendingShooters, room.state.phase !== "hunter"], [[], true]);
+  });
+
   it("watching: not a game my own living seat is in; a VIP Pro talking to the dead leaves a line in their chat", async () => {
     const { room, clients } = await startGame({ ...NO_SPECIALS, wolves: 1, villagers: 4, mayor: false }, 5);
     const r = room as any;
